@@ -115,9 +115,17 @@ function topBar() {
 // ---------------------------------------------------------------- Calendar: the week strip at the top, or a floating pill
 // Items come from Calendar.md (D.calendar) and schedule.json (S.schedule); reviews and daily notes add their own dots.
 // Pinned sits under the top bar; floating shrinks to a pill that opens on hover. The choice is per browser.
-const CAL_KEY = "overlook.calendar", DOCK_KEY = "overlook.dock";
+const CAL_KEY = "overlook.calendar", DOCK_KEY = "overlook.dock", THEME_KEY = "overlook.theme";
 let dockMode = (() => { try { return localStorage.getItem(DOCK_KEY) === "float" ? "float" : "pinned"; } catch { return "pinned"; } })();
 let calMode = (() => { try { return localStorage.getItem(CAL_KEY) === "float" ? "float" : "pinned"; } catch { return "pinned"; } })();
+let themeMode = (() => { try { return localStorage.getItem(THEME_KEY) === "glass" ? "glass" : "ascii"; } catch { return "ascii"; } })();
+function applyTheme() {
+  document.body.classList.toggle("ascii", themeMode === "ascii");
+  document.documentElement.dataset.theme = themeMode;
+  const b = $("#theme-btn");
+  if (b) { b.textContent = themeMode === "ascii" ? "theme: ascii" : "Theme: Glass"; b.title = themeMode === "ascii" ? "Switch to Glass theme" : "Switch to ASCII theme"; }
+}
+applyTheme();
 let calStart = "", calMonth = false, calDay = "", calFormDay = "", calKind = "event";
 const REPEAT = { once: "once", daily: "every day", weekdays: "weekdays", weekly: "every week" };
 const dayName = (d, o) => new Date(d + "T12:00").toLocaleDateString(LOCALE, o);
@@ -249,6 +257,19 @@ const CAL_ACTIONS = {
   "sched-del": async (el) => { await api("/api/schedule/delete", { id: el.dataset.id }).catch((e) => toast(e.message)); S = await api("/api/system"); calRender(); },
   "set-cal": (el) => { calMode = el.dataset.v; try { localStorage.setItem(CAL_KEY, calMode); } catch {} calRender(); el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }); },
   "set-dock": (el) => { dockMode = el.dataset.v; try { localStorage.setItem(DOCK_KEY, dockMode); } catch {} topBar(); el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }); },
+  "theme-toggle": () => {
+    themeMode = themeMode === "ascii" ? "glass" : "ascii";
+    try { localStorage.setItem(THEME_KEY, themeMode); } catch {}
+    applyTheme();
+    if (route().pg === "settings") settingsPage();
+    else if (route().pg === "graph") graph();
+  },
+  "set-theme": (el) => {
+    themeMode = el.dataset.v;
+    try { localStorage.setItem(THEME_KEY, themeMode); } catch {}
+    applyTheme();
+    el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); });
+  },
 };
 
 // ---------------------------------------------------------------- Home: suggestion carousel
@@ -264,6 +285,30 @@ function suggestions() {
   const outside = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
   for (const n of outside) s.push({ cat: "Rediscover", ic: "leaf", title: n.title, sub: plain(n.summary), meta: [["Out of the cycle", "never reviewed"], ["Area", n.area || "-"]], href: noteHref(n.path), action: "Reread" });
   return s.length ? s : [{ cat: "All caught up", ic: "leaf", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
+}
+
+const ASCII_RAMP = " .:-=+*#%@";
+function paintAscii(img) {
+  const pre = img.parentElement?.querySelector(".pin-ascii");
+  if (!pre || !img.naturalWidth) return;
+  const cols = 64, rows = 42, cv = document.createElement("canvas"), ctx = cv.getContext("2d");
+  cv.width = cols; cv.height = rows;
+  const ir = img.naturalWidth / img.naturalHeight, tr = 0.8;
+  const sw = ir > tr ? img.naturalHeight * tr : img.naturalWidth, sh = ir > tr ? img.naturalHeight : img.naturalWidth / tr;
+  ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, 0, 0, cols, rows);
+  const d = ctx.getImageData(0, 0, cols, rows).data, lums = new Float32Array(cols * rows);
+  let min = 255, max = 0;
+  for (let i = 0, p = 0; i < lums.length; i++, p += 4) {
+    const l = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
+    lums[i] = l; if (l < min) min = l; if (l > max) max = l;
+  }
+  const span = max - min || 1;
+  let out = "";
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) out += ASCII_RAMP[Math.min(ASCII_RAMP.length - 1, Math.floor(((lums[y * cols + x] - min) / span) * ASCII_RAMP.length))];
+    if (y < rows - 1) out += "\n";
+  }
+  pre.textContent = out;
 }
 
 let idx = 0, SG = [];
@@ -282,7 +327,7 @@ function home() {
         </div>
         <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
       </div>
-      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
+      <div class="card-pin"><img src="${art(i)}" alt=""><pre class="pin-ascii" aria-hidden="true"></pre>${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
         ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>
     </article>`;
   };
@@ -291,6 +336,10 @@ function home() {
       <button class="navb glass r" data-act="next" aria-label="Next">${icon("r")}</button>
       <div class="dots">${SG.map((_, i) => `<i data-act="go" data-i="${i}"></i>`).join("")}</div>
     </section><section class="tiles" id="tiles"></section>`;
+  main.querySelectorAll(".card-pin img").forEach((img) => {
+    if (img.complete) paintAscii(img);
+    else img.addEventListener("load", () => paintAscii(img), { once: true });
+  });
   place(); tiles();
 }
 function place() {
@@ -466,17 +515,21 @@ function graph() {
   }
   function draw() {
     ctx.clearRect(0, 0, W, H);
+    const isAscii = themeMode === "ascii";
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
     for (const [a, b] of edges) {
-      ctx.strokeStyle = near && (a === hover || b === hover) ? "rgba(244,184,143,.7)" : "rgba(255,255,255,.1)";
+      ctx.strokeStyle = near && (a === hover || b === hover) ? (isAscii ? "#e8ebef" : "rgba(244,184,143,.7)") : "rgba(255,255,255,.1)";
       ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     for (const n of nodes) {
       ctx.globalAlpha = near && !near.has(n) && n !== hover ? 0.25 : 1;
-      ctx.fillStyle = n.c; ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
+      ctx.fillStyle = isAscii ? (n.ghost ? "#5f6873" : "#e8ebef") : n.c;
+      if (isAscii) ctx.fillRect(n.x - n.r, n.y - n.r, n.r * 2, n.r * 2);
+      else { ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill(); }
       if (n === hover || (!hover && (deg.get(n) || 0) >= 5) || near?.has(n)) {
-        ctx.fillStyle = n.ghost ? "rgba(243,239,233,.45)" : "rgba(243,239,233,.85)";
-        ctx.font = "500 12px Inter, sans-serif"; ctx.fillText(n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, n.x + n.r + 5, n.y + 4);
+        ctx.fillStyle = n.ghost ? "rgba(243,239,233,.45)" : isAscii ? "#e8ebef" : "rgba(243,239,233,.85)";
+        ctx.font = isAscii ? '400 11px "JetBrains Mono", monospace' : "500 12px Inter, sans-serif";
+        ctx.fillText(n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, n.x + n.r + 5, n.y + 4);
       }
     }
     ctx.globalAlpha = 1;
@@ -786,11 +839,12 @@ async function settingsPage() {
   const cfg = await api("/api/settings").catch(() => null);
   if (route().pg !== "settings") return;
   if (!cfg) { main.innerHTML = '<p class="empty">Settings are not available.</p>'; return; }
-  const seg = (act, cur) => `<div class="seg" role="radiogroup">${[["pinned", "Pinned"], ["float", "Floating"]].map(([k, l]) =>
+  const seg = (act, cur, opts = [["pinned", "Pinned"], ["float", "Floating"]]) => `<div class="seg" role="radiogroup">${opts.map(([k, l]) =>
     `<button type="button" role="radio" aria-checked="${cur === k}" class="${cur === k ? "on" : ""}" data-act="${act}" data-v="${k}">${l}</button>`).join("")}</div>`;
   main.innerHTML = `<div class="ph"><h1>Settings</h1><p>One place for layout, vault, card images, agents and services.</p></div>
     <h3>Appearance</h3>
     <div class="img-sources">
+      <div class="img-set glass"><b>Theme</b><small>Monospace ASCII terminal or dark glass over card art.</small>${seg("set-theme", themeMode, [["ascii", "ASCII"], ["glass", "Glass"]])}</div>
       <div class="img-set glass"><b>Calendar</b><small>Week strip under the top bar, or a pill that opens on hover.</small>${seg("set-cal", calMode)}</div>
       <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill.</small>${seg("set-dock", dockMode)}</div>
     </div>

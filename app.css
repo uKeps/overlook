@@ -291,7 +291,7 @@ a.row:hover, .row.hov:hover { background: var(--glass); }
 .empty { color: var(--faint); padding: 18px; }
 
 /* Images: the Pinterest board, to hide or star what the cards use */
-.img-sources { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.img-sources { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 14px; }
 .img-set { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 14px; border-radius: var(--r); }
 .img-set b { font: 600 14px var(--display); }
 .img-set small { color: var(--muted); font-size: 12px; flex: 1; }
@@ -409,6 +409,77 @@ body.app .top, body.app main { max-width: 1680px; }
   box-shadow: 0 0 0 1px var(--line), 0 40px 120px rgba(0, 0, 0, .6), 0 0 160px -30px rgba(244, 184, 143, .25); }
 .toast { position: fixed; bottom: 100px; left: 50%; translate: -50% 20px; padding: 10px 16px; border-radius: 12px; opacity: 0; transition: all .35s var(--ease); pointer-events: none; z-index: 20; background: rgba(22, 22, 26, .85); }
 .toast.on { opacity: 1; translate: -50% 0; }
+.pin-ascii { display: none; }
+
+/* ASCII theme (modelled on bas3line/ascii / ascii.rest): plain text, one monospace face, flat terminal wells, invert on hover. */
+html[data-theme="ascii"] { background: #131518; }
+body.ascii {
+  --bg: #131518;
+  --well: #1a1d21;
+  --glass: #1a1d21;
+  --glass-2: #22262c;
+  --line: #2a2f37;
+  --ink: #e8ebef;
+  --text: #c3c9d1;
+  --muted: #8c95a1;
+  --faint: #5f6873;
+  --peach: #e8ebef;
+  --peach-ink: #131518;
+  --r: 0px;
+  --display: var(--mono);
+  --body: var(--mono);
+  background: var(--bg);
+  color: var(--text);
+  font: 400 14px/1.65 var(--mono);
+  font-variant-ligatures: none;
+}
+body.ascii ::selection { background: var(--ink); color: var(--bg); }
+body.ascii :focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; border-radius: 0; }
+body.ascii .amb, body.ascii::after, body.ascii .card::before, body.ascii .dock a.on::after, body.ascii .live::after { display: none; }
+body.ascii *, body.ascii *::before, body.ascii *::after { border-radius: 0 !important; box-shadow: none !important; }
+body.ascii .glass, body.ascii .dock, body.ascii .cal.float .cal-body, body.ascii .cal.float .cal-pill, body.ascii .dockwrap.float .dock-pill, body.ascii dialog, body.ascii .toast {
+  background: var(--well); border: 1px solid var(--line);
+}
+body.ascii .card { background: var(--well) !important; border: 1px solid var(--line); }
+body.ascii .card h2 { font: 500 22px/1.35 var(--mono); letter-spacing: -.01em; color: var(--ink); }
+body.ascii .card h2.long { font-size: 18px; }
+body.ascii .card h2 em { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
+body.ascii .card-pin { background: var(--bg); border: 1px solid var(--line); }
+body.ascii .card-pin img { opacity: 0; }
+body.ascii .pin-ascii {
+  display: flex; align-items: center; justify-content: center;
+  position: absolute; inset: 0; margin: 0; padding: 8px;
+  font: 400 8px/9px var(--mono); color: var(--text);
+  background: var(--bg); white-space: pre; overflow: hidden;
+  user-select: none; pointer-events: none;
+}
+body.ascii .clock span { font: 500 18px var(--mono); color: var(--ink); }
+body.ascii .ph h1 { font: 500 20px/1.3 var(--mono); color: var(--ink); letter-spacing: -.01em; }
+body.ascii .art h1, body.ascii .flash h2 { font: 500 22px/1.35 var(--mono); color: var(--ink); letter-spacing: -.01em; }
+body.ascii .tile .v { font: 500 20px var(--mono); color: var(--ink); }
+body.ascii h3 { font: 500 12px var(--mono); color: var(--muted); text-transform: lowercase; letter-spacing: .04em; }
+body.ascii h3::before { content: "# "; color: var(--faint); }
+body.ascii .btn { border: 1px solid var(--line); background: var(--well); color: var(--ink); font-size: 12.5px; }
+body.ascii .btn:hover, body.ascii .fchip:hover, body.ascii .cal-nav:hover, body.ascii .cal-title:hover, body.ascii .cal-tools button:hover, body.ascii .chipbox:hover, body.ascii .dock a:hover, body.ascii .dock button:hover {
+  background: var(--ink); color: var(--bg); border-color: var(--ink); transform: none;
+}
+body.ascii .btn:hover kbd, body.ascii .chipbox:hover b, body.ascii .chipbox:hover svg { color: var(--bg); border-color: var(--bg); }
+body.ascii .btn.peach { background: var(--ink); color: var(--bg); border: 1px solid var(--ink); }
+body.ascii .btn.peach:hover { background: var(--text); color: var(--bg); transform: none; }
+body.ascii .seg { background: var(--bg); padding: 2px; }
+body.ascii .seg button.on, body.ascii .dock a.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+body.ascii .nc:hover, body.ascii .tile:hover, body.ascii a.ag.link:hover { background: var(--glass-2); border-color: var(--ink); transform: none; }
+body.ascii .day.sel { outline: 1px solid var(--ink); }
+body.ascii .img.star, body.ascii .pk-grid button.on { outline: 2px solid var(--ink); }
+body.ascii .img img, body.ascii .pk-grid img { filter: grayscale(1) contrast(1.1); }
+body.ascii .search, body.ascii .cd-add input, body.ascii .img-set input, body.ascii .set-row input {
+  background: transparent; border: 0; border-bottom: 1px dotted var(--muted); padding: 0 4px;
+}
+body.ascii .search:focus, body.ascii .cd-add input:focus, body.ascii .img-set input:focus, body.ascii .set-row input:focus {
+  border-bottom: 1px solid var(--ink);
+}
+body.ascii .cd-add textarea, body.ascii #capture textarea, body.ascii .task textarea.code { background: var(--bg); border: 1px dotted var(--muted); }
+body.ascii .cd-add textarea:focus, body.ascii #capture textarea:focus, body.ascii .task textarea.code:focus { border: 1px solid var(--ink); }
 
 @media (max-width: 900px) {
   body { padding: 0 16px 120px; }

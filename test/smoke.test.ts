@@ -91,12 +91,17 @@ test("system and pinterest work with nothing configured", async () => {
 test("the page and its assets are served and the frontend parses", async () => {
   for (const p of ["/", "/app.js", "/app.css"])
     expect([p, (await fetch(BASE + p)).status]).toEqual([p, 200]);
+  const indexHtml = readFileSync(`${ROOT}/index.html`, "utf8");
+  expect(indexHtml).toContain('id="theme-btn"');
   const js = new Bun.Transpiler({ loader: "js" });
   const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
   js.transformSync(appJs);
   expect(appJs).not.toContain("refreshes every 3 s");
   expect(appJs).not.toContain("pid ${a.pid}");
   expect(appJs).toContain("e.ctrlKey || e.metaKey || e.altKey");
+  expect(appJs).toContain('THEME_KEY = "overlook.theme"');
+  expect(appJs).toContain("function paintAscii(img)");
+  expect(appJs).toContain('document.body.classList.toggle("ascii", themeMode === "ascii")');
   expect(appJs).toContain('document.body.classList.toggle("dock-float", dockMode === "float")');
   expect(appJs).toContain('document.body.classList.toggle("home", !pg)');
   const appCss = readFileSync(`${ROOT}/app.css`, "utf8");
@@ -106,6 +111,8 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appCss).toContain("body.home main { margin-top: auto; margin-bottom: auto; padding-top: 16px; padding-bottom: 16px; }");
   expect(appCss).toContain("body.cal-float main { padding-top: 84px; }");
   expect(appCss).not.toContain("body.cal-float:has(");
+  expect(appCss).toContain("body.ascii {");
+  expect(appCss).toContain("body.ascii .pin-ascii {");
 });
 
 test("agent CLI commands", () => {
