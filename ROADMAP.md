@@ -1,8 +1,8 @@
-# Vault HQ — Roadmap
+# Overlook — Roadmap
 
 ## Now
 <!-- In progress. At most 3. -->
-- [ ] N1 — Make the repo public (README, demo vault, personal config out of git) — next step: merge `chore/public-ready` into main, push, flip visibility on GitHub
+- [ ] N1 — Make the repo public (README, demo vault, personal config out of git) — next step: merge `chore/public-ready` into main, rename GitHub repo to `overlook`, push, flip visibility
 
 ## Next
 1. Have a second person (a friend) clone and run it from the README — why: the only real test of "works for anyone"
@@ -23,6 +23,7 @@
 - English UI strings — value: audience beyond pt-BR
 
 ## Done (recent)
+- 2026-10-25 — Renamed Vault HQ → Overlook (code and docs; local folder and GitHub repo not yet)
 - 2026-10-25 — MIT license chosen (was O1)
 - 2026-10-25 — Clone-ready: README with screenshots, `example-vault/`, `PORT`/`ART_DIR` env, Pinterest and services optional (branch `chore/public-ready`)
 - 2026-10-24 — Initial dashboard and Pinterest sync (78ed47e)

@@ -1,8 +1,8 @@
-// HQ do vault: lê o markdown direto do disco a cada request. Sem banco, sem cache.
+// Overlook, o painel do vault: lê o markdown direto do disco a cada request. Sem banco, sem cache.
 // ponytail: varre o vault inteiro por request; ok até milhares de notas, cache por mtime se ficar lento.
-//   bun ~/dev/vault-hq/server.ts        -> serve http://127.0.0.1:3333
-//   bun ~/dev/vault-hq/server.ts mapa   -> uma linha por nota, para agentes se orientarem
-//   bun ~/dev/vault-hq/server.ts hoje   -> o que o HQ mostra, em texto curto para agente
+//   bun server.ts        -> serve http://127.0.0.1:3333
+//   bun server.ts mapa   -> uma linha por nota, para agentes se orientarem
+//   bun server.ts hoje   -> o que o Overlook mostra, em texto curto para agente
 import { resolve, basename, dirname, extname } from "node:path";
 import { readdirSync, readlinkSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -119,7 +119,7 @@ async function revisar(path: string, lembrou: boolean) {
   return { revisar_em, intervalo };
 }
 
-// Nota renderizada para o leitor do HQ. Wikilink vira rota interna; embed vira aviso.
+// Nota renderizada para o leitor do Overlook. Wikilink vira rota interna; embed vira aviso.
 async function nota(path: string) {
   const ns = await notas();
   const n = ns.find((x) => x.path === path);
@@ -183,7 +183,7 @@ function agentes() {
     let cwd = ""; try { cwd = readlinkSync(`/proc/${pid}/cwd`); } catch {}
     const sid = comm === "claude" ? lerJson(`${homedir()}/.claude/sessions/${pid}.json`)?.sessionId : comm === "agy" ? agyConversas[cwd] : null;
     return { pid: Number(pid), nome: comm, segundos: Number(et), cwd: cwd.replace(homedir(), "~"), chave: sid ? `${comm === "agy" ? "g" : "c"}:${sid}` : "" };
-  }).filter((a) => a.nome !== "claude" || a.chave); // claude sem sessão é CLI de passagem (ex.: o `claude agents` que o próprio HQ roda)
+  }).filter((a) => a.nome !== "claude" || a.chave); // claude sem sessão é CLI de passagem (ex.: o `claude agents` que o próprio Overlook roda)
 }
 
 // Sessões do Claude, inclusive as em segundo plano sem processo (`claude agents --json`). Cache de 15 s: o CLI custa ~0,5 s.
@@ -397,7 +397,7 @@ async function tratar(req: Request, porta: number) {
   if (GRAFITE.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
   if (p.startsWith("/v2")) return Response.redirect("/", 302);
   if (p.startsWith("/pin/")) { const f = await arquivoPin(p.slice(5), url.searchParams.has("amb")); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
-  if (p === "/auth/pinterest") { const u = urlAutorizacao(); return u ? Response.redirect(u, 302) : pagina("Falta configurar", "Preencha PINTEREST_CLIENT_ID e PINTEREST_CLIENT_SECRET no .env do vault-hq e reinicie o servidor."); }
+  if (p === "/auth/pinterest") { const u = urlAutorizacao(); return u ? Response.redirect(u, 302) : pagina("Falta configurar", "Preencha PINTEREST_CLIENT_ID e PINTEREST_CLIENT_SECRET no .env do Overlook e reinicie o servidor."); }
   if (p === "/auth/pinterest/callback") { const erro = await retornoAutorizacao(url); return pagina(erro ? "Não conectou" : "Pinterest conectado", erro || `${estadoPinterest().total} imagens no cache.`); }
   if (p === "/") return new Response(Bun.file(`${import.meta.dir}/index.html`));
   return new Response("404", { status: 404 });
@@ -405,9 +405,9 @@ async function tratar(req: Request, porta: number) {
 
 Bun.serve({ hostname: "127.0.0.1", port: PORTA, fetch: (req) => tratar(req, PORTA) });
 Bun.serve({ hostname: "127.0.0.1", port: PORTA_V2, fetch: (req) => tratar(req, PORTA_V2) });
-console.log(`HQ em http://127.0.0.1:${PORTA} · v2 em http://127.0.0.1:${PORTA_V2}`);
+console.log(`Overlook em http://127.0.0.1:${PORTA} · v2 em http://127.0.0.1:${PORTA_V2}`);
 
-// Serviço que proíbe iframe (Grimoire: X-Frame-Options DENY) ganha um proxy que só libera o HQ como moldura.
+// Serviço que proíbe iframe (Grimoire: X-Frame-Options DENY) ganha um proxy que só libera o Overlook como moldura.
 // O app embutido segue chamando a API direto no alvo; o Grimoire aceita porque 127.0.0.1:3334 está no
 // CORS_ORIGINS do littleimpd.service.
 for (const s of await listaServicos()) {

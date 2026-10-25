@@ -203,7 +203,7 @@ export function urlAutorizacao() {
 }
 export async function retornoAutorizacao(url: URL) {
   const st = url.searchParams.get("state") ?? "", code = url.searchParams.get("code") ?? "";
-  if (!estados.delete(st) || !code) return "Autorização inválida ou expirada. Volte ao HQ e tente de novo.";
+  if (!estados.delete(st) || !code) return "Autorização inválida ou expirada. Volte ao Overlook e tente de novo.";
   try {
     await pedirToken({ grant_type: "authorization_code", code, redirect_uri: redirect, continuous_refresh: "true" });
   } catch (e: any) { logUmaVez(e.message); return `O Pinterest recusou: ${e.message}`; }

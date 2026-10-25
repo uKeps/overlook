@@ -1,4 +1,4 @@
-// Vault, direção "Grafite". Mesmos dados, rotas e atalhos do HQ em /; muda a camada visual e entra o Pinterest no carrossel.
+// Vault, direção "Grafite". Mesmos dados, rotas e atalhos do Overlook em /; muda a camada visual e entra o Pinterest no carrossel.
 const $ = (s, el = document) => el.querySelector(s);
 const main = $("#main");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);

@@ -1,4 +1,4 @@
-// Vault HQ. Rotas por hash, dados de /api (vault) e /api/sistema (agentes, serviços, rotinas).
+// Overlook. Rotas por hash, dados de /api (vault) e /api/sistema (agentes, serviços, rotinas).
 const $ = (s, el = document) => el.querySelector(s);
 const main = $("#main");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);

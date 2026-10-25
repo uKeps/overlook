@@ -1,4 +1,4 @@
-# Vault HQ
+# Overlook
 
 A local dashboard for an Obsidian vault: today's focus, spaced review, notes, graph, quick capture,
 plus the coding agents (Claude Code, AGY) running on your machine. It reads your Markdown straight
@@ -15,7 +15,7 @@ from disk. No database, no build step, no cloud. UI is in Brazilian Portuguese.
 Needs [Bun](https://bun.sh) (tested on 1.4).
 
 ```sh
-git clone https://github.com/uKeps/vault-hq && cd vault-hq
+git clone https://github.com/uKeps/overlook && cd overlook
 cp .env.example .env
 bun server.ts
 ```
@@ -27,7 +27,7 @@ Run it from the repo folder: Bun loads `.env` from the current directory.
 
 ## Your vault
 
-The HQ expects this layout (the demo vault follows it). Folders outside it are ignored, and missing
+Overlook expects this layout (the demo vault follows it). Folders outside it are ignored, and missing
 ones just show up empty.
 
 | Path | Used for |
@@ -37,7 +37,7 @@ ones just show up empty.
 | `2 Diário/_Template.md` | Optional template for new daily notes |
 | `9 Agente/Log.md`, `Achados.md` | Optional agent log and gotchas (bullet lines) |
 
-Frontmatter the HQ reads, all optional:
+Frontmatter Overlook reads, all optional:
 
 ```yaml
 tipo: conceito        # conceito, nota, fonte, projeto...
@@ -76,7 +76,7 @@ http://127.0.0.1:3333/auth/pinterest. Tokens are written back to `.env` and refr
 
 ### Services
 
-`servicos.json` lists anything you run locally; the HQ pings each URL and can embed it.
+`servicos.json` lists anything you run locally; Overlook pings each URL and can embed it.
 See `servicos.example.json` for the fields.
 
 ### Agents
@@ -97,9 +97,9 @@ With ImageMagick (`magick`) installed, images are downscaled and cached; without
 ## Run on login (Linux, systemd)
 
 ```ini
-# ~/.config/systemd/user/vault-hq.service
+# ~/.config/systemd/user/overlook.service
 [Service]
-WorkingDirectory=%h/vault-hq
+WorkingDirectory=%h/overlook
 ExecStart=/usr/bin/bun server.ts
 Restart=on-failure
 
@@ -107,7 +107,7 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-`systemctl --user enable --now vault-hq`
+`systemctl --user enable --now overlook`
 
 ## For agents
 
