@@ -267,6 +267,9 @@ function suggestions() {
 }
 
 let idx = 0, SG = [];
+// Themes (the colours live in app.css); the choice is per browser and applied before the first paint (index.html).
+const THEMES = [["overlook", "Overlook"], ["tokyo-night", "Tokyo Night"], ["dracula", "Dracula"], ["catppuccin-mocha", "Catppuccin Mocha"],
+  ["rose-pine", "Rosé Pine"], ["gruvbox", "Gruvbox"], ["nord", "Nord"]];
 // Card art: the user's images, or animated ascii scenes (ascii.rest) — "auto" uses images when there are any.
 const ART_KEY = "overlook.cardArt";
 let cardArt = (() => { try { return localStorage.getItem(ART_KEY) || "auto"; } catch { return "auto"; } })();
@@ -434,7 +437,10 @@ async function answer(remembered) {
 }
 
 // ---------------------------------------------------------------- Graph
-const PALETTE = ["#f4b88f", "#8fc7f4", "#c9a3ff", "#9be3b5", "#f2cf7a", "#ff8f80"];
+// The canvas can't read CSS variables, so the graph takes the theme's colours when it draws.
+const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const alpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
+let PALETTE = [];
 const areaColor = (a) => PALETTE[hash(a) % PALETTE.length];
 let graphStop = null;
 function graph() {
@@ -442,9 +448,11 @@ function graph() {
     <section class="graph glass"><canvas id="cv"></canvas><div class="legend" id="leg"></div></section>`;
   const cv = $("#cv"), ctx = cv.getContext("2d"), dpr = devicePixelRatio || 1;
   const areas = [...new Set(D.notes.map((n) => n.area).filter(Boolean))].sort();
-  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, c: n.area ? areaColor(n.area) : "#d8d2ca" }));
+  PALETTE = ["--p1", "--p2", "--p3", "--p4", "--p5", "--p6"].map(tok);
+  const ink = tok("--ink"), accent = tok("--accent");
+  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, c: n.area ? areaColor(n.area) : alpha(ink, .8) }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: "rgba(255,255,255,.25)", ghost: true }; nodes.push(g); byId.set(v.target, g); }
+  for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: alpha(ink, .25), ghost: true }; nodes.push(g); byId.set(v.target, g); }
   const edges = [];
   for (const n of D.notes) for (const l of new Set(n.links)) { const a = byId.get(nameOf(n.path)), b = byId.get(l); if (a && b && a !== b) edges.push([a, b]); }
   const deg = new Map();
@@ -476,14 +484,14 @@ function graph() {
     ctx.clearRect(0, 0, W, H);
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
     for (const [a, b] of edges) {
-      ctx.strokeStyle = near && (a === hover || b === hover) ? "rgba(244,184,143,.7)" : "rgba(255,255,255,.1)";
+      ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .7) : alpha(ink, .1);
       ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     for (const n of nodes) {
       ctx.globalAlpha = near && !near.has(n) && n !== hover ? 0.25 : 1;
       ctx.fillStyle = n.c; ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
       if (n === hover || (!hover && (deg.get(n) || 0) >= 5) || near?.has(n)) {
-        ctx.fillStyle = n.ghost ? "rgba(243,239,233,.45)" : "rgba(243,239,233,.85)";
+        ctx.fillStyle = alpha(ink, n.ghost ? .45 : .85);
         ctx.font = "500 12px Inter, sans-serif"; ctx.fillText(n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, n.x + n.r + 5, n.y + 4);
       }
     }
@@ -824,6 +832,9 @@ async function settingsPage() {
         <div class="seg" role="radiogroup">${[["auto", "Auto"], ["images", "Images"], ["ascii", "ASCII"]].map(([k, l]) =>
           `<button type="button" role="radio" aria-checked="${cardArt === k}" class="${cardArt === k ? "on" : ""}" data-act="set-art" data-v="${k}">${l}</button>`).join("")}</div></div>
     </div>
+    <h3>Theme</h3>
+    <div class="themes">${THEMES.map(([k, l]) => `<button type="button" class="theme-sw ${(document.documentElement.dataset.theme || "overlook") === k ? "on" : ""}" data-act="set-theme" data-v="${k}">
+      <span class="sw" data-theme="${k}"><i style="background:var(--surface-2)"></i><i style="background:var(--accent)"></i><i style="background:var(--accent-2)"></i><i style="background:var(--ink)"></i></span>${l}</button>`).join("")}</div>
     <h3>Vault &amp; server</h3>
     <form class="task glass" id="set-vault">
       <div class="set-row">
@@ -937,6 +948,7 @@ const ACTIONS = {
   },
   effort: (el) => el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }),
   "avatar-remove": async (el) => { await api("/api/avatar", { agent: el.dataset.id, remove: true }).catch((e) => toast(e.message)); S = await api("/api/system"); settingsPage(); },
+  "set-theme": (el) => { document.documentElement.dataset.theme = el.dataset.v; try { localStorage.setItem("overlook.theme", el.dataset.v); } catch {} settingsPage(); },
   "set-art": (el) => { cardArt = el.dataset.v; try { localStorage.setItem(ART_KEY, cardArt); } catch {} settingsPage(); toast(`Card art: ${el.textContent}`); },
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
