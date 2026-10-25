@@ -442,7 +442,7 @@ async function agentePg(chave) {
 
 // ---------------------------------------------------------------- Serviços
 function servicos() {
-  main.innerHTML = `<div class="ph"><h1>Serviços</h1><p>Os localhost da máquina e o Pinterest. Lista em <code>painel/servicos.json</code>.</p></div>
+  main.innerHTML = `<div class="ph"><h1>Serviços</h1><p>Os localhost da máquina e o Pinterest. Lista em <code>servicos.json</code>.</p></div>
     <div class="cards">${S.servicos.map((s) => {
       if (s.interno === "pinterest") {
         const p = s.pinterest || {};
@@ -465,13 +465,13 @@ function servicos() {
 // ---------------------------------------------------------------- Serviço embutido
 function servico(id) {
   const s = S.servicos.find((x) => x.id === id);
-  if (!s) { main.innerHTML = '<p class="empty">Serviço não encontrado em painel/servicos.json.</p>'; return; }
+  if (!s) { main.innerHTML = '<p class="empty">Serviço não encontrado em servicos.json.</p>'; return; }
   const src = endereco(s), aba = remoto ? src : s.url;
   $("#svcbar").innerHTML = `<span class="live ${s.ok ? "" : "off"}"></span><span class="pill">${esc(new URL(src || s.url).host)}${s.ok ? ` · ${s.ms} ms` : " · fora do ar"}</span>
     <button class="btn glass" data-act="recarregar" aria-label="Recarregar" data-tip="Recarregar">${icon("reload", 15)}</button>
     <a class="btn glass" href="${esc(aba)}" target="_blank" aria-label="Abrir em aba">${icon("ext", 15)}</a>`;
   main.innerHTML = `<div class="frame ${s.largura ? "phone" : ""}" style="${s.largura ? `--w:${s.largura}px` : s.max ? `max-width:${s.max}px;margin:0 auto` : ""}">
-      ${!src ? `<p class="empty">${esc(s.nome)} não está publicado no Tailscale (campo "tailnet" em painel/servicos.json).</p>`
+      ${!src ? `<p class="empty">${esc(s.nome)} não está publicado no Tailscale (campo "tailnet" em servicos.json).</p>`
         : s.ok ? `<iframe id="svcf" src="${esc(src)}" title="${esc(s.nome)}"></iframe>` : `<p class="empty">${esc(s.nome)} está fora do ar.</p>`}</div>`;
   ambiente(arte(s.nome));
 }

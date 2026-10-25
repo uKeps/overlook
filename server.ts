@@ -10,7 +10,7 @@ import { Database } from "bun:sqlite";
 import { iniciarPinterest, sincronizar, estadoPinterest, arquivoPin, urlAutorizacao, retornoAutorizacao } from "./pinterest";
 
 const RAIZ = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
-const PORTA = 3333;
+const PORTA = Number(process.env.PORT) || 3333;
 // Nome da máquina no Tailscale, lido na hora: sobrevive a renomear a máquina (arch -> cachyos já aconteceu).
 const TAILNET = (() => {
   try { return JSON.parse(Bun.spawnSync(["tailscale", "status", "--json"]).stdout.toString()).Self.DNSName.replace(/\.$/, ""); } catch { return ""; }
@@ -19,7 +19,7 @@ const TAILNET = (() => {
 const hostOk = (h: string, porta: number) =>
   h === `127.0.0.1:${porta}` || h === `localhost:${porta}` || (!!TAILNET && (h === TAILNET || h.startsWith(`${TAILNET}:`)));
 const VAULT = basename(RAIZ);
-const ARTE = `${homedir()}/Pictures/Wallpapers`; // arte dos cards; troque a pasta se quiser outro clima
+const ARTE = resolve(process.env.ART_DIR || `${homedir()}/Pictures/Wallpapers`); // arte dos cards quando não há Pinterest
 const ROTINAS: Record<string, string> = {
   "bom-dia": "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.",
   inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md.",
@@ -140,7 +140,8 @@ async function nota(path: string) {
 async function capturar(texto: string) {
   const rel = `2 Diário/${hoje()}.md`;
   const f = Bun.file(`${RAIZ}/${rel}`);
-  const ls = ((await f.exists()) ? await f.text() : await Bun.file(`${RAIZ}/2 Diário/_Template.md`).text()).split("\n");
+  const modelo = Bun.file(`${RAIZ}/2 Diário/_Template.md`);
+  const ls = ((await f.exists()) ? await f.text() : (await modelo.exists()) ? await modelo.text() : "## Capturei\n").split("\n");
   let i = ls.indexOf("## Capturei");
   if (i < 0) { ls.push("", "## Capturei"); i = ls.length - 1; }
   let j = i + 1;
@@ -171,7 +172,7 @@ function arte() {
 // Agentes vivos: processos claude/agy/codex/gemini, com a pasta onde rodam.
 // "chave" identifica a conversa (c:<sessão> no Claude, g:<conversa> no AGY): a página do agente sobrevive ao processo.
 const NOMES = /^(claude|agy|codex|gemini)$/;
-const CLAUDE = `${homedir()}/.local/bin/claude`, AGY = `${homedir()}/.local/bin/agy`;
+const CLAUDE = Bun.which("claude") ?? `${homedir()}/.local/bin/claude`, AGY = Bun.which("agy") ?? `${homedir()}/.local/bin/agy`;
 const AGY_BASE = `${homedir()}/.gemini/antigravity-cli`;
 const rodando = new Map<string, { inicio: string; pid: number; fim?: string; ok?: boolean }>();
 const lerJson = (f: string) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } };
@@ -202,7 +203,8 @@ async function emSegundoPlano() {
 }
 
 type Servico = { id: string; nome: string; url: string; desc: string; icone?: string; dock?: boolean; largura?: number; proxy?: number; interno?: string };
-const listaServicos = (): Promise<Servico[]> => Bun.file(`${import.meta.dir}/servicos.json`).json();
+// servicos.json é pessoal (fora do git); sem ele, a lista fica vazia.
+const listaServicos = (): Promise<Servico[]> => Bun.file(`${import.meta.dir}/servicos.json`).json().catch(() => []);
 
 // O que um agente está fazendo, lido da conversa dele no disco. Só leitura.
 type Evento = { t: "voce" | "texto" | "ferramenta" | "resultado"; txt: string; nome?: string; quando?: string };
@@ -319,7 +321,7 @@ async function servicos() {
 function rodar(nome: string) {
   const antes = rodando.get(nome);
   if (!ROTINAS[nome] || (antes && !antes.fim)) return false;
-  const p = Bun.spawn([`${homedir()}/.local/bin/agy`, "-p", ROTINAS[nome], "--mode", "auto", "--print-timeout", "10m"], {
+  const p = Bun.spawn([AGY, "-p", ROTINAS[nome], "--mode", "auto", "--print-timeout", "10m"], {
     cwd: RAIZ, stdout: Bun.file(`/tmp/hq-${nome}.log`), stderr: "inherit",
   });
   const r = { inicio: agora(), pid: p.pid } as { inicio: string; pid: number; fim?: string; ok?: boolean };
@@ -334,7 +336,7 @@ if (cmd === "mapa") {
     console.log(`${n.path} · ${n.tipo || "-"} · ${n.resumo || "(sem resumo)"}`);
   process.exit(0);
 }
-if (cmd === "agy") { // bun painel/server.ts agy <pasta>: o que o AGY fez na última conversa daquela pasta
+if (cmd === "agy") { // bun server.ts agy <pasta>: o que o AGY fez na última conversa daquela pasta
   for (const e of await conversaAgy(lerJson(`${AGY_BASE}/cache/last_conversations.json`)?.[resolve(process.argv[3] ?? RAIZ)] ?? "")) console.log(`${e.t.padEnd(10)} ${e.nome ?? ""} ${e.txt.replace(/\n/g, " ").slice(0, 160)}`);
   process.exit(0);
 }
@@ -355,7 +357,7 @@ if (cmd === "hoje") {
 const json = (x: unknown) => (x ? Response.json(x) : new Response("não encontrado", { status: 404 }));
 const ESTATICO = new Set(["/app.js", "/app.css"]);
 const GRAFITE = new Set(["/grafite/app.js", "/grafite/app.css", "/grafite/tokens.css"]);
-const PORTA_V2 = 3335;
+const PORTA_V2 = PORTA + 2;
 // Página mínima de retorno do OAuth (texto escapado: a mensagem pode vir do Pinterest).
 const pagina = (t: string, msg: string) => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${t}</title>
 <body style="background:#121212;color:#EAE8E3;font:15px/1.6 system-ui;display:grid;place-items:center;min-height:90vh;margin:0;padding:24px">
@@ -395,7 +397,7 @@ async function tratar(req: Request, porta: number) {
   if (GRAFITE.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
   if (p.startsWith("/v2")) return Response.redirect("/", 302);
   if (p.startsWith("/pin/")) { const f = await arquivoPin(p.slice(5), url.searchParams.has("amb")); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
-  if (p === "/auth/pinterest") { const u = urlAutorizacao(); return u ? Response.redirect(u, 302) : pagina("Falta configurar", "Preencha PINTEREST_CLIENT_ID e PINTEREST_CLIENT_SECRET em painel/.env e reinicie: systemctl --user restart painel-vault."); }
+  if (p === "/auth/pinterest") { const u = urlAutorizacao(); return u ? Response.redirect(u, 302) : pagina("Falta configurar", "Preencha PINTEREST_CLIENT_ID e PINTEREST_CLIENT_SECRET no .env do vault-hq e reinicie o servidor."); }
   if (p === "/auth/pinterest/callback") { const erro = await retornoAutorizacao(url); return pagina(erro ? "Não conectou" : "Pinterest conectado", erro || `${estadoPinterest().total} imagens no cache.`); }
   if (p === "/") return new Response(Bun.file(`${import.meta.dir}/index.html`));
   return new Response("404", { status: 404 });

@@ -1,5 +1,5 @@
 // Pinterest (só leitura, só da conta que autorizou): imagens de uma pasta para o carrossel da Home.
-// Segredos e tokens vivem em painel/.env (fora do git). Nada daqui é logado; o front nunca fala com o Pinterest.
+// Segredos e tokens vivem no .env (fora do git) (fora do git). Nada daqui é logado; o front nunca fala com o Pinterest.
 import { readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
@@ -67,7 +67,7 @@ async function get(caminho: string): Promise<any> {
   const r = await fetch(`${API}${caminho}`, { headers: { Authorization: `Bearer ${await token()}` } });
   const j: any = await r.json().catch(() => ({}));
   if (r.status === 401 && j.code === 3)
-    throw Object.assign(new Error("Trial pendente no Pinterest (code 3): use \"usuario/pasta\" em painel/pinterest.json para ler via RSS público"), { configuracao: true });
+    throw Object.assign(new Error("Trial pendente no Pinterest (code 3): use \"usuario/pasta\" em pinterest.json para ler via RSS público"), { configuracao: true });
   if (r.status === 401) throw Object.assign(new Error("token inválido: reconecte o Pinterest"), { desconectado: true });
   if (r.status === 403 && /PINNER_DATA_ACCESS_DENIED/.test(JSON.stringify(j)))
     throw Object.assign(new Error("PINNER_DATA_ACCESS_DENIED: o app só lê pastas da conta que autorizou"), { configuracao: true });
@@ -136,7 +136,7 @@ export async function sincronizar(manual = false) {
     } else {
       const alvo = String(cfg.board ?? "").toLowerCase();
       const board = (await todos("/boards")).find((b) => b.id === cfg.board || b.name?.toLowerCase() === alvo || b.name?.toLowerCase().replace(/\s+/g, "-") === alvo);
-      if (!board) throw new Error(`pasta "${cfg.board}" não encontrada na sua conta (painel/pinterest.json)`);
+      if (!board) throw new Error(`pasta "${cfg.board}" não encontrada na sua conta (pinterest.json)`);
       for (const p of await todos(`/boards/${board.id}/pins`)) {
         const imgs = Object.values(p.media?.images ?? {}) as { url: string; width: number; height: number }[];
         const maior = imgs.sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0];

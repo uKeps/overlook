@@ -1,6 +1,0 @@
-[
-  {"id": "grimoire", "nome": "Grimoire", "url": "http://127.0.0.1:3210", "desc": "Bookmarks e índice do que você leu", "icone": "livro", "dock": true, "proxy": 3334, "tailnet": 8443},
-  {"id": "tv", "nome": "Controle da TV", "url": "http://127.0.0.1:8765", "desc": "Controle remoto da Samsung", "icone": "tv", "dock": true, "max": 1120, "tailnet": 10000},
-  {"id": "scriberr", "nome": "Scriberr", "url": "http://127.0.0.1:8080", "desc": "Transcreve áudio de aula", "icone": "mic"},
-  {"id": "pinterest", "nome": "Pinterest", "url": "https://www.pinterest.com", "desc": "Imagens do carrossel da Home (pasta em painel/pinterest.json)", "icone": "livro", "interno": "pinterest"}
-]

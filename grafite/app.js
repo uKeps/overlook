@@ -410,7 +410,7 @@ async function agentePg(chave) {
 }
 
 // ---------------------------------------------------------------- Serviços
-const STATUS_PIN = { ok: "sincronizado", "sem-config": "falta configurar o app em painel/.env", desconectado: "reconectar Pinterest", erro: "erro" };
+const STATUS_PIN = { ok: "sincronizado", "sem-config": "falta configurar (README › Pinterest)", desconectado: "reconectar Pinterest", erro: "erro" };
 function linhaPinterest(s) {
   const p = s.pinterest || PIN;
   const aviso = p.status === "desconectado" ? `<a class="link" href="/auth/pinterest">Reconectar Pinterest</a>`
@@ -421,7 +421,7 @@ function linhaPinterest(s) {
     ${aviso}<button class="btn" data-act="pinsync" ${p.sincronizando || p.status === "sem-config" ? "disabled" : ""}>${p.sincronizando ? "Sincronizando…" : "Sincronizar agora"}</button></div>`;
 }
 function servicos() {
-  main.innerHTML = `<div class="col">${titulo("Serviços", "Os localhost da máquina e o Pinterest. Lista em painel/servicos.json.")}
+  main.innerHTML = `<div class="col">${titulo("Serviços", "Os localhost da máquina e o Pinterest. Lista em servicos.json.")}
     <div class="rows">${S.servicos.map((s) => s.interno === "pinterest" ? linhaPinterest(s) : `<div class="row"><span class="dot ${s.ok ? "" : "off"}"></span>
         <span class="t"><b>${esc(s.nome)}</b><span>${esc(s.desc)}</span></span>
         <span class="x mono">${esc(new URL(remoto && endereco(s) ? endereco(s) : s.url).host)} · ${s.ok ? `${s.ms} ms` : "fora do ar"}</span>
@@ -432,12 +432,12 @@ function servicos() {
 // ---------------------------------------------------------------- Serviço embutido
 function servico(id) {
   const s = S.servicos.find((x) => x.id === id);
-  if (!s || s.interno) { main.innerHTML = vazio("Serviço não encontrado em painel/servicos.json."); return; }
+  if (!s || s.interno) { main.innerHTML = vazio("Serviço não encontrado em servicos.json."); return; }
   const src = endereco(s), aba = remoto ? src : s.url;
   $("#svcbar").innerHTML = `<span class="dot ${s.ok ? "" : "off"}"></span><span class="mono">${esc(new URL(remoto && src ? src : s.url).host)}${s.ok ? ` · ${s.ms} ms` : " · fora do ar"}</span>
     <button class="link" data-act="recarregar">Recarregar</button><a class="link" href="${esc(aba)}" target="_blank" rel="noopener">Abrir ↗</a>`;
   main.innerHTML = `<div class="frame" style="${s.max ? `max-width:${s.max}px;margin:0 auto` : ""}">
-      ${!src ? vazio(`${esc(s.nome)} não está publicado no Tailscale (campo "tailnet" em painel/servicos.json).`)
+      ${!src ? vazio(`${esc(s.nome)} não está publicado no Tailscale (campo "tailnet" em servicos.json).`)
         : s.ok ? `<iframe id="svcf" src="${esc(src)}" title="${esc(s.nome)}"></iframe>` : vazio(`${esc(s.nome)} está fora do ar.`)}</div>`;
 }
 
