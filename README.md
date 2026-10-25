@@ -133,6 +133,9 @@ terminal (`xdg-terminal-exec`, or `$TERMINAL -e`). The built-in ones resume a Cl
 app. Claude Code tasks get a fresh `--session-id`, so a finished task can be picked up in the terminal.
 Any other app works the same way, as long as it can be launched with a command.
 
+Each agent can have its own picture: Settings → *Agent icons* (PNG, JPEG, WebP or GIF under 2 MB, squared to
+256 px when ImageMagick is installed, kept in `avatars/`).
+
 Tasks are kept in memory (the last 50) and can be stopped from their page.
 The Morning and Inbox routines show up when the vault has an `AGENTS.md` with a Routines section.
 
