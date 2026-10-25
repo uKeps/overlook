@@ -319,3 +319,20 @@ test("the Settings page reads and updates vault, images, agents and services", a
   expect((await (await fetch(`${BASE}/api`)).json()).daily).toBe("2 Daily");
 });
 
+
+// ---------------------------------------------------------------- avatars
+test("an agent gets a picture from Settings", async () => {
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const runner = async () => (await (await fetch(`${BASE}/api/system`)).json()).runners.find((r: any) => r.id === "echo");
+  expect((await runner()).avatar).toBeNull();
+  expect((await post("/api/avatar", { agent: "echo", data: png })).status).toBe(200);
+  const v = (await runner()).avatar;
+  expect(typeof v).toBe("number");
+  const img = await fetch(`${BASE}/avatar/echo?v=${v}`);
+  expect([img.status, img.headers.get("content-type")]).toEqual([200, "image/png"]);
+  expect((await post("/api/avatar", { agent: "nope", data: png })).status).toBe(400);
+  expect((await post("/api/avatar", { agent: "echo", data: "data:text/html;base64,PGgxPg==" })).status).toBe(400);
+  expect((await fetch(`${BASE}/avatar/..%2Fserver.ts`)).status).toBe(404);
+  expect((await post("/api/avatar", { agent: "echo", remove: true })).status).toBe(200);
+  expect((await runner()).avatar).toBeNull();
+});

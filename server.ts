@@ -4,10 +4,10 @@
 //   bun server.ts map     -> one line per note, so agents can find their way
 //   bun server.ts today   -> what the Home shows, as short text for an agent
 import { resolve, basename, dirname } from "node:path";
-import { readlinkSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { readlinkSync, readFileSync, writeFileSync, existsSync, statSync, mkdirSync, rmSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
-import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv } from "./pinterest";
+import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
 
@@ -351,7 +351,32 @@ async function services() {
 
 // Agents you can put to work from the Agents page, from agents.json (or the built-in CLIs).
 const runners = () => loadAgents(import.meta.dir).filter((a) => a.run || a.api)
-  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a) }));
+  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a), avatar: avatarVersion(a.id) }));
+
+// Agent avatars: a picture per agent in avatars/<id>.<ext> (personal, not in git), sent from Settings as a data URL so the
+// JSON-only rule for POSTs still holds. Squared to 256 px with ImageMagick when it's there; otherwise kept as sent.
+const AVATARS = `${import.meta.dir}/avatars`;
+const AVATAR_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+const avatarPath = (id: string) => Object.values(AVATAR_TYPES).map((e) => `${AVATARS}/${id}.${e}`).find(existsSync) ?? null;
+function avatarVersion(id: string) { const f = avatarPath(id); return f ? Math.round(statSync(f).mtimeMs) : null; }
+function saveAvatar(b: any) {
+  const id = String(b?.agent ?? "");
+  if (!/^[\w-]+$/.test(id) || !loadAgents(import.meta.dir).some((a) => a.id === id)) return "unknown agent";
+  for (const e of Object.values(AVATAR_TYPES)) rmSync(`${AVATARS}/${id}.${e}`, { force: true });
+  if (b.remove) return { ok: true };
+  const m = String(b.data ?? "").match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) return "send a PNG, JPEG, WebP or GIF image";
+  const bytes = Buffer.from(m[2], "base64");
+  if (!bytes.length || bytes.length > 2_000_000) return "the image must be under 2 MB";
+  mkdirSync(AVATARS, { recursive: true });
+  const raw = `${AVATARS}/${id}.${AVATAR_TYPES[m[1]]}`;
+  writeFileSync(raw, bytes);
+  if (m[1] !== "image/gif" && magick([`${raw}[0]`, "-auto-orient", "-resize", "256x256^", "-gravity", "center", "-extent", "256x256", `${AVATARS}/${id}.tmp.png`])) {
+    rmSync(raw, { force: true });
+    renameSync(`${AVATARS}/${id}.tmp.png`, `${AVATARS}/${id}.png`);
+  }
+  return { ok: true };
+}
 // "Open in…" for a task (its session, in the vault) or a live/background session (its own folder). Nothing comes from the client but ids.
 async function open(b: any) {
   const all = loadAgents(import.meta.dir);
@@ -460,6 +485,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
     if (p === "/api/pinterest/sync") return json(await sync(true));
     if (p === "/api/images/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/avatar") { const r = saveAvatar(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/settings") { const r = saveSettings(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
@@ -483,6 +509,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
+  if (p.startsWith("/avatar/")) { const f = /^[\w-]+$/.test(p.slice(8)) ? avatarPath(p.slice(8)) : null; return f ? new Response(Bun.file(f), { headers: { "cache-control": "max-age=31536000" } }) : new Response("404", { status: 404 }); }
   if (p.startsWith("/pin/")) { const f = await imageFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }
   if (p === "/auth/pinterest/callback") { const error = await authorizeCallback(url); return page(error ? "Not connected" : "Pinterest connected", error || `${pinterestState().total} images in the cache.`); }

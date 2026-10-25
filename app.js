@@ -504,6 +504,11 @@ const ROUTINES = {
 };
 const AGENT_NAME = { claude: ["Claude Code", "agents"], agy: ["Antigravity", "bolt"], codex: ["Codex", "agents"], gemini: ["Gemini", "spark"] };
 const runnerName = (id) => S.runners?.find((r) => r.id === id)?.name || id;
+// An agent's picture when the user set one in Settings, else its icon. Takes a runner id or a process name.
+const avatar = (key, ic = "agents", size = 20) => {
+  const r = S.runners?.find((x) => x.id === key || x.process === key);
+  return r?.avatar ? `<img class="av" src="/avatar/${esc(r.id)}?v=${r.avatar}" alt="" width="${size}" height="${size}">` : icon(ic, size);
+};
 const taskStatus = (t) => (!t.end ? "running" : t.ok ? "finished" : "failed");
 const liveClass = (t) => (!t.end ? "run" : t.ok ? "" : "off");
 // The task form is drawn once; the 10 s refresh redraws only #agents-body, so what you type survives.
@@ -530,15 +535,15 @@ function agents() {
 function agentsBody() {
   const el = $("#agents-body");
   if (!el) return;
-  el.innerHTML = `${S.tasks?.length ? `<h3>Tasks</h3><div class="list glass">${S.tasks.map((t) => `<a class="row" href="#/t/${t.id}"><span class="live ${liveClass(t)}"></span>
+  el.innerHTML = `${S.tasks?.length ? `<h3>Tasks</h3><div class="list glass">${S.tasks.map((t) => `<a class="row" href="#/t/${t.id}"><span class="live ${liveClass(t)}"></span><span class="row-av">${avatar(t.agent, "agents", 18)}</span>
         <span class="t">${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : t.prompt)}<small>${esc(taskMeta(t))} · ${taskStatus(t)}</small></span><span class="x">${ago(Date.parse(t.start))}</span></a>`).join("")}</div>` : ""}
     <h3>Running now</h3><div class="cards">${S.agents.map((a) => {
       const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
-      return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${icon(ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
+      return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${avatar(a.name, ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
         <div class="ft"><span class="pill">${duration(a.seconds)}</span><span class="watch">watch live ${icon("r", 14)}</span></div></a>`;
     }).join("") || '<p class="empty">No agents running.</p>'}</div>
     ${S.background?.length ? `<h3>In the background</h3><div class="cards">${S.background.map((f) => `<a class="ag glass link" href="#/a/${f.key}">
-        <div class="hd"><span class="ic">${icon("agents")}</span><div><h4>${esc(f.title)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
+        <div class="hd"><span class="ic">${avatar("claude")}</span><div><h4>${esc(f.title)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
         <span class="live ${f.state === "blocked" ? "run" : f.state === "done" ? "idle" : ""}" style="margin-left:auto"></span></div>
         ${f.needs ? `<p class="need">${esc(f.needs)}</p>` : ""}
         <div class="ft"><span class="pill ${f.state === "blocked" ? "peach" : ""}">${STATE[f.state] || f.state}</span><span class="pill">${ago(f.since)}</span><span class="watch">open ${icon("r", 14)}</span></div></a>`).join("")}</div>` : ""}
@@ -592,7 +597,7 @@ async function taskPage(id) {
     const signature = t.end + t.events.length;
     if (signature === taskLast) return;
     taskLast = signature;
-    $("#task-head").innerHTML = `<h1>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))}</p>
+    $("#task-head").innerHTML = `<h1><span class="h-av">${avatar(t.agent, "agents", 30)}</span>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))}</p>
       <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}
         ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}</div>`;
     const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
@@ -629,7 +634,7 @@ async function agentPage(key) {
     if (signature === agLast) return;
     agLast = signature;
     const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
-    $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
+    $("#agent-head").innerHTML = `<h1><span class="h-av">${avatar(a.name, "agents", 30)}</span>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
       <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span>
         ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(key)}"`, true)}</div>`;
     $("#agent-needs").innerHTML = a.needs ? `<div class="needs glass"><b>Needs you</b>${fmt(a.needs)}</div>` : "";
@@ -820,12 +825,28 @@ async function settingsPage() {
       <div class="task-bar"><small>Each agent has <code>id</code>, <code>name</code>, and <code>run</code> (CLI command with <code>{prompt}</code>, <code>{model}</code>, <code>{effort}</code>, <code>{session}</code>) or <code>api</code> (<code>anthropic</code> / <code>openai</code>), plus optional <code>models</code>, <code>efforts</code> and <code>open</code> commands.</small>
         <button class="btn peach" type="submit">Save</button></div>
     </form>
+    <h3>Agent icons</h3>
+    <div class="av-grid">${(S.runners || []).map((r) => `<div class="av-item glass">
+        <span class="av-pic">${avatar(r.id, "agents", 56)}</span><b>${esc(r.name)}</b>
+        <label class="btn glass">Choose…<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-avatar="${esc(r.id)}" hidden></label>
+        ${r.avatar ? `<button type="button" class="btn glass" data-act="avatar-remove" data-id="${esc(r.id)}">Remove</button>` : ""}</div>`).join("") || '<p class="empty">No agents yet.</p>'}</div>
     <h3>Services (<code>services.json</code>)</h3>
     <form class="task glass" id="set-services-form">
       <textarea class="code" id="set-services" rows="8" spellcheck="false" aria-label="Services JSON">${esc(JSON.stringify(cfg.services, null, 2))}</textarea>
       <div class="task-bar"><small>Each service has <code>id</code>, <code>name</code>, <code>url</code> and <code>desc</code> (plus optional <code>icon</code>, <code>dock</code>, <code>width</code>, <code>max</code>, <code>proxy</code>, <code>tailnet</code>).</small>
         <button class="btn peach" type="submit">Save</button></div>
     </form>`;
+  // A picked file goes up as a data URL; the server squares it to 256 px.
+  main.querySelectorAll("[data-avatar]").forEach((inp) => inp.onchange = () => {
+    const f = inp.files[0];
+    if (!f) return;
+    if (f.size > 2_000_000) return toast("Pick an image under 2 MB");
+    const rd = new FileReader();
+    rd.onload = async () => {
+      try { await api("/api/avatar", { agent: inp.dataset.avatar, data: rd.result }); S = await api("/api/system"); settingsPage(); toast("Icon saved"); } catch (err) { toast(err.message); }
+    };
+    rd.readAsDataURL(f);
+  });
   $("#set-vault").onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -889,6 +910,7 @@ const ACTIONS = {
     try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
   },
   effort: (el) => el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }),
+  "avatar-remove": async (el) => { await api("/api/avatar", { agent: el.dataset.id, remove: true }).catch((e) => toast(e.message)); S = await api("/api/system"); settingsPage(); },
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";

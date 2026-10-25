@@ -18,6 +18,7 @@ body { min-height: 100vh; color: var(--ink); font: 400 14px/1.55 var(--body); -w
 body.dock-float { padding-bottom: 76px; }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+[hidden] { display: none !important; } /* component display rules must not win over hidden */
 :focus-visible { outline: 2px solid var(--peach); outline-offset: 2px; border-radius: 10px; }
 kbd { font: 500 10px var(--mono); color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
 
@@ -274,6 +275,18 @@ a.row:hover, .row.hov:hover { background: var(--glass); }
 .ag { border-radius: var(--r); padding: 18px; display: flex; flex-direction: column; gap: 10px; }
 .ag .hd { display: flex; align-items: center; gap: 12px; }
 .ag .ic { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(244, 184, 143, .12); color: var(--peach); flex: none; }
+/* Agent avatars: the user's picture where an agent's icon would be. */
+.av { display: block; border-radius: inherit; object-fit: cover; }
+.ag .ic .av { width: 100%; height: 100%; }
+.row-av { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; overflow: hidden; color: var(--peach); flex: none; }
+.row-av .av { width: 100%; height: 100%; }
+.h-av { display: inline-grid; place-items: center; vertical-align: -4px; width: 34px; height: 34px; margin-right: 12px; border-radius: 10px; overflow: hidden; color: var(--peach); background: rgba(244, 184, 143, .12); }
+.h-av .av { width: 100%; height: 100%; }
+.av-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.av-item { display: grid; justify-items: center; gap: 10px; padding: 16px 12px; border-radius: var(--r); text-align: center; }
+.av-pic { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 18px; overflow: hidden; background: rgba(244, 184, 143, .12); color: var(--peach); }
+.av-pic .av { width: 100%; height: 100%; }
+.av-item label { cursor: pointer; }
 .ag h4 { font: 600 15px var(--display); }
 .ag small { color: var(--muted); font-size: 12px; display: block; }
 .ag .ft { display: flex; gap: 8px; margin-top: auto; align-items: center; flex-wrap: wrap; }
