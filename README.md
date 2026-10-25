@@ -116,6 +116,13 @@ WantedBy=default.target
 
 `bun server.ts map` prints one line per note; `bun server.ts today` prints what the Home shows.
 
+## Contributing
+
+`main` only changes through pull requests. Branch, push, open a PR whose title is a
+[Conventional Commit](https://www.conventionalcommits.org) (`feat: …`, `fix(review): …`), and it is
+squash-merged once CI is green. CI scans the history for secrets and runs `bun test`, a smoke test
+that boots the server on `example-vault/` and hits every endpoint; run it locally before pushing.
+
 ## License
 
 MIT
