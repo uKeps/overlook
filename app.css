@@ -231,8 +231,20 @@ a.ag.link:hover { background: var(--glass-2); border-color: rgba(244, 184, 143, 
 .talk textarea { flex: 1; min-width: 0; background: none; border: 0; color: var(--ink); font: 14px/1.5 var(--body); resize: none; outline: none; padding: 6px 8px; }
 .talk textarea::placeholder { color: var(--faint); }
 .talk small { flex-basis: 100%; color: var(--faint); font-size: 12px; padding: 0 8px; }
-.talk select { align-self: stretch; background: rgba(0, 0, 0, .25); border: 1px solid var(--line); border-radius: 10px; color: var(--ink); font: 14px var(--body); padding: 0 10px; }
-.talk select option { background: #1b1b1f; color: var(--ink); }
+/* Task form: the prompt on top, the choices as pills underneath, Run on the right. */
+.task { border-radius: var(--r); padding: 14px 14px 12px; display: grid; gap: 12px; }
+.task textarea { background: none; border: 0; color: var(--ink); font: 15px/1.5 var(--body); resize: none; outline: none; padding: 4px 6px; min-height: 52px; }
+.task textarea::placeholder { color: var(--faint); }
+.task small { color: var(--faint); font-size: 12px; padding: 0 6px; }
+.task-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.task-bar [type=submit] { margin-left: auto; }
+.pick { appearance: none; height: 34px; background: rgba(255, 255, 255, .05) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23f3efe9' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 12px center; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); font: 500 13px var(--body); padding: 0 32px 0 14px; cursor: pointer; transition: border-color .2s; }
+.pick:hover, .pick:focus-visible { border-color: rgba(255, 255, 255, .22); outline: none; }
+.pick option { background: #1b1b1f; color: var(--ink); }
+.seg { display: inline-flex; height: 34px; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, .03); }
+.seg button { border: 0; background: none; color: var(--muted); font: 500 12px var(--body); padding: 0 11px; border-radius: 999px; cursor: pointer; transition: background .2s, color .2s; }
+.seg button:hover { color: var(--ink); }
+.seg button.on { background: var(--peach); color: var(--peach-ink); }
 .needs { border-radius: var(--r); padding: 14px 18px; margin-bottom: 12px; border-color: rgba(244, 184, 143, .35); color: var(--ink); }
 .needs b { display: block; color: var(--peach); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
 .needs code { font: 12.5px var(--mono); background: rgba(255, 255, 255, .07); padding: 0 5px; border-radius: 4px; }

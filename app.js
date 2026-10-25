@@ -370,13 +370,19 @@ function agents() {
   const ready = (S.runners || []).filter((r) => r.ready);
   main.innerHTML = `<div class="ph"><h1>Agents</h1><p>Put any agent from <code>agents.json</code> to work on the vault, or watch the ones already running.</p></div>
     <h3>Put an agent to work</h3>
-    <form class="talk glass" id="run"><select id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select><select id="run-model" aria-label="Model" hidden></select><select id="run-effort" aria-label="Effort" hidden></select>
+    <form class="task glass" id="run">
       <textarea id="run-prompt" rows="2" placeholder="What should it do in the vault? Enter runs, Shift+Enter adds a line" aria-label="Task for the agent"></textarea>
-      <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+      <div class="task-bar">
+        <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
+        <select class="pick" id="run-model" aria-label="Model" hidden></select>
+        <div class="seg" id="run-effort" role="radiogroup" aria-label="Effort" hidden></div>
+        <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+      </div>
       <small>${ready.length ? "CLI agents run in the vault folder; API agents can only list, search, read and write notes." : "No agent is set up yet: see README › Agents."}</small></form>
     <div id="agents-body"></div>`;
   $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
-  $("#run-agent").onchange = runOptions;
+  $("#run-agent").onchange = () => runOptions();
+  $("#run-model").onchange = () => runOptions(true);
   runOptions();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
@@ -410,13 +416,19 @@ function agentsBody() {
     }).join("") || '<p class="empty">No runs logged.</p>'}</div>
     <h3>Findings</h3><div class="list glass">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`; }).join("")}</div>`;
 }
-// Model and effort pickers follow the chosen agent: only what agents.json lists for it.
-function runOptions() {
-  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {};
-  const fill = (id, list = [], pick) => { const el = $(id); el.hidden = !list.length; el.innerHTML = list.map((v) => `<option ${v === pick ? "selected" : ""}>${esc(v)}</option>`).join(""); };
-  fill("#run-model", r.models, r.models?.[0]); fill("#run-effort", r.efforts, r.effort);
+// Model and effort pickers follow the chosen agent: only what agents.json lists for it. Effort levels can differ per model.
+function runOptions(keepModel) {
+  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {}, ms = r.models || [], sel = $("#run-model");
+  if (!keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
+  const es = ms.find((m) => m.id === sel.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
+  const seg = $("#run-effort");
+  seg.hidden = !es.length;
+  seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
 }
-const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort")?.value });
+const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort .on")?.dataset.v });
+// "Open in…" buttons: the commands agents.json gives the agent; the ones that need a session only when there is one.
+const openButtons = (runner, attrs, hasSession) => (runner?.open || []).filter((o) => !o.session || hasSession)
+  .map((o) => `<button class="btn glass" data-act="open" data-via="${esc(o.label)}" ${attrs}>${icon("ext", 14)} ${esc(o.label)}</button>`).join("");
 const taskMeta = (t) => [runnerName(t.agent), t.model, t.effort].filter(Boolean).join(" · ");
 async function runPrompt() {
   const t = $("#run-prompt"), prompt = t.value.trim();
@@ -439,7 +451,8 @@ async function taskPage(id) {
     if (signature === taskLast) return;
     taskLast = signature;
     $("#task-head").innerHTML = `<h1>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))}</p>
-      <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}</div>`;
+      <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}
+        ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}</div>`;
     const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
     feed.innerHTML = t.events.map((e) => `<div class="row ev ${e.t}">
         <span class="who">${esc(e.t === "tool" ? e.name : e.t === "you" ? "task" : e.t === "text" ? runnerName(t.agent) : e.t)}</span>
@@ -476,7 +489,8 @@ async function agentPage(key) {
     const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
     const status = a.live ? "running" : STATE[a.state] || "idle";
     $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.pid ? ` · pid ${a.pid}` : ""}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
-      <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span><small style="color:var(--muted)">${status} · refreshes every 3 s</small></div>`;
+      <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span><small style="color:var(--muted)">${status} · refreshes every 3 s</small>
+        ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(key)}"`, true)}</div>`;
     $("#agent-needs").innerHTML = a.needs ? `<div class="needs glass"><b>Needs you</b>${fmt(a.needs)}</div>` : "";
     $("#talk-hint").textContent = a.name === "agy" ? "Continues this conversation in AGY (agy -p --conversation)."
       : a.live ? "This session is open in a terminal: the reply comes in a background copy, and the terminal stays intact."
@@ -566,6 +580,10 @@ const ACTIONS = {
   routine: async (el) => {
     try { const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() }); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
   },
+  open: async (el) => {
+    try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
+  },
+  effort: (el) => el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }),
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";
