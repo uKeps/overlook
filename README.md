@@ -84,8 +84,29 @@ See `services.example.json` for the fields.
 
 ### Agents
 
-Running `claude`, `agy`, `codex` or `gemini` processes are detected automatically. Reading and
-replying to a session needs the [Claude Code](https://claude.com/claude-code) or AGY CLI on your `PATH`.
+The Agents page shows the agent processes running on your machine and lets you put one to work on the
+vault: type a task, pick an agent, watch it run. Out of the box it knows `claude`, `agy`, `codex` and
+`gemini`, and offers the ones on your `PATH`. Reading and replying to a running Claude Code or AGY session
+works too.
+
+To choose your own, `cp agents.example.json agents.json` and edit it. Two kinds of entry:
+
+- **CLI agent**: `run` is the command, with `{prompt}` where the task goes. It runs in the vault folder
+  with that CLI's own permissions (the example gives Claude Code `--permission-mode acceptEdits`).
+  `process` is the name used to spot it running.
+- **API agent**: `api` is `anthropic` or `openai` (any OpenAI-compatible endpoint: OpenAI, OpenRouter,
+  Groq, a local Ollama), plus `model`, an optional `url`, and `key`, the name of the `.env` variable
+  holding the API key. It gets four tools, `list_notes`, `search_notes`, `read_note` and `write_note`,
+  limited to Markdown notes inside the vault. If the vault has an `AGENTS.md`, it becomes the agent's
+  instructions. The Anthropic path needs `bun install` once, offers Opus 5.5, Sonnet 5.5 and Haiku 5.5
+  at effort `high` by default, and turns on server-side refusal fallback.
+
+Any entry can list `models` and `efforts` (plus a default `effort`). The task form then shows a model
+and an effort picker for that agent: API agents send the choice to the provider, and CLI agents get it
+through `{model}` and `{effort}` in `run`, e.g. `"--model", "{model}"`. Only listed values are accepted.
+
+Tasks are kept in memory (the last 50) and can be stopped from their page.
+The Morning and Inbox routines show up when the vault has an `AGENTS.md` with a Routines section.
 
 ### Phone access (Tailscale)
 
@@ -121,7 +142,8 @@ WantedBy=default.target
 `main` only changes through pull requests. Branch, push, open a PR whose title is a
 [Conventional Commit](https://www.conventionalcommits.org) (`feat: …`, `fix(review): …`), and it is
 squash-merged once CI is green. CI scans the history for secrets and runs `bun test`, a smoke test
-that boots the server on `example-vault/` and hits every endpoint; run it locally before pushing.
+that boots the server on `example-vault/`, hits every endpoint and runs agents against fake providers;
+run `bun install && bun test` locally before pushing.
 
 ## License
 

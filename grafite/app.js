@@ -10,7 +10,7 @@ const addDays = (d, n) => new Date(new Date(d + "T12:00").getTime() + n * 864e5)
 const hash = (s) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
 
 let D = null; // vault
-let S = { agents: [], services: [], routines: {}, background: [] }; // system
+let S = { agents: [], services: [], runners: [], tasks: [], background: [] }; // system
 let PIN = { status: "no-config", images: [] }; // Pinterest (local cache)
 
 async function api(p, body) {
@@ -57,7 +57,7 @@ function screens() {
 function topBar() {
   if (!D) return;
   const { pg, arg } = route();
-  const current = pg === "s" ? `s/${arg}` : pg === "n" || pg === "w" ? "notes" : pg === "a" ? "agents" : pg;
+  const current = pg === "s" ? `s/${arg}` : pg === "n" || pg === "w" ? "notes" : pg === "a" || pg === "t" ? "agents" : pg;
   $("#nav").innerHTML = screens().map(([id, name]) => `<a href="#/${id}" class="${current === id ? "on" : ""}" ${current === id ? 'aria-current="page"' : ""}>${esc(name)}</a>`).join("");
 }
 function clock() { $("#time").textContent = new Date().toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" }); }
@@ -132,7 +132,7 @@ function panel() {
       <div class="trio">
         <a href="#/services"><span>Services</span><b>${on}/${S.services.length}</b><small>${esc(S.services.filter((s) => !s.ok).map((s) => s.name).join(", ") || (S.services.length ? "all up" : "none configured"))}</small></a>
         <a href="#/review"><span>Review</span><b>${due().length}</b><small>${next ? `next ${rel.format(daysBetween(D.today, next.review_on), "day")}` : "none in the cycle"}</small></a>
-        <a href="#/notes"><span>Vault</span><b>${D.notes.length}</b><small>${D.missing.length} ${D.missing.length === 1 ? "gap" : "gaps"}</small></a>
+        <a href="#/notes"><span>Notes</span><b>${D.notes.length}</b><small>${D.missing.length} ${D.missing.length === 1 ? "gap" : "gaps"}</small></a>
       </div></div>`;
 }
 
@@ -337,8 +337,30 @@ const ROUTINES = {
 };
 const AGENT_NAME = { claude: "Claude Code", agy: "Antigravity", codex: "Codex", gemini: "Gemini" };
 const STATE = { blocked: "waiting for you", working: "working", running: "working", done: "finished", idle: "idle" };
+const runnerName = (id) => S.runners?.find((r) => r.id === id)?.name || id;
+const taskStatus = (t) => (!t.end ? "running" : t.ok ? "finished" : "failed");
+const dotClass = (t) => (!t.end ? "run" : t.ok ? "" : "off");
+// The task form is drawn once; the 10 s refresh redraws only #agents-body, so what you type survives.
 function agents() {
-  main.innerHTML = `<div class="col">${heading("Agents", "Claude and AGY follow the same AGENTS.md. Routines run in AGY.")}
+  const ready = (S.runners || []).filter((r) => r.ready);
+  main.innerHTML = `<div class="col">${heading("Agents", "Put any agent from agents.json to work on the vault, or watch the ones already running.")}
+    <p class="label">Put an agent to work</p>
+    <form class="talk" id="run"><select id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select><select id="run-model" aria-label="Model" hidden></select><select id="run-effort" aria-label="Effort" hidden></select>
+      <textarea id="run-prompt" rows="2" placeholder="What should it do in the vault? Enter runs, Shift+Enter adds a line" aria-label="Task for the agent"></textarea>
+      <button class="btn pri" type="submit" ${ready.length ? "" : "disabled"}>Run</button>
+      <small>${ready.length ? "CLI agents run in the vault folder; API agents can only list, search, read and write notes." : "No agent is set up yet: see README › Agents."}</small></form>
+    <div id="agents-body"></div></div>`;
+  $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
+  $("#run-agent").onchange = runOptions;
+  runOptions();
+  $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
+  agentsBody();
+}
+function agentsBody() {
+  const el = $("#agents-body");
+  if (!el) return;
+  el.innerHTML = `${S.tasks?.length ? `<p class="label">Tasks</p><div class="rows">${S.tasks.map((t) => `<a class="row" href="#/t/${t.id}"><span class="dot ${dotClass(t)}"></span>
+        <span class="t"><b>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : t.prompt)}</b><span>${esc(taskMeta(t))} · ${taskStatus(t)}</span></span><span class="x">${ago(Date.parse(t.start))}</span></a>`).join("")}</div>` : ""}
     <p class="label">Running now</p><div class="rows">${S.agents.map((a) => `<a class="row" href="#/a/${a.key}"><span class="dot"></span>
         <span class="t"><b>${AGENT_NAME[a.name] || a.name}</b><span class="mono">${esc(a.cwd)}</span></span>
         <span class="x mono">pid ${a.pid}</span><span class="x">${duration(a.seconds)}</span><span class="link">Watch live →</span></a>`).join("") || empty("No agents running.")}</div>
@@ -346,19 +368,60 @@ function agents() {
         <span class="dot ${f.state === "blocked" ? "run" : f.state === "done" ? "idle" : ""}"></span>
         <span class="t"><b>${esc(f.title)}</b><span>${esc(f.needs || f.cwd)}</span></span>
         <span class="x" style="${f.state === "blocked" ? "color:var(--accent)" : ""}">${STATE[f.state] || f.state}</span><span class="x">${ago(f.since)}</span></a>`).join("")}</div>` : ""}
-    <p class="label">Routines</p><div class="rows">${Object.entries(ROUTINES).map(([k, [name, desc]]) => {
-      const r = S.routines[k];
-      const st = !r ? "hasn't run this session" : !r.end ? `running since ${r.start.slice(11)}` : `${r.ok ? "finished" : "failed"} at ${r.end.slice(11)}`;
-      const live = r && !r.end && S.agents.find((x) => x.pid === r.pid)?.key;
-      return `<div class="row"><span class="dot ${!r ? "idle" : !r.end ? "run" : r.ok ? "" : "off"}"></span>
-        <span class="t"><b>${name}</b><span>${desc}</span></span><span class="x">${st}</span>${live ? `<a class="link" href="#/a/${live}">Watch live</a>` : ""}
-        <button class="btn" data-act="routine" data-k="${k}" ${r && !r.end ? "disabled" : ""}>Run in AGY</button></div>`;
-    }).join("")}</div>
+    ${S.agentsMd ? `<p class="label">Routines</p><div class="rows">${Object.entries(ROUTINES).map(([k, [name, desc]]) => {
+      const r = S.tasks?.find((t) => t.routine === k);
+      const st = !r ? "hasn't run this session" : `${taskStatus(r)} ${ago(Date.parse(r.end || r.start))}`;
+      return `<div class="row"><span class="dot ${r ? dotClass(r) : "idle"}"></span>
+        <span class="t"><b>${name}</b><span>${desc}</span></span><span class="x">${st}</span>${r ? `<a class="link" href="#/t/${r.id}">Open</a>` : ""}
+        <button class="btn" data-act="routine" data-k="${k}" ${r && !r.end ? "disabled" : ""}>Run</button></div>`;
+    }).join("")}</div>` : ""}
     <p class="label">Log</p><div class="rows">${D.log.map((l) => {
       const [when, who, ...rest] = l.split(" · ");
       return `<div class="row"><span class="x mono">${esc(when.slice(5).replace("-", "/"))}</span><span class="who">${esc(who)}</span><span class="msg">${withLinks(rest.join(" · "))}</span></div>`;
     }).join("") || empty("No runs logged.")}</div>
-    <p class="label">Findings</p><div class="rows">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="x mono">${esc(d)}</span><span class="msg">${esc(t.join(" · "))}</span></div>`; }).join("")}</div></div>`;
+    <p class="label">Findings</p><div class="rows">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="x mono">${esc(d)}</span><span class="msg">${esc(t.join(" · "))}</span></div>`; }).join("")}</div>`;
+}
+// Model and effort pickers follow the chosen agent: only what agents.json lists for it.
+function runOptions() {
+  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {};
+  const fill = (id, list = [], pick) => { const el = $(id); el.hidden = !list.length; el.innerHTML = list.map((v) => `<option ${v === pick ? "selected" : ""}>${esc(v)}</option>`).join(""); };
+  fill("#run-model", r.models, r.models?.[0]); fill("#run-effort", r.efforts, r.effort);
+}
+const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort")?.value });
+const taskMeta = (t) => [runnerName(t.agent), t.model, t.effort].filter(Boolean).join(" · ");
+async function runPrompt() {
+  const t = $("#run-prompt"), prompt = t.value.trim();
+  if (!prompt || t.disabled) return;
+  t.disabled = true;
+  try { const r = await api("/api/run", { ...runChoice(), prompt }); location.hash = `#/t/${r.id}`; }
+  catch (e) { toast(`Not started: ${e.message}`); t.disabled = false; }
+}
+
+// ---------------------------------------------------------------- Task
+let taskTimer = null, taskLast = "";
+async function taskPage(id) {
+  clearInterval(taskTimer); taskLast = "";
+  main.innerHTML = `<div class="col"><div id="task-head"></div><div class="rows feed" id="feed"><p class="empty">Loading…</p></div></div>`;
+  const paint = async () => {
+    if (route().pg !== "t" || route().arg !== id) return clearInterval(taskTimer);
+    const t = await api(`/api/task?id=${encodeURIComponent(id)}`).catch(() => null);
+    if (!t) { main.innerHTML = `<div class="col">${heading("Task not found", "Tasks live in memory and are gone after a restart.")}<a class="btn" href="#/agents">Back to Agents</a></div>`; return clearInterval(taskTimer); }
+    const signature = t.end + t.events.length;
+    if (signature === taskLast) return;
+    taskLast = signature;
+    $("#task-head").innerHTML = heading(esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task"),
+      `${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))} · ${taskStatus(t)}`,
+      t.end ? "" : `<div class="r"><button class="btn" data-act="stop" data-id="${esc(t.id)}">Stop</button></div>`);
+    const atEnd = innerHeight + scrollY >= document.body.scrollHeight - 160;
+    $("#feed").innerHTML = t.events.map((e) => `<div class="row ev ${e.t}">
+        <span class="x mono">${new Date(e.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })}</span>
+        <span class="who">${esc(e.t === "tool" ? e.name : e.t === "you" ? "task" : e.t === "text" ? runnerName(t.agent) : e.t)}</span>
+        <span class="msg">${e.t === "text" || e.t === "you" ? fmt(e.txt) : esc(e.txt)}</span></div>`).join("");
+    if (atEnd) scrollTo({ top: document.body.scrollHeight });
+    if (t.end) clearInterval(taskTimer);
+  };
+  await paint();
+  taskTimer = setInterval(paint, 2000);
 }
 
 // ---------------------------------------------------------------- Live agent
@@ -444,7 +507,7 @@ function service(id) {
 }
 
 // ---------------------------------------------------------------- routes and events
-const PAGES = { "": home, notes, n: reader, w: wiki, review, graph, agents, services, s: service, a: agentPage };
+const PAGES = { "": home, notes, n: reader, w: wiki, review, graph, agents, services, s: service, a: agentPage, t: taskPage };
 function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
 function render() {
   if (!D) return;
@@ -463,9 +526,9 @@ const ACTIONS = {
   show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
   enroll: async (el) => { await api("/api/review", { path: el.dataset.p, remembered: false }); toast("In the cycle: first review tomorrow"); D = await api("/api"); render(); },
   routine: async (el) => {
-    try { await api("/api/routine", { name: el.dataset.k }); toast("Routine started in AGY"); } catch (e) { toast(e.message); }
-    S = await api("/api/system"); agents(); topBar();
+    try { const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() }); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
   },
+  stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";
     PIN = await api("/api/pinterest/sync", {}).catch(() => PIN);
@@ -490,7 +553,7 @@ $("#capture-text").addEventListener("keydown", async (e) => {
   D = await api("/api"); if (!route().pg) home(); topBar();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.target.matches("input, textarea") || document.querySelector("dialog[open]") || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.matches("input, textarea, select") || document.querySelector("dialog[open]") || e.ctrlKey || e.metaKey || e.altKey) return;
   const { pg } = route();
   const cardOpen = pg === "review" && queue[pos];
   if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); return; }
@@ -514,7 +577,7 @@ async function pinterest() { PIN = await api("/api/pinterest").catch(() => PIN);
 setInterval(async () => {
   await system(); topBar();
   const { pg } = route();
-  if (!pg) panel(); else if (pg === "agents" || pg === "services") PAGES[pg]();
+  if (!pg) panel(); else if (pg === "agents") agentsBody(); else if (pg === "services") services();
 }, 10000);
 setInterval(async () => { await Promise.all([vault(), pinterest()]); topBar(); if (!route().pg) panel(); }, 60000);
 addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg) { SG = suggestions(); idx = Math.min(idx, SG.length - 1); slides(); panel(); } else if (pg === "notes") grid(); });

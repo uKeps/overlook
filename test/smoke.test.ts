@@ -1,7 +1,7 @@
 // Boots the server the way a fresh clone does (tracked files only, no .env, no personal config) against the
 // example vault, then walks every endpoint and page the UI relies on. Writes land in a temp copy.
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, rmSync, readFileSync, existsSync, writeFileSync, symlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -10,21 +10,34 @@ const ROOT = mkdtempSync(`${tmpdir()}/overlook-`);
 const VAULT = `${ROOT}/example-vault`;
 const PORT = 4799;
 const BASE = `http://127.0.0.1:${PORT}`;
-const ENV = { ...process.env, VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art` };
+const ENV = { ...process.env, VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key" };
+const FAKE = "http://127.0.0.1:4798";
 const TODAY = new Date().toLocaleDateString("sv");
 let server: ReturnType<typeof Bun.spawn>;
+let fake: ReturnType<typeof Bun.serve>;
 
 const post = (path: string, body: unknown, type = "application/json") =>
   fetch(BASE + path, { method: "POST", headers: { "content-type": type }, body: JSON.stringify(body) });
 
 beforeAll(async () => {
-  const files = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: REPO }).stdout.toString().split("\0").filter(Boolean);
-  for (const f of files) { mkdirSync(dirname(`${ROOT}/${f}`), { recursive: true }); copyFileSync(`${REPO}/${f}`, `${ROOT}/${f}`); }
+  // What a commit would hold: tracked files plus new ones that aren't ignored.
+  const files = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: REPO }).stdout.toString().split("\0").filter(Boolean);
+  for (const f of files) if (existsSync(`${REPO}/${f}`)) { mkdirSync(dirname(`${ROOT}/${f}`), { recursive: true }); copyFileSync(`${REPO}/${f}`, `${ROOT}/${f}`); }
+  if (existsSync(`${REPO}/node_modules`)) symlinkSync(`${REPO}/node_modules`, `${ROOT}/node_modules`);
+  writeFileSync(`${ROOT}/agents.json`, JSON.stringify([
+    { id: "echo", name: "Echo", process: "echo", run: ["echo", "got", "{prompt}", "--model", "{model}", "--effort", "{effort}"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" },
+    { id: "bare", name: "Bare", run: ["echo", "got", "{prompt}", "--model", "{model}"] },
+    { id: "sleeper", name: "Sleeper", run: ["sleep", "30"] },
+    { id: "missing", name: "Missing", run: ["definitely-not-installed-overlook"] },
+    { id: "fake-openai", name: "Fake OpenAI", api: "openai", url: `${FAKE}/v1`, model: "fake", key: "FAKE_KEY" },
+    { id: "fake-claude", name: "Fake Claude", api: "anthropic", url: FAKE, model: "claude-opus-5-5", key: "FAKE_KEY" },
+  ]));
+  fake = Bun.serve({ hostname: "127.0.0.1", port: 4798, fetch: fakeProvider });
   server = Bun.spawn(["bun", "server.ts"], { cwd: ROOT, env: ENV, stdout: "ignore", stderr: "inherit" });
   for (let i = 0; i < 100; i++) { try { await fetch(BASE); return; } catch { await Bun.sleep(100); } }
   throw new Error("server did not start");
 });
-afterAll(() => { server?.kill(); rmSync(ROOT, { recursive: true, force: true }); });
+afterAll(() => { server?.kill(); fake?.stop(true); rmSync(ROOT, { recursive: true, force: true }); });
 
 test("vault state", async () => {
   const d = await (await fetch(`${BASE}/api`)).json();
@@ -79,4 +92,79 @@ test("agent CLI commands", () => {
   const run = (cmd: string) => Bun.spawnSync(["bun", "server.ts", cmd], { cwd: ROOT, env: ENV }).stdout.toString();
   expect(run("map")).toContain("3 Concepts/HTTP.md · concept · A stateless");
   expect(run("today")).toContain(`today: ${TODAY}`);
+});
+
+// ---------------------------------------------------------------- agents
+// Stands in for both providers: the first call asks for tools (one write escapes the vault), the second one wraps up.
+const seen: { path: string; beta: string; body: any }[] = [];
+async function fakeProvider(req: Request) {
+  const body: any = await req.json(), path = new URL(req.url).pathname;
+  seen.push({ path, beta: req.headers.get("anthropic-beta") ?? "", body });
+  if (path === "/v1/chat/completions") {
+    const first = !body.messages.some((m: any) => m.role === "tool");
+    const call = (id: string, name: string, args: unknown) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
+    return Response.json({ choices: [{ message: first
+      ? { role: "assistant", content: null, tool_calls: [call("a", "write_note", { path: "1 Inbox/From openai.md", content: "# From openai\n" }), call("b", "write_note", { path: "../escape.md", content: "x" })] }
+      : { role: "assistant", content: "done" } }] });
+  }
+  const first = typeof body.messages.at(-1).content === "string";
+  return Response.json({ id: "msg_1", type: "message", role: "assistant", model: body.model, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 },
+    ...(first
+      ? { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "write_note", input: { path: "1 Inbox/From claude.md", content: "# From claude\n" } }] }
+      : { stop_reason: "end_turn", content: [{ type: "text", text: "done" }] }) });
+}
+async function finished(id: string) {
+  for (let i = 0; i < 100; i++) { const t = await (await fetch(`${BASE}/api/task?id=${id}`)).json(); if (t.end) return t; await Bun.sleep(100); }
+  throw new Error(`task ${id} did not finish`);
+}
+const run = async (agent: string, prompt = "go", extra = {}) => (await (await post("/api/run", { agent, prompt, ...extra })).json()).id;
+
+test("agents.json drives the runner list", async () => {
+  const s = await (await fetch(`${BASE}/api/system`)).json();
+  const ready = Object.fromEntries(s.runners.map((r: any) => [r.id, r.ready]));
+  expect(ready).toEqual({ echo: true, bare: true, sleeper: true, missing: false, "fake-openai": true, "fake-claude": true });
+  const claude = s.runners.find((r: any) => r.id === "fake-claude");
+  expect([claude.models, claude.effort]).toEqual([["claude-opus-5-5"], "high"]);
+  expect(s.agentsMd).toBe(false);
+  expect((await post("/api/run", { agent: "missing", prompt: "go" })).status).toBe(400);
+  expect((await post("/api/run", { agent: "nope", prompt: "go" })).status).toBe(400);
+});
+
+test("a CLI agent runs in the vault with the chosen model and effort", async () => {
+  const t = await finished(await run("echo", "hello vault", { model: "m2" }));
+  expect(t.ok).toBe(true);
+  expect(t.events.map((e: any) => e.txt)).toContain("got hello vault --model m2 --effort high");
+  expect((await post("/api/run", { agent: "echo", prompt: "x", model: "--evil" })).status).toBe(400);
+  expect((await post("/api/run", { agent: "echo", prompt: "x", effort: "ultra" })).status).toBe(400);
+  // No model listed: the {model} token and its flag are dropped.
+  expect((await finished(await run("bare", "hi"))).events.map((e: any) => e.txt)).toContain("got hi");
+});
+
+test("a running task can be stopped", async () => {
+  const id = await run("sleeper");
+  await Bun.sleep(200);
+  expect((await post("/api/task/stop", { id })).status).toBe(200);
+  const t = await finished(id);
+  expect(t.ok).toBe(false);
+});
+
+test("an OpenAI-compatible agent writes notes and cannot leave the vault", async () => {
+  const t = await finished(await run("fake-openai"));
+  expect(t.ok).toBe(true);
+  expect(readFileSync(`${VAULT}/1 Inbox/From openai.md`, "utf8")).toBe("# From openai\n");
+  expect(existsSync(`${ROOT}/escape.md`)).toBe(false);
+  const second = seen.filter((x) => x.path === "/v1/chat/completions").at(-1)!.body;
+  expect(second.messages.filter((m: any) => m.role === "tool").map((m: any) => m.content)).toEqual(["wrote 1 Inbox/From openai.md (14 chars)", "Error: not a note inside the vault: ../escape.md"]);
+});
+
+test("a Claude agent runs the tool loop through the SDK", async () => {
+  const t = await finished(await run("fake-claude", "go", { effort: "low" }));
+  expect(t.ok).toBe(true);
+  expect(readFileSync(`${VAULT}/1 Inbox/From claude.md`, "utf8")).toBe("# From claude\n");
+  const calls = seen.filter((x) => x.path === "/v1/messages");
+  expect(calls[0].beta).toContain("server-side-fallback-2026-07-01");
+  expect(calls[0].body.fallbacks).toBe("default");
+  expect([calls[0].body.model, calls[0].body.output_config.effort]).toEqual(["claude-opus-5-5", "low"]);
+  expect(calls[0].body.tools.every((x: any) => x.strict)).toBe(true);
+  expect(calls[1].body.messages.at(-1).content[0]).toMatchObject({ type: "tool_result", tool_use_id: "t1" });
 });

@@ -1,4 +1,4 @@
-// Overlook. Hash routes, data from /api (vault) and /api/system (agents, services, routines).
+// Overlook. Hash routes, data from /api (vault) and /api/system (agents, services, tasks).
 const $ = (s, el = document) => el.querySelector(s);
 const main = $("#main");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -10,7 +10,7 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 864e5);
 const addDays = (d, n) => new Date(new Date(d + "T12:00").getTime() + n * 864e5).toLocaleDateString("sv");
 
 let D = null; // vault
-let S = { agents: [], services: [], routines: {} }; // system
+let S = { agents: [], services: [], runners: [], tasks: [] }; // system
 
 const I = {
   home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
@@ -83,7 +83,7 @@ function clock() {
   $("#date").textContent = d.toLocaleDateString(LOCALE, { weekday: "long", day: "numeric", month: "long" });
 }
 function needsYou() { return (D.focus?.length || 0) + due().length + inbox().length + (D.captured?.length || 0); }
-function runningNow() { return Object.values(S.routines).filter((r) => !r.end).length; }
+function runningNow() { return (S.tasks || []).filter((t) => !t.end).length; }
 
 function topBar() {
   if (!D) return;
@@ -100,7 +100,7 @@ function topBar() {
   const n = needsYou(), run = runningNow(), live = S.agents.length;
   $("#week").innerHTML = `${week}<span class="wk-sep"></span>
     <a class="chipbox" href="#/review">${icon("target", 18)}<span><b>Needs you</b>${n} ${n === 1 ? "item" : "items"}</span></a>
-    <a class="chipbox" href="#/agents">${icon("bolt", 18)}<span><b>Agents</b>${live} active${run ? ` · ${run} routine` : ""}</span></a>`;
+    <a class="chipbox" href="#/agents">${icon("bolt", 18)}<span><b>Agents</b>${live} active${run ? ` · ${run} ${run === 1 ? "task" : "tasks"}` : ""}</span></a>`;
 
   const { pg, arg } = route();
   const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
@@ -180,7 +180,7 @@ function tiles() {
       <span class="s">${esc(S.services.map((s) => `${s.ok ? "●" : "○"} ${s.name}`).join("  ")) || "none configured"}</span></a>
     <a class="tile glass" href="#/review"><span class="k">${icon("review", 16)} Review</span><span class="v">${due().length}</span>
       <span class="s">${next ? `next: ${esc(next.title)} ${rel.format(daysBetween(D.today, next.review_on), "day")}` : "no notes in the cycle"}</span></a>
-    <a class="tile glass" href="#/notes"><span class="k">${icon("notes", 16)} Vault</span><span class="v">${D.notes.length}</span>
+    <a class="tile glass" href="#/notes"><span class="k">${icon("notes", 16)} Notes</span><span class="v">${D.notes.length}</span>
       <span class="s">${D.missing.length} ${D.missing.length === 1 ? "gap" : "gaps"} · ${D.notes.filter((n) => Date.now() - n.mtime < 7 * 864e5).length} touched this week</span></a>`;
 }
 
@@ -362,8 +362,31 @@ const ROUTINES = {
   inbox: ["Inbox", "Processes the inbox folder: each item becomes a proper note or stays, with the reason."],
 };
 const AGENT_NAME = { claude: ["Claude Code", "agents"], agy: ["Antigravity", "bolt"], codex: ["Codex", "agents"], gemini: ["Gemini", "spark"] };
+const runnerName = (id) => S.runners?.find((r) => r.id === id)?.name || id;
+const taskStatus = (t) => (!t.end ? "running" : t.ok ? "finished" : "failed");
+const liveClass = (t) => (!t.end ? "run" : t.ok ? "" : "off");
+// The task form is drawn once; the 10 s refresh redraws only #agents-body, so what you type survives.
 function agents() {
-  main.innerHTML = `<div class="ph"><h1>Agents</h1><p>Claude and AGY follow the same <code>AGENTS.md</code>. Routines run in AGY.</p></div>
+  const ready = (S.runners || []).filter((r) => r.ready);
+  main.innerHTML = `<div class="ph"><h1>Agents</h1><p>Put any agent from <code>agents.json</code> to work on the vault, or watch the ones already running.</p></div>
+    <h3>Put an agent to work</h3>
+    <form class="talk glass" id="run"><select id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select><select id="run-model" aria-label="Model" hidden></select><select id="run-effort" aria-label="Effort" hidden></select>
+      <textarea id="run-prompt" rows="2" placeholder="What should it do in the vault? Enter runs, Shift+Enter adds a line" aria-label="Task for the agent"></textarea>
+      <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+      <small>${ready.length ? "CLI agents run in the vault folder; API agents can only list, search, read and write notes." : "No agent is set up yet: see README › Agents."}</small></form>
+    <div id="agents-body"></div>`;
+  $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
+  $("#run-agent").onchange = runOptions;
+  runOptions();
+  $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
+  agentsBody();
+  ambient(art("agents"));
+}
+function agentsBody() {
+  const el = $("#agents-body");
+  if (!el) return;
+  el.innerHTML = `${S.tasks?.length ? `<h3>Tasks</h3><div class="list glass">${S.tasks.map((t) => `<a class="row" href="#/t/${t.id}"><span class="live ${liveClass(t)}"></span>
+        <span class="t">${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : t.prompt)}<small>${esc(taskMeta(t))} · ${taskStatus(t)}</small></span><span class="x">${ago(Date.parse(t.start))}</span></a>`).join("")}</div>` : ""}
     <h3>Running now</h3><div class="cards">${S.agents.map((a) => {
       const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
       return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${icon(ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
@@ -374,19 +397,60 @@ function agents() {
         <span class="live ${f.state === "blocked" ? "run" : f.state === "done" ? "idle" : ""}" style="margin-left:auto"></span></div>
         ${f.needs ? `<p class="need">${esc(f.needs)}</p>` : ""}
         <div class="ft"><span class="pill ${f.state === "blocked" ? "peach" : ""}">${STATE[f.state] || f.state}</span><span class="pill">${ago(f.since)}</span><span class="watch">open ${icon("r", 14)}</span></div></a>`).join("")}</div>` : ""}
-    <h3>Routines</h3><div class="cards">${Object.entries(ROUTINES).map(([k, [name, desc]]) => {
-      const r = S.routines[k];
-      const st = !r ? "hasn't run this session" : !r.end ? `running since ${r.start.slice(11)}` : `${r.ok ? "finished" : "failed"} at ${r.end.slice(11)}`;
+    ${S.agentsMd ? `<h3>Routines</h3><div class="cards">${Object.entries(ROUTINES).map(([k, [name, desc]]) => {
+      const r = S.tasks?.find((t) => t.routine === k);
+      const st = !r ? "hasn't run this session" : !r.end ? `running since ${new Date(r.start).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })}` : `${r.ok ? "finished" : "failed"} ${ago(Date.parse(r.end))}`;
       return `<div class="ag glass"><div class="hd"><span class="ic">${icon(k === "inbox" ? "inbox" : "target")}</span><div><h4>${name}</h4><small>${desc}</small></div></div>
-        <div class="ft"><span class="live ${!r ? "idle" : !r.end ? "run" : r.ok ? "" : "off"}"></span><small>${st}</small>${r && !r.end && S.agents.find((x) => x.pid === r.pid)?.key ? `<a class="watch" href="#/a/${S.agents.find((x) => x.pid === r.pid).key}">watch live</a>` : ""}
-        <button class="btn peach" style="margin-left:auto" data-act="routine" data-k="${k}" ${r && !r.end ? "disabled" : ""}>${icon("play", 14)} Run in AGY</button></div></div>`;
-    }).join("")}</div>
+        <div class="ft"><span class="live ${r ? liveClass(r) : "idle"}"></span><small>${st}</small>${r ? `<a class="watch" href="#/t/${r.id}">open</a>` : ""}
+        <button class="btn peach" style="margin-left:auto" data-act="routine" data-k="${k}" ${r && !r.end ? "disabled" : ""}>${icon("play", 14)} Run</button></div></div>`;
+    }).join("")}</div>` : ""}
     <h3>Log</h3><div class="list glass">${D.log.map((l) => {
       const [when, who, ...rest] = l.split(" · ");
       return `<div class="row"><span class="who">${esc(who)}</span><span class="txt">${withLinks(rest.join(" · "))}</span><span class="x">${esc(when.slice(5).replace("-", "/"))}</span></div>`;
     }).join("") || '<p class="empty">No runs logged.</p>'}</div>
     <h3>Findings</h3><div class="list glass">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`; }).join("")}</div>`;
-  ambient(art("agents"));
+}
+// Model and effort pickers follow the chosen agent: only what agents.json lists for it.
+function runOptions() {
+  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {};
+  const fill = (id, list = [], pick) => { const el = $(id); el.hidden = !list.length; el.innerHTML = list.map((v) => `<option ${v === pick ? "selected" : ""}>${esc(v)}</option>`).join(""); };
+  fill("#run-model", r.models, r.models?.[0]); fill("#run-effort", r.efforts, r.effort);
+}
+const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort")?.value });
+const taskMeta = (t) => [runnerName(t.agent), t.model, t.effort].filter(Boolean).join(" · ");
+async function runPrompt() {
+  const t = $("#run-prompt"), prompt = t.value.trim();
+  if (!prompt || t.disabled) return;
+  t.disabled = true;
+  try { const r = await api("/api/run", { ...runChoice(), prompt }); location.hash = `#/t/${r.id}`; }
+  catch (e) { toast(`Not started: ${e.message}`); t.disabled = false; }
+}
+
+// ---------------------------------------------------------------- Task
+let taskTimer = null, taskLast = "";
+async function taskPage(id) {
+  clearInterval(taskTimer); taskLast = "";
+  main.innerHTML = `<div class="ph" id="task-head"></div><div class="feed list glass" id="feed"><p class="empty">Loading…</p></div>`;
+  const paint = async () => {
+    if (route().pg !== "t" || route().arg !== id) return clearInterval(taskTimer);
+    const t = await api(`/api/task?id=${encodeURIComponent(id)}`).catch(() => null);
+    if (!t) { main.innerHTML = `<div class="ph"><h1>Task not found</h1><p>Tasks live in memory and are gone after a restart.</p></div><a class="btn glass" href="#/agents">Back to Agents</a>`; return clearInterval(taskTimer); }
+    const signature = t.end + t.events.length;
+    if (signature === taskLast) return;
+    taskLast = signature;
+    $("#task-head").innerHTML = `<h1>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))}</p>
+      <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}</div>`;
+    const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+    feed.innerHTML = t.events.map((e) => `<div class="row ev ${e.t}">
+        <span class="who">${esc(e.t === "tool" ? e.name : e.t === "you" ? "task" : e.t === "text" ? runnerName(t.agent) : e.t)}</span>
+        <div class="txt">${e.t === "text" || e.t === "you" ? fmt(e.txt) : esc(e.txt)}</div>
+        <span class="x">${new Date(e.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })}</span></div>`).join("");
+    if (atEnd) feed.scrollTop = feed.scrollHeight;
+    if (t.end) clearInterval(taskTimer);
+  };
+  await paint();
+  taskTimer = setInterval(paint, 2000);
+  ambient(art(`task ${id}`));
 }
 
 // ---------------------------------------------------------------- Live agent
@@ -480,7 +544,7 @@ function service(id) {
 }
 
 // ---------------------------------------------------------------- routes and events
-const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], s: [service, "Service"], a: [agentPage, "Agent"] };
+const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
 function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
 function render() {
   if (!D) return;
@@ -500,9 +564,9 @@ const ACTIONS = {
   show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
   enroll: async (el) => { await api("/api/review", { path: el.dataset.p, remembered: false }); toast("In the cycle: first review tomorrow"); D = await api("/api"); render(); },
   routine: async (el) => {
-    try { await api("/api/routine", { name: el.dataset.k }); toast("Routine started in AGY"); } catch (e) { toast(e.message); }
-    S = await api("/api/system"); agents(); topBar();
+    try { const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() }); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
   },
+  stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";
     try {
@@ -532,7 +596,7 @@ $("#capture-text").addEventListener("keydown", async (e) => {
   D = await api("/api"); if (!route().pg) home(); topBar();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.target.matches("input, textarea") || document.querySelector("dialog[open]")) return;
+  if (e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
   if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }
   if (e.key === "/" && pg === "notes") { e.preventDefault(); $("#search").focus(); }
@@ -556,7 +620,7 @@ async function system() { S = await api("/api/system"); }
 setInterval(async () => {
   await system(); topBar();
   const { pg } = route();
-  if (!pg) tiles(); else if (pg === "agents" || pg === "services") PAGES[pg][0]();
+  if (!pg) tiles(); else if (pg === "agents") agentsBody(); else if (pg === "services") services();
 }, 10000);
 setInterval(async () => { await vault(); topBar(); if (!route().pg) tiles(); }, 60000);
 addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg) home(); else if (pg === "notes") grid(); });

@@ -1,8 +1,8 @@
 name: CI
 
 on:
+  # Every PR, not just ones into main: a stacked PR gets its checks before it is retargeted.
   pull_request:
-    branches: [ main ]
   push:
     branches: [ main ]
 
@@ -50,7 +50,11 @@ jobs:
           # Pinned to what the app is run with; bump it here on purpose, not by surprise.
           bun-version: 1.4.3
 
+      # Exactly what bun.lock pins; the only dependency is the Anthropic SDK for API agents.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       # Boots the server like a fresh clone against example-vault and walks every endpoint
-      # and page; also parses both frontends. See test/smoke.test.ts.
+      # and page, runs CLI and API agents against fake providers; also parses both frontends.
       - name: Smoke test
         run: bun test
