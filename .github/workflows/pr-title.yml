@@ -1,0 +1,38 @@
+name: PR title
+
+# Pull requests are merged by squash with the PR title as the commit subject, so the title
+# IS the history `git log --oneline` shows. Conventional Commits, a known type, an optional
+# lower-case scope.
+#
+# Its own workflow because it has to rerun when the title is edited, and ci.yml must not.
+# No checkout and no marketplace action. The title is passed through an environment variable,
+# never interpolated into the script, because it is text anyone opening a PR controls.
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, edited, synchronize, reopened ]
+
+permissions: {}
+
+jobs:
+  conventional-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: The title is a Conventional Commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          pattern='^(feat|fix|refactor|perf|test|docs|build|ci|chore|style|revert)(\([a-z0-9][a-z0-9-]*\))?!?: [^[:space:]].*$'
+          if printf '%s' "$TITLE" | grep -qE "$pattern"; then
+            echo "OK: $TITLE"
+            exit 0
+          fi
+          echo "::error::PR title is not a Conventional Commit: $TITLE"
+          echo "It becomes the squash-merge commit subject. Expected: <type>(<scope>): <summary>"
+          echo "with type one of feat, fix, refactor, perf, test, docs, build, ci, chore,"
+          echo "style, revert, an optional lower-case scope, then a colon, a space and the"
+          echo "summary. Example: fix(review): keep the interval when the note has no frontmatter"
+          exit 1

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+# Stated in the workflow so it travels with the file, whatever the account default becomes.
+permissions:
+  contents: read
+
+# A superseded run buys nothing, and no job here has an external side effect.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # The run takes well under a minute. This caps what a hung step can cost.
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # Full history: gitleaks scans every commit, not just the new ones.
+          fetch-depth: 0
+
+      # The repo is public and .env holds Pinterest tokens next to it. The whole history is
+      # scanned because a secret already in history is the one nobody is looking at.
+      # The release binary, pinned and checksum-verified, rather than a marketplace action.
+      - name: No secrets in the history
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum -c -
+          tar xzf "$archive" gitleaks
+          ./gitleaks git . --redact --no-banner
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned to what the app is run with; bump it here on purpose, not by surprise.
+          bun-version: 1.4.3
+
+      # Boots the server like a fresh clone against example-vault and walks every endpoint
+      # and page; also parses both frontends. See test/smoke.test.ts.
+      - name: Smoke test
+        run: bun test
