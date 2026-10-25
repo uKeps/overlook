@@ -922,7 +922,7 @@ $("#capture-text").addEventListener("keydown", async (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && calDay && !document.querySelector("dialog[open]")) { calDay = ""; calRender(); return; }
-  if (e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
   if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }
   if (e.key === "/" && pg === "notes") { e.preventDefault(); $("#search").focus(); }
