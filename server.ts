@@ -8,7 +8,7 @@ import { readdirSync, readlinkSync, mkdirSync, readFileSync, existsSync } from "
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback } from "./pinterest";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
 
 const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -25,12 +25,12 @@ const ART = resolve(process.env.ART_DIR || `${homedir()}/Pictures/Wallpapers`); 
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
   en: {
-    daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md",
+    daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md",
     keys: { type: "type", review: "review_on", interval: "interval" }, types: {} as Record<string, string>,
     routines: { morning: "Follow the morning routine in the Routines section of AGENTS.md.", inbox: "Follow the inbox routine in the Routines section of AGENTS.md." },
   },
   pt: {
-    daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md",
+    daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
     keys: { type: "tipo", review: "revisar_em", interval: "intervalo" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
   },
@@ -102,6 +102,41 @@ async function section(name: string) {
   return sec.split("\n").filter((l) => /^\s*- /.test(l)).map((l) => l.replace(/^\s*- (\[.\] )?/, ""));
 }
 
+// Calendar.md at the vault root: one line per item, `- YYYY-MM-DD HH:MM · what` (the time is optional). Plain Markdown,
+// so Obsidian shows it and agents can read it. Overlook keeps the lines sorted and leaves everything else alone.
+type CalItem = { date: string; time: string; title: string };
+const CAL_LINE = /^- (\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))? · (.+)$/;
+const calLine = (e: CalItem) => `- ${e.date}${e.time ? ` ${e.time}` : ""} · ${e.title}`;
+const calKey = (e: CalItem) => `${e.date} ${e.time}`;
+async function calendar(): Promise<CalItem[]> {
+  const f = Bun.file(`${ROOT}/${L.calendar}`);
+  if (!(await f.exists())) return [];
+  return (await f.text()).split("\n").flatMap((l) => { const m = l.match(CAL_LINE); return m ? [{ date: m[1], time: m[2] ?? "", title: m[3] }] : []; });
+}
+function calItem(b: any): CalItem | string {
+  const date = String(b?.date ?? ""), time = String(b?.time ?? ""), title = String(b?.title ?? "").replace(/\s+/g, " ").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(Date.parse(date))) return "date must be YYYY-MM-DD";
+  if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return "time must be HH:MM";
+  if (!title || title.length > 200) return "title must be 1 to 200 characters";
+  return { date, time, title };
+}
+async function calendarEdit(e: CalItem, remove: boolean) {
+  const f = Bun.file(`${ROOT}/${L.calendar}`);
+  const ls = (await f.exists()) ? (await f.text()).replace(/\n$/, "").split("\n")
+    : ["# Calendar", "", "One line per item: `- YYYY-MM-DD HH:MM · what` (the time is optional). Overlook reads and writes this file.", ""];
+  if (remove) {
+    const i = ls.indexOf(calLine(e));
+    if (i < 0) return false;
+    ls.splice(i, 1);
+  } else {
+    const items = ls.map((l, i) => [i, l.match(CAL_LINE)] as const).filter(([, m]) => m);
+    const after = items.find(([, m]) => calKey({ date: m![1], time: m![2] ?? "", title: "" }) > calKey(e));
+    ls.splice(after ? after[0] : items.length ? items[items.length - 1][0] + 1 : ls.length, 0, calLine(e));
+  }
+  await Bun.write(f, ls.join("\n") + "\n");
+  return true;
+}
+
 async function state() {
   const ns = await notes();
   const dailies: string[] = [];
@@ -111,7 +146,7 @@ async function state() {
     notes: ns, missing: (await missing(ns)).slice(0, 10),
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
-    art: art().length,
+    art: art().length, calendar: await calendar(),
     pins: pinterestState().images,
   };
 }
@@ -377,6 +412,7 @@ const page = (t: string, msg: string) => new Response(`<!doctype html><meta char
 <body style="background:#121212;color:#EAE8E3;font:15px/1.6 system-ui;display:grid;place-items:center;min-height:90vh;margin:0;padding:24px">
 <main style="max-width:520px"><h1 style="font-weight:400">${t}</h1><p style="color:#A3A19C">${msg.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!)}</p><p><a style="color:#F2B48C" href="/#/services">Back to Services →</a></p></main>`, { headers: { "content-type": "text/html; charset=utf-8" } });
 
+startScheduler(ROOT, import.meta.dir);
 startPinterest(`${TAILNET ? `https://${TAILNET}` : `http://127.0.0.1:${PORT}`}/auth/pinterest/callback`); // Tailscale HTTPS redirect
 
 async function handle(req: Request, port: number) {
@@ -394,6 +430,13 @@ async function handle(req: Request, port: number) {
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
+    if (p === "/api/calendar" || p === "/api/calendar/delete") {
+      const e = calItem(b);
+      if (typeof e === "string") return new Response(e, { status: 400 });
+      return json((await calendarEdit(e, p.endsWith("/delete"))) && { ok: true });
+    }
+    if (p === "/api/schedule") { const r = addScheduled(ROOT, import.meta.dir, b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/schedule/delete") return json(removeScheduled(import.meta.dir, String(b.id)) && { ok: true });
     if (p === "/api/task/stop") return json(stopTask(String(b.id)) && { ok: true });
     return new Response("404", { status: 404 });
   }
@@ -402,7 +445,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
-  if (p === "/api/system") return json({ agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
+  if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   if (p.startsWith("/art/")) {
     const a = art(), i = Number(p.slice(5));
     return Number.isInteger(i) && a.length
