@@ -372,8 +372,6 @@ if (cmd === "today") {
 
 const json = (x: unknown) => (x ? Response.json(x) : new Response("not found", { status: 404 }));
 const STATIC = new Set(["/app.js", "/app.css"]);
-const GRAFITE = new Set(["/grafite/app.js", "/grafite/app.css", "/grafite/tokens.css"]);
-const PORT_V2 = PORT + 2;
 // Minimal OAuth landing page (escaped text: the message may come from Pinterest).
 const page = (t: string, msg: string) => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${t}</title>
 <body style="background:#121212;color:#EAE8E3;font:15px/1.6 system-ui;display:grid;place-items:center;min-height:90vh;margin:0;padding:24px">
@@ -412,10 +410,6 @@ async function handle(req: Request, port: number) {
       : new Response("404", { status: 404 });
   }
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
-  if (p === "/grafite") return Response.redirect("/grafite/", 301);
-  if (p === "/grafite/") return new Response(Bun.file(`${import.meta.dir}/grafite/index.html`));
-  if (GRAFITE.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
-  if (p.startsWith("/v2")) return Response.redirect("/", 302);
   if (p.startsWith("/pin/")) { const f = await pinFile(p.slice(5), url.searchParams.has("amb")); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }
   if (p === "/auth/pinterest/callback") { const error = await authorizeCallback(url); return page(error ? "Not connected" : "Pinterest connected", error || `${pinterestState().total} images in the cache.`); }
@@ -424,8 +418,7 @@ async function handle(req: Request, port: number) {
 }
 
 Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: (req) => handle(req, PORT) });
-Bun.serve({ hostname: "127.0.0.1", port: PORT_V2, fetch: (req) => handle(req, PORT_V2) });
-console.log(`Overlook on http://127.0.0.1:${PORT} · v2 on http://127.0.0.1:${PORT_V2}`);
+console.log(`Overlook on http://127.0.0.1:${PORT}`);
 
 // A service that forbids iframes (X-Frame-Options DENY) gets a proxy that only allows Overlook as the frame.
 // The embedded app keeps calling its API on the target directly, so the target must allow 127.0.0.1:<proxy> in its CORS.
@@ -447,7 +440,7 @@ for (const s of await serviceList()) {
       const rh = new Headers(r.headers);
       rh.delete("x-frame-options"); rh.delete("content-encoding"); rh.delete("content-length"); // fetch already decompressed
       const csp = rh.get("content-security-policy");
-      if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT} http://127.0.0.1:${PORT_V2} http://localhost:${PORT_V2}${TAILNET ? ` https://${TAILNET}` : ""}`));
+      if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT}${TAILNET ? ` https://${TAILNET}` : ""}`));
       return new Response(r.body, { status: r.status, headers: rh });
     },
   });

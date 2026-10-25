@@ -6,9 +6,9 @@ from disk. No database, no build step, no cloud.
 
 ![Home](docs/screenshots/home.jpg)
 
-| Note reader | Alternate UI (`/grafite/`) |
+| Note reader | Agents |
 | --- | --- |
-| ![Note](docs/screenshots/note.jpg) | ![Grafite](docs/screenshots/grafite.jpg) |
+| ![Note](docs/screenshots/note.jpg) | ![Agents](docs/screenshots/agents.jpg) |
 
 ## Quick start
 
