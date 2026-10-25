@@ -52,6 +52,12 @@ Vault in Portuguese? Set `VAULT_LANG=pt` in `.env` and Overlook reads `2 Diário
 
 A one-line summary comes from a `> [!abstract]` callout right after the title.
 
+## Themes
+
+Settings → *Theme*: Overlook (the default), Tokyo Night, Dracula, Catppuccin Mocha, Rosé Pine, Gruvbox and Nord.
+Each is a handful of base colours at the end of `app.css`; everything else is mixed from them, so a new theme is
+one more block there.
+
 ## Calendar
 
 The strip under the top bar is a week (or month) calendar. Click a day to see what's on it and to add:
