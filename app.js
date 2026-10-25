@@ -531,7 +531,7 @@ function agentsBody() {
     <h3>Running now</h3><div class="cards">${S.agents.map((a) => {
       const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
       return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${icon(ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
-        <div class="ft"><span class="pill">pid ${a.pid}</span><span class="pill">${duration(a.seconds)}</span><span class="watch">watch live ${icon("r", 14)}</span></div></a>`;
+        <div class="ft"><span class="pill">${duration(a.seconds)}</span><span class="watch">watch live ${icon("r", 14)}</span></div></a>`;
     }).join("") || '<p class="empty">No agents running.</p>'}</div>
     ${S.background?.length ? `<h3>In the background</h3><div class="cards">${S.background.map((f) => `<a class="ag glass link" href="#/a/${f.key}">
         <div class="hd"><span class="ic">${icon("agents")}</span><div><h4>${esc(f.title)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
@@ -625,9 +625,8 @@ async function agentPage(key) {
     if (signature === agLast) return;
     agLast = signature;
     const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
-    const status = a.live ? "running" : STATE[a.state] || "idle";
-    $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.pid ? ` · pid ${a.pid}` : ""}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
-      <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span><small style="color:var(--muted)">${status} · refreshes every 3 s</small>
+    $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
+      <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span>
         ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(key)}"`, true)}</div>`;
     $("#agent-needs").innerHTML = a.needs ? `<div class="needs glass"><b>Needs you</b>${fmt(a.needs)}</div>` : "";
     $("#talk-hint").textContent = a.name === "agy" ? "Continues this conversation in AGY (agy -p --conversation)."

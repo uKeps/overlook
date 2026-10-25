@@ -92,7 +92,11 @@ test("the page and its assets are served and the frontend parses", async () => {
   for (const p of ["/", "/app.js", "/app.css"])
     expect([p, (await fetch(BASE + p)).status]).toEqual([p, 200]);
   const js = new Bun.Transpiler({ loader: "js" });
-  for (const f of ["app.js"]) js.transformSync(readFileSync(`${ROOT}/${f}`, "utf8"));
+  const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
+  js.transformSync(appJs);
+  expect(appJs).not.toContain("refreshes every 3 s");
+  expect(appJs).not.toContain("pid ${a.pid}");
+  expect(readFileSync(`${ROOT}/app.css`, "utf8")).toContain(".ph .r { margin-left: auto; display: flex; align-items: center; gap: 8px; }");
 });
 
 test("agent CLI commands", () => {
