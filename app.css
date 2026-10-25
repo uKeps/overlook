@@ -95,16 +95,19 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-event
 /* Floating: a small pill in the middle of the top bar. Hovering it, focusing inside or opening a day drops the
    calendar into the strip's usual place, over the page, and it folds back up when you leave. */
 .cal.float { position: absolute; top: 26px; left: 50%; translate: -50% 0; z-index: 30; width: min(1240px, calc(100vw - 48px)); padding: 0; background: none; border-color: transparent; pointer-events: none; }
-.cal.float .cal-pill { pointer-events: auto; display: flex; align-items: center; gap: 8px; width: max-content; margin: 0 auto; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass-2);
-  color: var(--muted); font-size: 12px; transition: opacity .2s, transform .25s var(--ease); }
+.cal.float .cal-pill { pointer-events: auto; display: flex; align-items: center; gap: 8px; width: max-content; height: 34px; margin: 0 auto; padding: 0 16px; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .16); background: rgba(30, 31, 37, .88); box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  color: var(--ink); font-size: 13px; transition: opacity .2s, transform .25s var(--ease), border-color .2s; }
+.cal.float .cal-pill:hover { border-color: rgba(244, 184, 143, .45); }
 .cal.float .cal-pill b { color: var(--ink); font-weight: 600; }
+.cal.float .cal-pill span { color: var(--peach); font-weight: 500; }
 .cal.float .cal-pill svg { color: var(--peach); }
 .cal.float .cal-body { pointer-events: auto; position: absolute; top: 58px; left: 0; right: 0; padding: 8px; border-radius: var(--r); border: 1px solid var(--line); background: rgb(16, 17, 21); box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
   opacity: 0; visibility: hidden; transform: translateY(-14px) scale(.97); transform-origin: top center;
   transition: opacity .22s var(--ease) .12s, transform .3s var(--ease) .12s, visibility 0s .42s; }
 .cal.float .cal-body::before { content: ""; position: absolute; left: 0; right: 0; top: -26px; height: 26px; } /* keeps the hover alive between the pill and the panel */
 .cal.float:is(:hover, :focus-within, .open) .cal-body { opacity: 1; visibility: visible; transform: none; transition: opacity .22s var(--ease), transform .3s var(--ease), visibility 0s; }
-.cal.float:is(:hover, :focus-within, .open) .cal-pill { opacity: .5; transform: scale(.96); }
+.cal.float:is(:hover, :focus-within, .open) .cal-pill { transform: scale(.96); }
 
 main { max-width: 1240px; margin: 0 auto; padding-top: 28px; animation: page .5s var(--ease); }
 @keyframes page { from { opacity: 0; transform: translateY(8px); } }
