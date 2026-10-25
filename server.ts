@@ -7,7 +7,7 @@ import { resolve, basename, dirname } from "node:path";
 import { readdirSync, readlinkSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
-import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback, setPrefs, shownPins } from "./pinterest";
+import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback, setPrefs, shownPins, magick } from "./pinterest";
 import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
 
 const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
@@ -207,7 +207,7 @@ async function thumbnail(name: string, amb: boolean) {
   if (!(await Bun.file(out).exists())) {
     mkdirSync(CACHE, { recursive: true });
     const args = amb ? ["-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135"] : ["-resize", "1600x1600>"];
-    if (Bun.spawnSync(["magick", `${ART}/${name}`, ...args, "-quality", "78", out]).exitCode !== 0) return Bun.file(`${ART}/${name}`);
+    if (!magick([`${ART}/${name}`, ...args, "-quality", "78", out])) return Bun.file(`${ART}/${name}`);
   }
   return Bun.file(out);
 }

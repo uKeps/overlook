@@ -19,6 +19,9 @@ let paused = false; // configuration error (403): no automatic retries, only fro
 let lastLog = "";
 const pending = new Set<string>(); // OAuth "state" values in flight
 
+// ImageMagick is optional: without it, images are served and kept at their original size.
+export const magick = (args: string[]) => !!Bun.which("magick") && Bun.spawnSync(["magick", ...args]).exitCode === 0;
+
 const logOnce = (msg: string) => { if (msg !== lastLog) { console.error(`pinterest: ${msg}`); lastLog = msg; } };
 
 function readEnv(): Record<string, string> {
@@ -129,7 +132,7 @@ export async function sync(manual = false) {
           const r = await fetch(p.url);
           if (!r.ok) continue;
           await Bun.write(file, r);
-          Bun.spawnSync(["magick", `${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]);
+          magick([`${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]);
         }
         pins.push({ id: p.id, link: p.link, title: p.title, color: p.color });
       }
@@ -146,7 +149,7 @@ export async function sync(manual = false) {
           const r = await fetch(largest.url);
           if (!r.ok) continue;
           await Bun.write(file, r);
-          Bun.spawnSync(["magick", `${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]); // without ImageMagick, the original stays
+          magick([`${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]); // without ImageMagick, the original stays
         }
         pins.push({ id: p.id, link: `https://www.pinterest.com/pin/${p.id}/`, title: String(p.title || p.alt_text || p.description || "").slice(0, 140), color: p.dominant_color ?? "" });
       }
@@ -218,7 +221,7 @@ export async function pinFile(id: string, variant: "" | "amb" | "thumb" = "") {
   const out = `${CACHE}/${id}-${variant}.jpg`;
   if (!(await Bun.file(out).exists())) {
     const args = variant === "amb" ? ["-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135"] : ["-resize", "480x480>"];
-    Bun.spawnSync(["magick", `${orig}[0]`, ...args, "-quality", "78", out]);
+    magick([`${orig}[0]`, ...args, "-quality", "78", out]);
     if (!(await Bun.file(out).exists())) return Bun.file(orig);
   }
   return Bun.file(out);
