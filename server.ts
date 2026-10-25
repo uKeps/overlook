@@ -4,15 +4,17 @@
 //   bun server.ts map     -> one line per note, so agents can find their way
 //   bun server.ts today   -> what the Home shows, as short text for an agent
 import { resolve, basename, dirname } from "node:path";
-import { readlinkSync, readFileSync, existsSync } from "node:fs";
+import { readlinkSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
-import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback } from "./pinterest";
+import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
 
-const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
+const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
+let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
 const PORT = Number(process.env.PORT) || 3333;
+let cfgPort = PORT;
 // Machine name on Tailscale, read at startup: survives renaming the machine.
 const TAILNET = (() => {
   try { return JSON.parse(Bun.spawnSync(["tailscale", "status", "--json"]).stdout.toString()).Self.DNSName.replace(/\.$/, ""); } catch { return ""; }
@@ -20,7 +22,7 @@ const TAILNET = (() => {
 // Accepted Host: loopback on the right port or the tailnet name (blocks DNS rebinding without locking out the phone).
 const hostOk = (h: string, port: number) =>
   h === `127.0.0.1:${port}` || h === `localhost:${port}` || (!!TAILNET && (h === TAILNET || h.startsWith(`${TAILNET}:`)));
-const VAULT = basename(ROOT);
+let VAULT = basename(ROOT);
 
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
@@ -35,8 +37,9 @@ const LAYOUTS = {
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
   },
 };
-const L = LAYOUTS[process.env.VAULT_LANG === "pt" ? "pt" : "en"];
-const ROUTINES: Record<string, string> = L.routines;
+let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
+let L = LAYOUTS[vaultLang];
+let ROUTINES: Record<string, string> = L.routines;
 
 type Note = {
   path: string; title: string; folder: string; type: string; area: string; tags: string[];
@@ -232,7 +235,7 @@ async function background() {
 
 type Service = { id: string; name: string; url: string; desc: string; icon?: string; dock?: boolean; width?: number; max?: number; proxy?: number; tailnet?: number; internal?: string };
 // services.json is personal (not in git); without it the list is empty.
-const serviceList = (): Promise<Service[]> => Bun.file(`${import.meta.dir}/services.json`).json().catch(() => []);
+const serviceList = (): Service[] => { try { return JSON.parse(readFileSync(`${import.meta.dir}/services.json`, "utf8")); } catch { return []; } };
 
 // What an agent is doing, read from its conversation on disk. Read-only.
 type Event = { t: "you" | "text" | "tool" | "result"; txt: string; name?: string; at?: string };
@@ -364,6 +367,52 @@ async function open(b: any) {
 const str = (x: unknown) => (typeof x === "string" ? x : undefined);
 const started = (t: ReturnType<typeof runTask>) => (typeof t === "string" ? new Response(t, { status: 400 }) : json({ id: t.id }));
 
+const validUrl = (u: unknown) => { try { const p = new URL(String(u)); return p.protocol === "http:" || p.protocol === "https:"; } catch { return false; } };
+const validAgent = (a: any) =>
+  a && typeof a === "object" && typeof a.id === "string" && /^[\w-]+$/.test(a.id) &&
+  typeof a.name === "string" && a.name.trim().length > 0 &&
+  ((Array.isArray(a.run) && a.run.length > 0 && a.run.every((x: any) => typeof x === "string" && x.length > 0)) ||
+    a.api === "anthropic" || a.api === "openai");
+const validService = (s: any) =>
+  s && typeof s === "object" && typeof s.id === "string" && /^[\w-]+$/.test(s.id) &&
+  typeof s.name === "string" && s.name.trim().length > 0 && validUrl(s.url) && typeof s.desc === "string";
+
+function settings() {
+  const img = imagesState();
+  return { vaultDir: ROOT, vaultLang, port: cfgPort, folder: img.folder, board: img.board, agents: loadAgents(import.meta.dir), services: serviceList() };
+}
+function saveSettings(b: any) {
+  if (!b || typeof b !== "object" || Array.isArray(b)) return "invalid settings";
+  let nextRoot = ROOT;
+  if (b.vaultDir !== undefined) {
+    const raw = typeof b.vaultDir === "string" ? b.vaultDir.trim() : "";
+    const abs = raw ? resolve(raw.replace(/^~(?=$|\/)/, homedir())) : "";
+    if (!abs || !existsSync(abs) || !statSync(abs).isDirectory()) return `no folder at ${b.vaultDir}`;
+    nextRoot = abs;
+  }
+  if (b.vaultLang !== undefined && b.vaultLang !== "en" && b.vaultLang !== "pt") return "vaultLang must be en or pt";
+  let nextPort = cfgPort;
+  if (b.port !== undefined) {
+    const p = typeof b.port === "number" ? b.port : typeof b.port === "string" && b.port.trim() ? Number(b.port) : NaN;
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) return "port must be 1024–65535";
+    nextPort = p;
+  }
+  if (b.agents !== undefined && (!Array.isArray(b.agents) || !b.agents.every(validAgent))) return "invalid agents";
+  if (b.services !== undefined && (!Array.isArray(b.services) || !b.services.every(validService))) return "invalid services";
+  if (b.folder !== undefined || b.board !== undefined) {
+    const r = setPrefs({ ...(b.folder !== undefined ? { folder: b.folder } : {}), ...(b.board !== undefined ? { board: b.board } : {}) });
+    if (typeof r === "string") return r;
+  }
+  const env: Record<string, string> = {};
+  if (b.vaultDir !== undefined) { ROOT = nextRoot; VAULT = basename(ROOT); env.VAULT_DIR = ROOT; }
+  if (b.vaultLang !== undefined) { vaultLang = b.vaultLang; L = LAYOUTS[vaultLang]; ROUTINES = L.routines; env.VAULT_LANG = vaultLang; }
+  if (b.port !== undefined) { cfgPort = nextPort; env.PORT = String(cfgPort); }
+  if (Object.keys(env).length) saveEnv(env);
+  if (b.agents !== undefined) writeFileSync(`${import.meta.dir}/agents.json`, JSON.stringify(b.agents, null, 2) + "\n");
+  if (b.services !== undefined) writeFileSync(`${import.meta.dir}/services.json`, JSON.stringify(b.services, null, 2) + "\n");
+  return settings();
+}
+
 const cmd = process.argv[2];
 if (cmd === "map") {
   for (const n of (await notes()).sort((a, b) => a.path.localeCompare(b.path)))
@@ -411,6 +460,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
     if (p === "/api/pinterest/sync") return json(await sync(true));
     if (p === "/api/images/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/settings") { const r = saveSettings(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
@@ -427,6 +477,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api") return json(await state());
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/images") return json(imagesState());
+  if (p === "/api/settings") return json(settings());
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));

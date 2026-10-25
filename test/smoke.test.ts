@@ -272,3 +272,48 @@ test("a folder of your own photos joins the Pinterest images", async () => {
   await post("/api/images/prefs", { mode: "fixed", starred: [mine[1].id] });
   expect((await (await fetch(`${BASE}/api`)).json()).pins.map((i: any) => i.id)).toEqual([mine[1].id]);
 });
+
+test("the Settings page reads and updates vault, images, agents and services", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  expect([init.vaultDir, init.vaultLang, init.port, init.services]).toEqual([VAULT, "en", PORT, []]);
+  const origAgents = init.agents;
+
+  const nextAgents = [...origAgents, { id: "extra", name: "Extra", run: ["echo", "{prompt}"] }];
+  const nextServices = [{ id: "local", name: "Local App", url: BASE, desc: "Local service" }];
+  const r = await post("/api/settings", {
+    vaultDir: VAULT, vaultLang: "pt", port: 4800,
+    folder: `${ROOT}/my photos`, board: "my-board",
+    agents: nextAgents, services: nextServices,
+  });
+  expect(r.status).toBe(200);
+  const updated = await r.json();
+  expect([updated.vaultDir, updated.vaultLang, updated.port, updated.folder, updated.board]).toEqual([VAULT, "pt", 4800, `${ROOT}/my photos`, "my-board"]);
+  expect(updated.agents.map((a: any) => a.id)).toContain("extra");
+  expect(updated.services).toEqual(nextServices);
+
+  // Live server state and .env updated immediately.
+  expect((await (await fetch(`${BASE}/api`)).json()).daily).toBe("2 Diário");
+  const sys = await (await fetch(`${BASE}/api/system`)).json();
+  expect(sys.services.map((s: any) => s.id)).toEqual(["local"]);
+  expect(sys.runners.map((x: any) => x.id)).toContain("extra");
+  const envTxt = readFileSync(`${ROOT}/.env`, "utf8");
+  expect(envTxt).toContain(`VAULT_DIR=${VAULT}`);
+  expect(envTxt).toContain("VAULT_LANG=pt");
+  expect(envTxt).toContain("PORT=4800");
+
+  // Invalid inputs are rejected with 400.
+  for (const bad of [
+    { vaultDir: `${ROOT}/no-such-vault` },
+    { vaultLang: "fr" },
+    { port: 80 },
+    { folder: `${ROOT}/no-such-folder` },
+    { board: "a/b/c/d" },
+    { agents: [{ id: "../bad", name: "Bad", run: ["echo"] }] },
+    { services: [{ id: "s", name: "S", url: "javascript:alert(1)", desc: "x" }] },
+  ]) expect((await post("/api/settings", bad)).status).toBe(400);
+
+  // Restore original language, port, agents and services.
+  expect((await post("/api/settings", { vaultLang: "en", port: PORT, agents: origAgents, services: [] })).status).toBe(200);
+  expect((await (await fetch(`${BASE}/api`)).json()).daily).toBe("2 Daily");
+});
+

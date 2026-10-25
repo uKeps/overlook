@@ -29,13 +29,13 @@ function readEnv(): Record<string, string> {
     return Object.fromEntries(readFileSync(ENV, "utf8").split("\n").filter((l) => /^\w+=/.test(l)).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).trim()]));
   } catch { return {}; }
 }
-function saveEnv(values: Record<string, string>) {
-  const lines = existsSync(ENV) ? readFileSync(ENV, "utf8").split("\n") : [];
+export function saveEnv(values: Record<string, string>) {
+  const lines = existsSync(ENV) ? readFileSync(ENV, "utf8").replace(/\n+$/, "").split("\n").filter(Boolean) : [];
   for (const [k, v] of Object.entries(values)) {
     const i = lines.findIndex((l) => l.startsWith(`${k}=`));
     if (i >= 0) lines[i] = `${k}=${v}`; else lines.push(`${k}=${v}`);
   }
-  writeFileSync(ENV, lines.join("\n").replace(/\n*$/, "\n"), { mode: 0o600 });
+  writeFileSync(ENV, lines.join("\n") + "\n", { mode: 0o600 });
 }
 const credentials = () => { const e = readEnv(); return e.PINTEREST_CLIENT_ID && e.PINTEREST_CLIENT_SECRET ? e : null; };
 const basic = (e: Record<string, string>) => "Basic " + Buffer.from(`${e.PINTEREST_CLIENT_ID}:${e.PINTEREST_CLIENT_SECRET}`).toString("base64");
