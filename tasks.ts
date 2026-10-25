@@ -5,20 +5,23 @@ import { resolve, dirname, relative, isAbsolute, sep } from "node:path";
 import { realpathSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
-// models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults);
+// models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults).
+// A model is an id or { id, label, efforts } when it has a display name or its own effort levels;
 // a CLI agent receives the choice through {model} and {effort} in `run`, and {session} gets a fresh UUID per task.
 // open: "Open in…" commands for a session, with {session}, {cwd}, and {terminal} (the user's terminal) as the first token.
 export type Agent = {
   id: string; name: string; process?: string; run?: string[]; api?: "anthropic" | "openai"; url?: string; key?: string;
-  model?: string; models?: string[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>;
+  model?: string; models?: (string | Model)[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>;
 };
+type Model = { id: string; label?: string; efforts?: string[] };
 type Event = { t: "you" | "text" | "tool" | "result" | "error"; txt: string; name?: string; at: string };
 type Task = { id: string; agent: string; model: string; effort: string; session?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
 
 // Without agents.json: the CLIs Overlook always knew about. A CLI shows up as runnable only when it is on the PATH.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULTS: Agent[] = [
-  { id: "claude", name: "Claude Code", process: "claude", models: ["opus", "sonnet", "haiku"], efforts: EFFORTS, effort: "high",
+  { id: "claude", name: "Claude Code", process: "claude", efforts: EFFORTS, effort: "high",
+    models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }, { id: "haiku", label: "Haiku" }],
     run: ["claude", "-p", "{prompt}", "--session-id", "{session}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
     open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] } },
   { id: "agy", name: "Antigravity", process: "agy", efforts: EFFORTS, effort: "high",
@@ -29,7 +32,9 @@ const DEFAULTS: Agent[] = [
 ];
 const MAX_TURNS = 40;
 const TIMEOUT = 30 * 60_000;
-const ANTHROPIC_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+const ANTHROPIC_MODELS: Model[] = [
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5" }, { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" }, { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+];
 // Models that take the server-side refusal fallback ("default" picks the substitute by refusal category).
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"]);
 
@@ -40,8 +45,9 @@ export function loadAgents(dir: string): Agent[] {
 // A service manager's PATH often lacks ~/.local/bin, where most agent CLIs install themselves.
 const bin = (cmd: string) => Bun.which(cmd) ?? [`${homedir()}/.local/bin/${cmd}`].find(existsSync) ?? null;
 const keyOk = (a: Agent) => !a.key || !!process.env[a.key];
-export const models = (a: Agent) => a.models ?? (a.model ? [a.model] : a.api === "anthropic" ? ANTHROPIC_MODELS : []);
 export const efforts = (a: Agent) => a.efforts ?? (a.api === "anthropic" ? EFFORTS : []);
+export const models = (a: Agent) => (a.models ?? (a.model ? [a.model] : a.api === "anthropic" ? ANTHROPIC_MODELS : []))
+  .map((m) => (typeof m === "string" ? { id: m, label: m, efforts: efforts(a) } : { id: m.id, label: m.label ?? m.id, efforts: m.efforts ?? efforts(a) }));
 export const defaultEffort = (a: Agent) => a.effort ?? (a.api === "anthropic" ? "high" : efforts(a)[0] ?? "");
 export const ready = (a: Agent) => (a.run ? !!bin(a.run[0]) : a.api === "anthropic" ? !!a.key && keyOk(a) : a.api === "openai" ? models(a).length > 0 && keyOk(a) : false);
 
@@ -60,9 +66,11 @@ export function runTask(root: string, dir: string, agentId: string, prompt: stri
   if (!a) return "unknown agent";
   if (!ready(a)) return a.run ? `${a.run[0]} is not on the PATH` : `${a.name} needs ${a.api === "openai" && !models(a).length ? "a model in agents.json" : `${a.key ?? "a key"} set in .env`}`;
   // Only values the agent lists: they end up as CLI arguments.
-  if (opts.model && !models(a).includes(opts.model)) return `${a.name} has no model "${opts.model}"`;
-  if (opts.effort && !efforts(a).includes(opts.effort)) return `${a.name} has no effort "${opts.effort}"`;
-  const model = opts.model || models(a)[0] || "", effort = opts.effort || defaultEffort(a);
+  const ms = models(a), m = opts.model ? ms.find((x) => x.id === opts.model) : ms[0];
+  if (opts.model && !m) return `${a.name} has no model "${opts.model}"`;
+  const es = m?.efforts ?? efforts(a);
+  if (opts.effort && !es.includes(opts.effort)) return `${a.name} has no effort "${opts.effort}"${m ? ` for ${m.label}` : ""}`;
+  const model = m?.id ?? "", effort = opts.effort || (es.includes(defaultEffort(a)) ? defaultEffort(a) : es[0] ?? "");
   const session = a.run?.some((x) => x.includes("{session}")) ? crypto.randomUUID() : undefined;
   const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, prompt, routine: opts.routine, start: now(), events: [] };
   tasks.set(task.id, task);

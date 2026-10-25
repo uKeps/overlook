@@ -370,13 +370,19 @@ function agents() {
   const ready = (S.runners || []).filter((r) => r.ready);
   main.innerHTML = `<div class="ph"><h1>Agents</h1><p>Put any agent from <code>agents.json</code> to work on the vault, or watch the ones already running.</p></div>
     <h3>Put an agent to work</h3>
-    <form class="talk glass" id="run"><select id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select><select id="run-model" aria-label="Model" hidden></select><select id="run-effort" aria-label="Effort" hidden></select>
+    <form class="task glass" id="run">
       <textarea id="run-prompt" rows="2" placeholder="What should it do in the vault? Enter runs, Shift+Enter adds a line" aria-label="Task for the agent"></textarea>
-      <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+      <div class="task-bar">
+        <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
+        <select class="pick" id="run-model" aria-label="Model" hidden></select>
+        <div class="seg" id="run-effort" role="radiogroup" aria-label="Effort" hidden></div>
+        <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+      </div>
       <small>${ready.length ? "CLI agents run in the vault folder; API agents can only list, search, read and write notes." : "No agent is set up yet: see README › Agents."}</small></form>
     <div id="agents-body"></div>`;
   $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
-  $("#run-agent").onchange = runOptions;
+  $("#run-agent").onchange = () => runOptions();
+  $("#run-model").onchange = () => runOptions(true);
   runOptions();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
@@ -410,13 +416,16 @@ function agentsBody() {
     }).join("") || '<p class="empty">No runs logged.</p>'}</div>
     <h3>Findings</h3><div class="list glass">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`; }).join("")}</div>`;
 }
-// Model and effort pickers follow the chosen agent: only what agents.json lists for it.
-function runOptions() {
-  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {};
-  const fill = (id, list = [], pick) => { const el = $(id); el.hidden = !list.length; el.innerHTML = list.map((v) => `<option ${v === pick ? "selected" : ""}>${esc(v)}</option>`).join(""); };
-  fill("#run-model", r.models, r.models?.[0]); fill("#run-effort", r.efforts, r.effort);
+// Model and effort pickers follow the chosen agent: only what agents.json lists for it. Effort levels can differ per model.
+function runOptions(keepModel) {
+  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {}, ms = r.models || [], sel = $("#run-model");
+  if (!keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
+  const es = ms.find((m) => m.id === sel.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
+  const seg = $("#run-effort");
+  seg.hidden = !es.length;
+  seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
 }
-const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort")?.value });
+const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort .on")?.dataset.v });
 // "Open in…" buttons: the commands agents.json gives the agent; the ones that need a session only when there is one.
 const openButtons = (runner, attrs, hasSession) => (runner?.open || []).filter((o) => !o.session || hasSession)
   .map((o) => `<button class="btn glass" data-act="open" data-via="${esc(o.label)}" ${attrs}>${icon("ext", 14)} ${esc(o.label)}</button>`).join("");
@@ -574,6 +583,7 @@ const ACTIONS = {
   open: async (el) => {
     try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
   },
+  effort: (el) => el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }),
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";

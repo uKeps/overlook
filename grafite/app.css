@@ -158,7 +158,21 @@ a.row:hover .t b { text-decoration: underline; text-decoration-color: var(--line
 .talk textarea:focus { border-bottom-color: var(--label); }
 .talk textarea::placeholder { color: var(--muted); }
 .talk small { flex-basis: 100%; color: var(--muted); font-size: 12px; }
-.talk select { background: var(--bg); border: 0; border-bottom: 1px solid var(--line-2); color: var(--text); font: 14px var(--sans); padding: 10px 0; }
+/* Task form: the prompt on top, the choices underneath, Run on the right. */
+.task { display: grid; gap: 14px; margin-top: 8px; }
+.task textarea { background: none; border: 0; border-bottom: 1px solid var(--line-2); color: var(--text); font: 15px/1.5 var(--sans); padding: 10px 0; resize: none; outline: none; }
+.task textarea:focus { border-bottom-color: var(--label); }
+.task textarea::placeholder { color: var(--muted); }
+.task small { color: var(--muted); font-size: 12px; }
+.task-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.task-bar [type=submit] { margin-left: auto; }
+.pick { appearance: none; height: 36px; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239A9893' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center; border: 1px solid var(--line-2); border-radius: var(--radius); color: var(--text); font: 13px var(--sans); padding: 0 30px 0 12px; cursor: pointer; }
+.pick:hover, .pick:focus-visible { border-color: var(--label); outline: none; }
+.seg { display: inline-flex; height: 36px; border: 1px solid var(--line-2); border-radius: var(--radius); overflow: hidden; }
+.seg button { border: 0; background: none; color: var(--muted); font: 12px var(--mono); padding: 0 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line-2); }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--text); color: var(--bg); }
 .needs { border-left: 1px solid var(--accent); padding: 2px 0 2px 16px; margin: -12px 0 28px; }
 .needs code { font: 13px var(--mono); color: var(--text-2); }
 

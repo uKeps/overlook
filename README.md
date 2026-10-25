@@ -104,6 +104,9 @@ To choose your own, `cp agents.example.json agents.json` and edit it. Two kinds 
 Any entry can list `models` and `efforts` (plus a default `effort`). The task form then shows a model
 and an effort picker for that agent: API agents send the choice to the provider, and CLI agents get it
 through `{model}` and `{effort}` in `run`, e.g. `"--model", "{model}"`. Only listed values are accepted.
+A model can be a plain id or `{"id": "gemini-4-argon", "label": "Gemini 4 Argon", "efforts": ["low", "high"]}`
+when it needs a display name or its own effort levels (for a CLI that bakes the effort into the model id,
+use `"--model", "{model}-{effort}"`).
 
 **Open in…** Each entry can also list `open` commands, shown as buttons on a session's page and on a task's
 page: `{session}` is the session id, `{cwd}` its folder, and a first token of `{terminal}` means your own
