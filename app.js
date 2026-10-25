@@ -100,6 +100,7 @@ function topBar() {
   const here = { "": ["home", "Home"], notes: ["notes", "Notes"], n: ["notes", "Notes"], w: ["notes", "Notes"], review: ["review", "Review"], graph: ["graph", "Graph"],
     agents: ["agents", "Agents"], a: ["agents", "Agents"], t: ["agents", "Agents"], services: ["services", "Services"], images: ["services", "Images"], s: ["services", "Service"] }[pg] || ["home", "Home"];
   $("#dockwrap").classList.toggle("float", dockMode === "float");
+  document.body.classList.toggle("dock-float", dockMode === "float");
   $("#dock-pill").innerHTML = `${icon(here[0], 16)}<span>${here[1]}</span>${badges ? `<span class="badge">${badges}</span>` : ""}`;
   const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) || (pg === "images" && id === "services") ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
@@ -786,6 +787,7 @@ function render() {
   graphStop?.(); graphStop = null;
   const { pg, arg } = route();
   $("#crumb").textContent = pg === "a" ? S.background?.find((x) => x.key === arg)?.title || AGENT_NAME[S.agents.find((x) => x.key === arg)?.name]?.[0] || "Agent" : pg === "s" ? S.services.find((s) => s.id === arg)?.name || "Service" : PAGES[pg][1];
+  document.body.classList.toggle("home", !pg);
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
   if (pg !== "s") $("#svcbar").innerHTML = "";
   main.style.animation = "none"; main.offsetHeight; main.style.animation = "";

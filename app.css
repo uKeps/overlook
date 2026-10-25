@@ -15,6 +15,7 @@
 * { box-sizing: border-box; margin: 0; }
 html { background: var(--bg); overflow-x: hidden; }
 body { min-height: 100vh; color: var(--ink); font: 400 14px/1.55 var(--body); -webkit-font-smoothing: antialiased; overflow-x: clip; padding: 0 32px 140px; }
+body.dock-float { padding-bottom: 76px; }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
 :focus-visible { outline: 2px solid var(--peach); outline-offset: 2px; border-radius: 10px; }
@@ -97,7 +98,7 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-event
 #cd-title { flex: 1; min-width: 160px; }
 .cd-add textarea { height: auto; padding: 8px 12px; resize: vertical; font: 14px/1.5 var(--body); }
 /* Floating: a small pill in the middle of the top bar. Hovering it, focusing inside or opening a day drops the
-   calendar into the strip's usual place, over the page, and it folds back up when you leave. */
+   calendar into the strip's usual place, pushing the page down, and it folds back up when you leave. */
 .cal.float { position: absolute; top: 26px; left: 50%; translate: -50% 0; z-index: 30; width: min(1240px, calc(100vw - 48px)); padding: 0; background: none; border-color: transparent; pointer-events: none; }
 .cal.float .cal-pill { pointer-events: auto; display: flex; align-items: center; gap: 8px; width: max-content; height: 34px; margin: 0 auto; padding: 0 16px; border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, .16); background: rgba(30, 31, 37, .88); box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
@@ -113,6 +114,13 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-event
 .cal.float:is(:hover, :focus-within, .open) .cal-pill { transform: scale(.96); border-color: rgba(244, 184, 143, .45); }
 
 main { max-width: 1240px; margin: 0 auto; padding-top: 28px; animation: page .5s var(--ease); }
+body.home { display: flex; flex-direction: column; }
+body.home .top, body.home .cal, body.home main { width: 100%; }
+body.home main { margin-top: auto; margin-bottom: auto; padding-top: 16px; padding-bottom: 16px; }
+body.cal-float main { transition: margin-top .45s var(--float-ease); }
+body.cal-float:has(.cal.float:is(:hover, :focus-within, .open)) main { margin-top: 96px; }
+body.cal-float:has(.cal.float.month:is(:hover, :focus-within, .open), .cal.float.open) main { margin-top: 320px; }
+body.cal-float:has(.cal.float.month.open) main { margin-top: 520px; }
 @keyframes page { from { opacity: 0; transform: translateY(8px); } }
 
 /* Carousel: 3D card with the pin's ambient background and a native 4:5 frame on the right */
@@ -402,6 +410,7 @@ body.app .top, body.app main { max-width: 1680px; }
 
 @media (max-width: 900px) {
   body { padding: 0 16px 120px; }
+  body.dock-float { padding-bottom: 64px; }
   .tiles { grid-template-columns: 1fr 1fr; }
   .reader { grid-template-columns: 1fr; }
   .car { height: auto; min-height: 520px; }
