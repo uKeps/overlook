@@ -5,7 +5,10 @@
   --bg: #0a0b0d; --surface: #16171b; --surface-2: #28292e;
   --ink: #f3efe9; --accent: #f4b88f; --accent-ink: #2b1a0f; --accent-2: var(--accent-2);
   --ok: #82d9a8; --bad: var(--bad); --warn: #f2cf7a;
-  --p1: #f4b88f; --p2: var(--accent-2); --p3: #c9a3ff; --p4: #9be3b5; --p5: #f2cf7a; --p6: var(--bad); /* graph areas */
+  --p1: #f4b88f; --p2: #8fc7f4; --p3: #c9a3ff; --p4: #9be3b5; --p5: #f2cf7a; --p6: #ff8f80; /* graph areas */
+  /* The blurred art behind the page: in full colour by default; a theme keeps only its light and shade (luminosity)
+     so the colour comes from the theme's own backdrop underneath. */
+  --amb-blend: normal; --amb-opacity: 1;
   --glass: color-mix(in srgb, var(--surface) 55%, transparent); --glass-2: color-mix(in srgb, var(--surface-2) 62%, transparent);
   --line: color-mix(in srgb, var(--ink) 9%, transparent);
   --muted: color-mix(in srgb, var(--ink) 64%, transparent); --faint: color-mix(in srgb, var(--ink) 40%, transparent);
@@ -26,10 +29,13 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
 kbd { font: 500 10px var(--mono); color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
 
-/* Background: two blurred layers of the art, crossfading. */
+/* Background: the theme's backdrop, two blurred layers of the art crossfading over it, and a vignette on top. */
 /* A 160px image already blurred on the server; stretching it is the blur, no filter. */
-.amb { position: fixed; inset: 0; z-index: -2; background: center / cover no-repeat; opacity: 0; transition: opacity 1.2s ease; will-change: opacity; }
-.amb.on { opacity: 1; }
+body::before { content: ""; position: fixed; inset: 0; z-index: -3; pointer-events: none;
+  background: radial-gradient(70% 60% at 12% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%),
+    radial-gradient(60% 55% at 92% 18%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 70%), var(--bg); }
+.amb { position: fixed; inset: 0; z-index: -2; background: center / cover no-repeat; opacity: 0; mix-blend-mode: var(--amb-blend); transition: opacity 1.2s ease; will-change: opacity; }
+.amb.on { opacity: var(--amb-opacity); }
 body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: radial-gradient(120% 80% at 50% 0%, transparent 30%, color-mix(in srgb, var(--bg) 55%, transparent) 75%, color-mix(in srgb, var(--bg) 90%, transparent)); }
 
 /* No backdrop-filter: the background is already blurred, and blur over blur costs frames on every repaint. */
@@ -478,29 +484,35 @@ body.app .top, body.app main { max-width: 1680px; }
   --bg: #16161e; --surface: #1a1b26; --surface-2: #292e42; --ink: #c0caf5;
   --accent: #7aa2f7; --accent-ink: #16161e; --accent-2: #bb9af7; --ok: #9ece6a; --bad: #f7768e; --warn: #e0af68;
   --p1: #7aa2f7; --p2: #bb9af7; --p3: #7dcfff; --p4: #9ece6a; --p5: #e0af68; --p6: #f7768e;
+  --amb-blend: luminosity; --amb-opacity: .55;
 }
 [data-theme="dracula"] {
   --bg: #191a21; --surface: #21222c; --surface-2: #343746; --ink: #f8f8f2;
   --accent: #bd93f9; --accent-ink: #191a21; --accent-2: #8be9fd; --ok: #50fa7b; --bad: #ff5555; --warn: #f1fa8c;
   --p1: #bd93f9; --p2: #ff79c6; --p3: #8be9fd; --p4: #50fa7b; --p5: #f1fa8c; --p6: #ffb86c;
+  --amb-blend: luminosity; --amb-opacity: .55;
 }
 [data-theme="catppuccin-mocha"] {
   --bg: #11111b; --surface: #181825; --surface-2: #313244; --ink: #cdd6f4;
   --accent: #cba6f7; --accent-ink: #11111b; --accent-2: #89b4fa; --ok: #a6e3a1; --bad: #f38ba8; --warn: #f9e2af;
   --p1: #cba6f7; --p2: #89b4fa; --p3: #f5c2e7; --p4: #a6e3a1; --p5: #f9e2af; --p6: #fab387;
+  --amb-blend: luminosity; --amb-opacity: .55;
 }
 [data-theme="rose-pine"] {
   --bg: #12101b; --surface: #191724; --surface-2: #26233a; --ink: #e0def4;
   --accent: #ebbcba; --accent-ink: #191724; --accent-2: #9ccfd8; --ok: #9ccfd8; --bad: #eb6f92; --warn: #f6c177;
   --p1: #ebbcba; --p2: #c4a7e7; --p3: #9ccfd8; --p4: #31748f; --p5: #f6c177; --p6: #eb6f92;
+  --amb-blend: luminosity; --amb-opacity: .55;
 }
 [data-theme="gruvbox"] {
   --bg: #1d2021; --surface: #282828; --surface-2: #3c3836; --ink: #ebdbb2;
   --accent: #fe8019; --accent-ink: #1d2021; --accent-2: #83a598; --ok: #b8bb26; --bad: #fb4934; --warn: #fabd2f;
   --p1: #fe8019; --p2: #83a598; --p3: #d3869b; --p4: #b8bb26; --p5: #fabd2f; --p6: #8ec07c;
+  --amb-blend: luminosity; --amb-opacity: .55;
 }
 [data-theme="nord"] {
   --bg: #242933; --surface: #2e3440; --surface-2: #434c5e; --ink: #eceff4;
   --accent: #88c0d0; --accent-ink: #242933; --accent-2: #b48ead; --ok: #a3be8c; --bad: #bf616a; --warn: #ebcb8b;
   --p1: #88c0d0; --p2: #b48ead; --p3: #81a1c1; --p4: #a3be8c; --p5: #ebcb8b; --p6: #d08770;
+  --amb-blend: luminosity; --amb-opacity: .55;
 }
