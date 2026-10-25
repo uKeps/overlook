@@ -83,6 +83,10 @@ The Home cards show images from two sources, both set up in **Images** (Services
   only shows a sample of a big board each time: the collection grows with every sync. The official API
   (below) lists the whole board.
 
+No images at all? The cards show animated ascii scenes instead, from [ascii.rest](https://ascii.rest) (MIT, served
+from `node_modules` after `bun install`, so nothing loads from their site). Settings → *Card art* picks Auto,
+Images or ASCII.
+
 In the same page, hide images you don't want, star the ones you do, and pick *Random* (the cards rotate
 through the visible images every day) or *Starred only* (the starred ones, in the order you starred them).
 On the Home, *Choose image* on a card gives that card a specific image (*Automatic* hands it back). The
