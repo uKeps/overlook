@@ -25,7 +25,8 @@ beforeAll(async () => {
   for (const f of files) if (existsSync(`${REPO}/${f}`)) { mkdirSync(dirname(`${ROOT}/${f}`), { recursive: true }); copyFileSync(`${REPO}/${f}`, `${ROOT}/${f}`); }
   if (existsSync(`${REPO}/node_modules`)) symlinkSync(`${REPO}/node_modules`, `${ROOT}/node_modules`);
   writeFileSync(`${ROOT}/agents.json`, JSON.stringify([
-    { id: "echo", name: "Echo", process: "echo", run: ["echo", "got", "{prompt}"] },
+    { id: "echo", name: "Echo", process: "echo", run: ["echo", "got", "{prompt}", "--model", "{model}", "--effort", "{effort}"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" },
+    { id: "bare", name: "Bare", run: ["echo", "got", "{prompt}", "--model", "{model}"] },
     { id: "sleeper", name: "Sleeper", run: ["sleep", "30"] },
     { id: "missing", name: "Missing", run: ["definitely-not-installed-overlook"] },
     { id: "fake-openai", name: "Fake OpenAI", api: "openai", url: `${FAKE}/v1`, model: "fake", key: "FAKE_KEY" },
@@ -116,21 +117,27 @@ async function finished(id: string) {
   for (let i = 0; i < 100; i++) { const t = await (await fetch(`${BASE}/api/task?id=${id}`)).json(); if (t.end) return t; await Bun.sleep(100); }
   throw new Error(`task ${id} did not finish`);
 }
-const run = async (agent: string, prompt = "go") => (await (await post("/api/run", { agent, prompt })).json()).id;
+const run = async (agent: string, prompt = "go", extra = {}) => (await (await post("/api/run", { agent, prompt, ...extra })).json()).id;
 
 test("agents.json drives the runner list", async () => {
   const s = await (await fetch(`${BASE}/api/system`)).json();
   const ready = Object.fromEntries(s.runners.map((r: any) => [r.id, r.ready]));
-  expect(ready).toEqual({ echo: true, sleeper: true, missing: false, "fake-openai": true, "fake-claude": true });
+  expect(ready).toEqual({ echo: true, bare: true, sleeper: true, missing: false, "fake-openai": true, "fake-claude": true });
+  const claude = s.runners.find((r: any) => r.id === "fake-claude");
+  expect([claude.models, claude.effort]).toEqual([["claude-opus-5-5"], "high"]);
   expect(s.agentsMd).toBe(false);
   expect((await post("/api/run", { agent: "missing", prompt: "go" })).status).toBe(400);
   expect((await post("/api/run", { agent: "nope", prompt: "go" })).status).toBe(400);
 });
 
-test("a CLI agent runs in the vault and streams its output", async () => {
-  const t = await finished(await run("echo", "hello vault"));
+test("a CLI agent runs in the vault with the chosen model and effort", async () => {
+  const t = await finished(await run("echo", "hello vault", { model: "m2" }));
   expect(t.ok).toBe(true);
-  expect(t.events.map((e: any) => e.txt)).toContain("got hello vault");
+  expect(t.events.map((e: any) => e.txt)).toContain("got hello vault --model m2 --effort high");
+  expect((await post("/api/run", { agent: "echo", prompt: "x", model: "--evil" })).status).toBe(400);
+  expect((await post("/api/run", { agent: "echo", prompt: "x", effort: "ultra" })).status).toBe(400);
+  // No model listed: the {model} token and its flag are dropped.
+  expect((await finished(await run("bare", "hi"))).events.map((e: any) => e.txt)).toContain("got hi");
 });
 
 test("a running task can be stopped", async () => {
@@ -151,12 +158,13 @@ test("an OpenAI-compatible agent writes notes and cannot leave the vault", async
 });
 
 test("a Claude agent runs the tool loop through the SDK", async () => {
-  const t = await finished(await run("fake-claude"));
+  const t = await finished(await run("fake-claude", "go", { effort: "low" }));
   expect(t.ok).toBe(true);
   expect(readFileSync(`${VAULT}/1 Inbox/From claude.md`, "utf8")).toBe("# From claude\n");
   const calls = seen.filter((x) => x.path === "/v1/messages");
   expect(calls[0].beta).toContain("server-side-fallback-2026-07-01");
   expect(calls[0].body.fallbacks).toBe("default");
+  expect([calls[0].body.model, calls[0].body.output_config.effort]).toEqual(["claude-opus-5-5", "low"]);
   expect(calls[0].body.tools.every((x: any) => x.strict)).toBe(true);
   expect(calls[1].body.messages.at(-1).content[0]).toMatchObject({ type: "tool_result", tool_use_id: "t1" });
 });

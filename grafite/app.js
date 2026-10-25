@@ -132,7 +132,7 @@ function panel() {
       <div class="trio">
         <a href="#/services"><span>Services</span><b>${on}/${S.services.length}</b><small>${esc(S.services.filter((s) => !s.ok).map((s) => s.name).join(", ") || (S.services.length ? "all up" : "none configured"))}</small></a>
         <a href="#/review"><span>Review</span><b>${due().length}</b><small>${next ? `next ${rel.format(daysBetween(D.today, next.review_on), "day")}` : "none in the cycle"}</small></a>
-        <a href="#/notes"><span>Vault</span><b>${D.notes.length}</b><small>${D.missing.length} ${D.missing.length === 1 ? "gap" : "gaps"}</small></a>
+        <a href="#/notes"><span>Notes</span><b>${D.notes.length}</b><small>${D.missing.length} ${D.missing.length === 1 ? "gap" : "gaps"}</small></a>
       </div></div>`;
 }
 
@@ -345,12 +345,14 @@ function agents() {
   const ready = (S.runners || []).filter((r) => r.ready);
   main.innerHTML = `<div class="col">${heading("Agents", "Put any agent from agents.json to work on the vault, or watch the ones already running.")}
     <p class="label">Put an agent to work</p>
-    <form class="talk" id="run"><select id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
+    <form class="talk" id="run"><select id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select><select id="run-model" aria-label="Model" hidden></select><select id="run-effort" aria-label="Effort" hidden></select>
       <textarea id="run-prompt" rows="2" placeholder="What should it do in the vault? Enter runs, Shift+Enter adds a line" aria-label="Task for the agent"></textarea>
       <button class="btn pri" type="submit" ${ready.length ? "" : "disabled"}>Run</button>
       <small>${ready.length ? "CLI agents run in the vault folder; API agents can only list, search, read and write notes." : "No agent is set up yet: see README › Agents."}</small></form>
     <div id="agents-body"></div></div>`;
   $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
+  $("#run-agent").onchange = runOptions;
+  runOptions();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
 }
@@ -358,7 +360,7 @@ function agentsBody() {
   const el = $("#agents-body");
   if (!el) return;
   el.innerHTML = `${S.tasks?.length ? `<p class="label">Tasks</p><div class="rows">${S.tasks.map((t) => `<a class="row" href="#/t/${t.id}"><span class="dot ${dotClass(t)}"></span>
-        <span class="t"><b>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : t.prompt)}</b><span>${esc(runnerName(t.agent))} · ${taskStatus(t)}</span></span><span class="x">${ago(Date.parse(t.start))}</span></a>`).join("")}</div>` : ""}
+        <span class="t"><b>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : t.prompt)}</b><span>${esc(taskMeta(t))} · ${taskStatus(t)}</span></span><span class="x">${ago(Date.parse(t.start))}</span></a>`).join("")}</div>` : ""}
     <p class="label">Running now</p><div class="rows">${S.agents.map((a) => `<a class="row" href="#/a/${a.key}"><span class="dot"></span>
         <span class="t"><b>${AGENT_NAME[a.name] || a.name}</b><span class="mono">${esc(a.cwd)}</span></span>
         <span class="x mono">pid ${a.pid}</span><span class="x">${duration(a.seconds)}</span><span class="link">Watch live →</span></a>`).join("") || empty("No agents running.")}</div>
@@ -379,11 +381,19 @@ function agentsBody() {
     }).join("") || empty("No runs logged.")}</div>
     <p class="label">Findings</p><div class="rows">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="x mono">${esc(d)}</span><span class="msg">${esc(t.join(" · "))}</span></div>`; }).join("")}</div>`;
 }
+// Model and effort pickers follow the chosen agent: only what agents.json lists for it.
+function runOptions() {
+  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {};
+  const fill = (id, list = [], pick) => { const el = $(id); el.hidden = !list.length; el.innerHTML = list.map((v) => `<option ${v === pick ? "selected" : ""}>${esc(v)}</option>`).join(""); };
+  fill("#run-model", r.models, r.models?.[0]); fill("#run-effort", r.efforts, r.effort);
+}
+const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort")?.value });
+const taskMeta = (t) => [runnerName(t.agent), t.model, t.effort].filter(Boolean).join(" · ");
 async function runPrompt() {
   const t = $("#run-prompt"), prompt = t.value.trim();
   if (!prompt || t.disabled) return;
   t.disabled = true;
-  try { const r = await api("/api/run", { agent: $("#run-agent").value, prompt }); location.hash = `#/t/${r.id}`; }
+  try { const r = await api("/api/run", { ...runChoice(), prompt }); location.hash = `#/t/${r.id}`; }
   catch (e) { toast(`Not started: ${e.message}`); t.disabled = false; }
 }
 
@@ -400,7 +410,7 @@ async function taskPage(id) {
     if (signature === taskLast) return;
     taskLast = signature;
     $("#task-head").innerHTML = heading(esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task"),
-      `${esc(runnerName(t.agent))} · started ${ago(Date.parse(t.start))} · ${taskStatus(t)}`,
+      `${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))} · ${taskStatus(t)}`,
       t.end ? "" : `<div class="r"><button class="btn" data-act="stop" data-id="${esc(t.id)}">Stop</button></div>`);
     const atEnd = innerHeight + scrollY >= document.body.scrollHeight - 160;
     $("#feed").innerHTML = t.events.map((e) => `<div class="row ev ${e.t}">
@@ -516,7 +526,7 @@ const ACTIONS = {
   show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
   enroll: async (el) => { await api("/api/review", { path: el.dataset.p, remembered: false }); toast("In the cycle: first review tomorrow"); D = await api("/api"); render(); },
   routine: async (el) => {
-    try { const r = await api("/api/routine", { name: el.dataset.k, agent: $("#run-agent")?.value }); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
+    try { const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() }); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
   },
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {

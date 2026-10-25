@@ -98,8 +98,12 @@ To choose your own, `cp agents.example.json agents.json` and edit it. Two kinds 
   Groq, a local Ollama), plus `model`, an optional `url`, and `key`, the name of the `.env` variable
   holding the API key. It gets four tools, `list_notes`, `search_notes`, `read_note` and `write_note`,
   limited to Markdown notes inside the vault. If the vault has an `AGENTS.md`, it becomes the agent's
-  instructions. The Anthropic path needs `bun install` once and defaults to `claude-opus-5-5`, with
-  server-side refusal fallback turned on.
+  instructions. The Anthropic path needs `bun install` once, offers Opus 5.5, Sonnet 5.5 and Haiku 5.5
+  at effort `high` by default, and turns on server-side refusal fallback.
+
+Any entry can list `models` and `efforts` (plus a default `effort`). The task form then shows a model
+and an effort picker for that agent: API agents send the choice to the provider, and CLI agents get it
+through `{model}` and `{effort}` in `run`, e.g. `"--model", "{model}"`. Only listed values are accepted.
 
 Tasks are kept in memory (the last 50) and can be stopped from their page.
 The Morning and Inbox routines show up when the vault has an `AGENTS.md` with a Routines section.

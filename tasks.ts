@@ -5,20 +5,27 @@ import { resolve, dirname, relative, isAbsolute, sep } from "node:path";
 import { realpathSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
-export type Agent = { id: string; name: string; process?: string; run?: string[]; api?: "anthropic" | "openai"; model?: string; url?: string; key?: string };
+// models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults);
+// a CLI agent receives the choice through {model} and {effort} in `run`.
+export type Agent = {
+  id: string; name: string; process?: string; run?: string[]; api?: "anthropic" | "openai"; url?: string; key?: string;
+  model?: string; models?: string[]; effort?: string; efforts?: string[];
+};
 type Event = { t: "you" | "text" | "tool" | "result" | "error"; txt: string; name?: string; at: string };
-type Task = { id: string; agent: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
+type Task = { id: string; agent: string; model: string; effort: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
 
 // Without agents.json: the CLIs Overlook always knew about. A CLI shows up as runnable only when it is on the PATH.
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULTS: Agent[] = [
-  { id: "claude", name: "Claude Code", process: "claude", run: ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"] },
-  { id: "agy", name: "Antigravity", process: "agy", run: ["agy", "-p", "{prompt}", "--mode", "auto", "--print-timeout", "10m"] },
+  { id: "claude", name: "Claude Code", process: "claude", run: ["claude", "-p", "{prompt}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
+    models: ["opus", "sonnet", "haiku"], efforts: EFFORTS, effort: "high" },
+  { id: "agy", name: "Antigravity", process: "agy", run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "auto", "--print-timeout", "10m"], efforts: EFFORTS, effort: "high" },
   { id: "codex", name: "Codex", process: "codex", run: ["codex", "exec", "{prompt}"] },
   { id: "gemini", name: "Gemini", process: "gemini", run: ["gemini", "-p", "{prompt}"] },
 ];
 const MAX_TURNS = 40;
 const TIMEOUT = 30 * 60_000;
-const ANTHROPIC_MODEL = "claude-opus-5-5";
+const ANTHROPIC_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
 // Models that take the server-side refusal fallback ("default" picks the substitute by refusal category).
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"]);
 
@@ -29,7 +36,10 @@ export function loadAgents(dir: string): Agent[] {
 // A service manager's PATH often lacks ~/.local/bin, where most agent CLIs install themselves.
 const bin = (cmd: string) => Bun.which(cmd) ?? [`${homedir()}/.local/bin/${cmd}`].find(existsSync) ?? null;
 const keyOk = (a: Agent) => !a.key || !!process.env[a.key];
-export const ready = (a: Agent) => (a.run ? !!bin(a.run[0]) : a.api === "anthropic" ? !!a.key && keyOk(a) : a.api === "openai" ? !!a.model && keyOk(a) : false);
+export const models = (a: Agent) => a.models ?? (a.model ? [a.model] : a.api === "anthropic" ? ANTHROPIC_MODELS : []);
+export const efforts = (a: Agent) => a.efforts ?? (a.api === "anthropic" ? EFFORTS : []);
+export const defaultEffort = (a: Agent) => a.effort ?? (a.api === "anthropic" ? "high" : efforts(a)[0] ?? "");
+export const ready = (a: Agent) => (a.run ? !!bin(a.run[0]) : a.api === "anthropic" ? !!a.key && keyOk(a) : a.api === "openai" ? models(a).length > 0 && keyOk(a) : false);
 
 const tasks = new Map<string, Task>();
 const now = () => new Date().toISOString();
@@ -41,11 +51,15 @@ export const getTask = (id: string) => { const t = tasks.get(id); if (!t) return
 export const stopTask = (id: string) => { const t = tasks.get(id); if (!t?.stop || t.end) return false; t.stop(); return true; };
 export const routineRunning = (name: string) => [...tasks.values()].some((t) => t.routine === name && !t.end);
 
-export function runTask(root: string, dir: string, agentId: string, prompt: string, routine?: string) {
+export function runTask(root: string, dir: string, agentId: string, prompt: string, opts: { model?: string; effort?: string; routine?: string } = {}) {
   const a = loadAgents(dir).find((x) => x.id === agentId);
   if (!a) return "unknown agent";
-  if (!ready(a)) return a.run ? `${a.run[0]} is not on the PATH` : `${a.name} needs ${a.api === "openai" && !a.model ? "a model in agents.json" : `${a.key ?? "a key"} set in .env`}`;
-  const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, prompt, routine, start: now(), events: [] };
+  if (!ready(a)) return a.run ? `${a.run[0]} is not on the PATH` : `${a.name} needs ${a.api === "openai" && !models(a).length ? "a model in agents.json" : `${a.key ?? "a key"} set in .env`}`;
+  // Only values the agent lists: they end up as CLI arguments.
+  if (opts.model && !models(a).includes(opts.model)) return `${a.name} has no model "${opts.model}"`;
+  if (opts.effort && !efforts(a).includes(opts.effort)) return `${a.name} has no effort "${opts.effort}"`;
+  const model = opts.model || models(a)[0] || "", effort = opts.effort || defaultEffort(a);
+  const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, prompt, routine: opts.routine, start: now(), events: [] };
   tasks.set(task.id, task);
   if (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
   log(task, { t: "you", txt: prompt });
@@ -60,8 +74,15 @@ export function runTask(root: string, dir: string, agentId: string, prompt: stri
 
 // ---------------------------------------------------------------- CLI agents
 async function cli(a: Agent, root: string, task: Task, ctrl: AbortController) {
-  const [cmd, ...args] = a.run!;
-  const p = Bun.spawn([bin(cmd)!, ...args.map((x) => x.replaceAll("{prompt}", task.prompt))], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [cmd, ...rest] = a.run!;
+  // An empty {model}/{effort} drops the token and the flag before it, so the CLI falls back to its own default.
+  const args: string[] = [];
+  for (const x of rest) {
+    const v = x.replaceAll("{prompt}", task.prompt).replaceAll("{model}", task.model).replaceAll("{effort}", task.effort);
+    if (/\{(model|effort)\}/.test(x) && !(x.includes("{model}") ? task.model : task.effort)) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
+    args.push(v);
+  }
+  const p = Bun.spawn([bin(cmd)!, ...args], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   task.stop = () => { ctrl.abort(); p.kill(); };
   await Promise.all([
     lines(p.stdout, (l) => log(task, { t: "text", txt: clip(l, 1500) })),
@@ -165,14 +186,14 @@ async function anthropic(a: Agent, root: string, task: Task, signal: AbortSignal
   // Loaded on first use: the rest of Overlook runs without `bun install`.
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
   const client = new Anthropic({ apiKey: process.env[a.key!], ...(a.url ? { baseURL: a.url } : {}) });
-  const model = a.model || ANTHROPIC_MODEL;
+  const model = task.model;
   const fallback = FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {};
   const tools = TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as any, strict: true }));
   const messages: any[] = [{ role: "user", content: task.prompt }];
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const r = await client.beta.messages.create({
       model, max_tokens: 16000, system: system(root), tools, messages,
-      thinking: { type: "adaptive" }, output_config: { effort: "high" }, cache_control: { type: "ephemeral" }, ...fallback,
+      thinking: { type: "adaptive" }, output_config: { effort: task.effort as any }, cache_control: { type: "ephemeral" }, ...fallback,
     }, { signal });
     messages.push({ role: "assistant", content: r.content }); // whole content, thinking blocks included
     for (const b of r.content) if (b.type === "text" && b.text.trim()) log(task, { t: "text", txt: clip(b.text.trim(), 1500) });
@@ -202,7 +223,7 @@ async function openai(a: Agent, root: string, task: Task, signal: AbortSignal) {
     const r = await fetch(`${(a.url || "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,
       headers: { "content-type": "application/json", ...(a.key ? { authorization: `Bearer ${process.env[a.key]}` } : {}) },
-      body: JSON.stringify({ model: a.model, messages, tools }),
+      body: JSON.stringify({ model: task.model, messages, tools, ...(task.effort ? { reasoning_effort: task.effort } : {}) }),
     });
     if (!r.ok) throw new Error(`${a.name} answered ${r.status}: ${clip(await r.text(), 300)}`);
     const m = (await r.json() as any).choices?.[0]?.message;
