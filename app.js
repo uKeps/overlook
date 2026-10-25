@@ -52,7 +52,7 @@ const address = (s) => (remote ? (s.tailnet ? `https://${location.hostname}:${s.
 const cardKey = (s) => `${s.cat}|${s.title}`;
 const pinFor = (s) => (typeof s === "number" && SG[s] && D?.pinCards?.[cardKey(SG[s])]) ||
   (D?.pins?.length ? D.pins[(typeof s === "number" ? (D.pinMode === "fixed" ? 0 : hash(D.today)) + s : hash(String(s))) % D.pins.length] : null);
-const art = (s) => (pinFor(s) ? `/pin/${pinFor(s).id}` : D?.art ? `/art/${hash(String(s)) % D.art}` : "");
+const art = (s) => (pinFor(s) ? `/pin/${pinFor(s).id}` : "");
 const obs = (p) => `obsidian://open?vault=${encodeURIComponent(D.vault)}&file=${encodeURIComponent(p.replace(/\.md$/, ""))}`;
 const noteHref = (p) => `#/n/${encodeURIComponent(p)}`;
 const unlink = (s) => s.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => b || a);
@@ -649,50 +649,69 @@ async function agentPage(key) {
   ambient(art(`agent ${key}`));
 }
 
-// ---------------------------------------------------------------- Images (the Pinterest board behind the cards)
-// Hide an image and it never shows; star some and switch to "Starred only" to fix which images the cards use, in that order.
-let imgTimer = null;
+// ---------------------------------------------------------------- Images (what the cards show)
+// Two sources: a folder of your own photos and the Pinterest board. Hide an image and it never shows; star some and
+// switch to "Starred only" to fix which images the cards use, in that order.
+let imgTimer = null, imgSource = "";
 async function imagesPage() {
   clearTimeout(imgTimer);
-  const p = await api("/api/pinterest").catch(() => null);
+  const p = await api("/api/images").catch(() => null);
   if (route().pg !== "images") return;
-  if (!p) { main.innerHTML = '<p class="empty">Pinterest is not available.</p>'; return; }
-  const shown = p.images.filter((i) => !p.hidden.includes(i.id)), starred = p.starred.filter((id) => shown.some((i) => i.id === id));
-  const inUse = p.mode === "fixed" && starred.length ? starred.length : shown.length;
-  const boardUrl = p.board ? `https://www.pinterest.com/${p.board.replace(/^\/|\/$/g, "")}/` : "";
-  main.innerHTML = `<div class="ph"><h1>Images</h1><p>${p.total} from ${p.board ? `<a href="${esc(boardUrl)}" target="_blank">${esc(p.board)} ↗</a>` : "no board yet"} · ${inUse} in use${p.status === "error" ? ` · <em class="bad">${esc(p.error)}</em>` : ""}</p>
-      <div class="r"><button class="btn glass" data-act="pinsync" ${p.syncing || !p.board ? "disabled" : ""}>${p.syncing ? "Syncing…" : "Sync now"}</button></div></div>
-    <form class="img-set glass" id="img-set">
-      <label>Board <input id="img-board" value="${esc(p.board)}" placeholder="user/board" autocomplete="off" aria-label="Pinterest board"></label>
-      <button class="btn glass" type="submit">Save</button>
+  if (!p) { main.innerHTML = '<p class="empty">Images are not available.</p>'; return; }
+  const pin = p.pinterest, visible = p.images.filter((i) => !p.hidden.includes(i.id));
+  const starred = p.starred.filter((id) => visible.some((i) => i.id === id));
+  const inUse = p.mode === "fixed" && starred.length ? starred.length : visible.length;
+  const count = (src) => p.images.filter((i) => i.source === src).length;
+  const list = p.images.filter((i) => !imgSource || i.source === imgSource);
+  const boardUrl = pin.board ? `https://www.pinterest.com/${pin.board.replace(/^\/|\/$/g, "")}/` : "";
+  main.innerHTML = `<div class="ph"><h1>Images</h1><p>${p.images.length} images · ${inUse} in use on the cards</p></div>
+    <div class="img-sources">
+      <form class="img-set glass" id="img-folder">
+        <b>Your photos</b><small>${p.folder ? (p.folderOk ? `${count("folder")} in the folder` : "folder not found") : "a folder on this computer"}</small>
+        <input id="img-folder-path" value="${esc(p.folder)}" placeholder="~/Pictures/my-photos" autocomplete="off" aria-label="Folder with your photos">
+        <button class="btn glass" type="submit">Save</button>
+      </form>
+      <form class="img-set glass" id="img-board-form">
+        <b>Pinterest</b><small>${pin.board ? `${count("pinterest")} from <a href="${esc(boardUrl)}" target="_blank">${esc(pin.board)} ↗</a>` : "a board"}${pin.status === "error" ? ` · <em class="bad">${esc(pin.error)}</em>` : ""}</small>
+        <input id="img-board" value="${esc(pin.board)}" placeholder="user/board" autocomplete="off" aria-label="Pinterest board">
+        <button class="btn glass" type="submit">Save</button>
+        <button class="btn glass" type="button" data-act="pinsync" ${pin.syncing || !pin.board ? "disabled" : ""}>${pin.syncing ? "Syncing…" : "Sync"}</button>
+      </form>
+    </div>
+    <div class="img-bar">
+      <div class="seg" role="radiogroup" aria-label="Show">${[["", `All ${p.images.length}`], ["folder", `Your photos ${count("folder")}`], ["pinterest", `Pinterest ${count("pinterest")}`]].map(([k, l]) =>
+        `<button type="button" role="radio" aria-checked="${imgSource === k}" class="${imgSource === k ? "on" : ""}" data-act="img-source" data-k="${k}">${l}</button>`).join("")}</div>
       <span class="sp"></span>
       <div class="seg" role="radiogroup" aria-label="Which images the cards use">${[["random", "Random, changes daily"], ["fixed", `Starred only${starred.length ? ` (${starred.length})` : ""}`]].map(([k, l]) =>
         `<button type="button" role="radio" aria-checked="${p.mode === k}" class="${p.mode === k ? "on" : ""}" data-act="img-mode" data-k="${k}">${l}</button>`).join("")}</div>
-    </form>
+    </div>
     ${p.mode === "fixed" && !starred.length ? '<p class="empty">No starred images yet, so the cards still rotate. Star the ones you want.</p>' : ""}
-    <div class="img-grid">${p.images.map((im) => {
+    <div class="img-grid">${list.map((im) => {
       const off = p.hidden.includes(im.id), n = p.starred.indexOf(im.id) + 1;
       return `<figure class="img ${off ? "off" : ""} ${n ? "star" : ""}">
-        <img src="/pin/${im.id}?thumb" loading="lazy" alt="${esc(im.title || "Pinterest image")}">
-        ${n ? `<span class="n">${n}</span>` : ""}
+        <img src="/pin/${im.id}?thumb" loading="lazy" alt="${esc(im.title || "Image")}">
+        ${n ? `<span class="n">${n}</span>` : ""}<span class="src">${im.source === "folder" ? "yours" : "pinterest"}</span>
         <figcaption><button type="button" data-act="img-star" data-id="${im.id}" aria-pressed="${!!n}" title="${n ? "Unstar" : "Star: use it when the cards show starred images only"}">${n ? "★ Starred" : "☆ Star"}</button>
           <button type="button" data-act="img-hide" data-id="${im.id}" aria-pressed="${off}">${off ? "Show" : "Hide"}</button>
           ${im.link ? `<a href="${esc(im.link)}" target="_blank" aria-label="Open on Pinterest">↗</a>` : ""}</figcaption></figure>`;
-    }).join("") || `<p class="empty">${p.board ? "No images yet. Sync the board." : "Set a board above: a public one as user/board, or a board name with the Pinterest API set up (README)."}</p>`}</div>`;
-  $("#img-set").onsubmit = async (e) => { e.preventDefault(); await savePrefs({ board: $("#img-board").value }); toast("Board saved, syncing it now"); };
-  if (p.syncing) imgTimer = setTimeout(imagesPage, 2500); // follow a sync in progress
+    }).join("") || `<p class="empty">${p.images.length ? "Nothing here." : "No images yet: point to a folder of your photos, or set a Pinterest board."}</p>`}</div>`;
+  $("#img-folder").onsubmit = async (e) => { e.preventDefault(); if (await savePrefs({ folder: $("#img-folder-path").value })) toast("Folder saved"); };
+  $("#img-board-form").onsubmit = async (e) => { e.preventDefault(); if (await savePrefs({ board: $("#img-board").value })) toast("Board saved, syncing it now"); };
+  if (pin.syncing) imgTimer = setTimeout(imagesPage, 2500); // follow a sync in progress
   ambient(art("images"));
 }
 async function savePrefs(change) {
-  try { await api("/api/pinterest/prefs", change); } catch (e) { toast(e.message); }
+  let ok = true;
+  try { await api("/api/images/prefs", change); } catch (e) { toast(e.message); ok = false; }
   D = await api("/api");
   imagesPage();
+  return ok;
 }
 // The picker: every visible image of the board, plus Automatic to hand the card back to the rotation.
 let pickKey = "";
 const IMG_ACTIONS = {
   "pick-open": async (el) => {
-    const s = SG[Number(el.dataset.i)], p = await api("/api/pinterest").catch(() => null);
+    const s = SG[Number(el.dataset.i)], p = await api("/api/images").catch(() => null);
     if (!s || !p) return;
     pickKey = cardKey(s);
     const cur = D.pinCards?.[pickKey]?.id, imgs = p.images.filter((i) => !p.hidden.includes(i.id));
@@ -703,12 +722,13 @@ const IMG_ACTIONS = {
   },
   "pick-close": () => $("#picker").close(),
   pick: async (el) => {
-    try { await api("/api/pinterest/prefs", { cards: { [pickKey]: el.dataset.id || null } }); } catch (e) { return toast(e.message); }
+    try { await api("/api/images/prefs", { cards: { [pickKey]: el.dataset.id || null } }); } catch (e) { return toast(e.message); }
     $("#picker").close(); D = await api("/api"); home(); toast(el.dataset.id ? "Image chosen for this card" : "Back to automatic");
   },
   "img-mode": (el) => savePrefs({ mode: el.dataset.k }),
-  "img-hide": async (el) => { const p = await api("/api/pinterest"), id = el.dataset.id; savePrefs({ hidden: p.hidden.includes(id) ? p.hidden.filter((x) => x !== id) : [...p.hidden, id] }); },
-  "img-star": async (el) => { const p = await api("/api/pinterest"), id = el.dataset.id; savePrefs({ starred: p.starred.includes(id) ? p.starred.filter((x) => x !== id) : [...p.starred, id] }); },
+  "img-source": (el) => { imgSource = el.dataset.k; imagesPage(); },
+  "img-hide": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ hidden: p.hidden.includes(id) ? p.hidden.filter((x) => x !== id) : [...p.hidden, id] }); },
+  "img-star": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ starred: p.starred.includes(id) ? p.starred.filter((x) => x !== id) : [...p.starred, id] }); },
 };
 
 // ---------------------------------------------------------------- Services

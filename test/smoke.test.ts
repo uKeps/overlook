@@ -222,23 +222,39 @@ test("scheduled tasks run when due and repeat", async () => {
 test("the Images page hides, stars and fixes the card images", async () => {
   const pins = async () => { const d = await (await fetch(`${BASE}/api`)).json(); return [d.pinMode, d.pins.map((p: any) => p.id)]; };
   expect(await pins()).toEqual(["random", ["aa11", "bb22", "cc33"]]);
-  expect((await post("/api/pinterest/prefs", { hidden: ["bb22"] })).status).toBe(200);
+  expect((await post("/api/images/prefs", { hidden: ["bb22"] })).status).toBe(200);
   expect(await pins()).toEqual(["random", ["aa11", "cc33"]]);
-  expect((await post("/api/pinterest/prefs", { mode: "fixed" })).status).toBe(200);
+  expect((await post("/api/images/prefs", { mode: "fixed" })).status).toBe(200);
   expect(await pins()).toEqual(["random", ["aa11", "cc33"]]); // nothing starred yet: still rotates
-  expect((await post("/api/pinterest/prefs", { starred: ["cc33", "bb22", "aa11"] })).status).toBe(200);
+  expect((await post("/api/images/prefs", { starred: ["cc33", "bb22", "aa11"] })).status).toBe(200);
   expect(await pins()).toEqual(["fixed", ["cc33", "aa11"]]); // starred order, hidden one left out
-  const p = await (await fetch(`${BASE}/api/pinterest`)).json();
-  expect([p.mode, p.hidden, p.starred, p.total]).toEqual(["fixed", ["bb22"], ["cc33", "bb22", "aa11"], 3]);
+  const p = await (await fetch(`${BASE}/api/images`)).json();
+  expect([p.mode, p.hidden, p.starred, p.images.length]).toEqual(["fixed", ["bb22"], ["cc33", "bb22", "aa11"], 3]);
   expect(JSON.parse(readFileSync(`${ROOT}/pinterest.json`, "utf8")).mode).toBe("fixed");
-  expect((await post("/api/pinterest/prefs", { hidden: ["../x"] })).status).toBe(400);
-  expect((await post("/api/pinterest/prefs", { mode: "shuffle" })).status).toBe(400);
-  expect((await post("/api/pinterest/prefs", { board: "a/b/c/d" })).status).toBe(400);
+  expect((await post("/api/images/prefs", { hidden: ["../x"] })).status).toBe(400);
+  expect((await post("/api/images/prefs", { mode: "shuffle" })).status).toBe(400);
+  expect((await post("/api/images/prefs", { board: "a/b/c/d" })).status).toBe(400);
   expect((await fetch(`${BASE}/pin/aa11?thumb`)).status).toBe(200);
   // One Home card can be given its own image, and handed back to automatic.
-  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": "bb22" } })).status).toBe(200);
+  expect((await post("/api/images/prefs", { cards: { "Review|HTTP": "bb22" } })).status).toBe(200);
   expect((await (await fetch(`${BASE}/api`)).json()).pinCards["Review|HTTP"].id).toBe("bb22");
-  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": null } })).status).toBe(200);
+  expect((await post("/api/images/prefs", { cards: { "Review|HTTP": null } })).status).toBe(200);
   expect((await (await fetch(`${BASE}/api`)).json()).pinCards).toEqual({});
-  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": "../x" } })).status).toBe(400);
+  expect((await post("/api/images/prefs", { cards: { "Review|HTTP": "../x" } })).status).toBe(400);
+});
+
+test("a folder of your own photos joins the Pinterest images", async () => {
+  mkdirSync(`${ROOT}/my photos`, { recursive: true });
+  for (const n of ["beach.jpg", "cat.png", "notes.txt", ".hidden.jpg"]) writeFileSync(`${ROOT}/my photos/${n}`, "x");
+  expect((await post("/api/images/prefs", { folder: `${ROOT}/nope` })).status).toBe(400);
+  expect((await post("/api/images/prefs", { folder: `${ROOT}/my photos`, mode: "random" })).status).toBe(200);
+  const p = await (await fetch(`${BASE}/api/images`)).json();
+  const mine = p.images.filter((i: any) => i.source === "folder");
+  expect(mine.map((i: any) => i.title)).toEqual(["beach", "cat"]);
+  expect(p.images.filter((i: any) => i.source === "pinterest").length).toBe(3);
+  expect((await fetch(`${BASE}/pin/${mine[0].id}?thumb`)).status).toBe(200);
+  expect((await fetch(`${BASE}/pin/${mine[0].id}`)).status).toBe(200);
+  // A starred photo of yours is what the cards show in fixed mode.
+  await post("/api/images/prefs", { mode: "fixed", starred: [mine[1].id] });
+  expect((await (await fetch(`${BASE}/api`)).json()).pins.map((i: any) => i.id)).toEqual([mine[1].id]);
 });

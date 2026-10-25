@@ -283,11 +283,16 @@ a.row:hover, .row.hov:hover { background: var(--glass); }
 .empty { color: var(--faint); padding: 18px; }
 
 /* Images: the Pinterest board, to hide or star what the cards use */
-.img-set { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; border-radius: var(--r); margin-bottom: 18px; }
-.img-set label { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
-.img-set input { width: 260px; height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--ink); font: 14px var(--body); outline: none; }
+.img-sources { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.img-set { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 14px; border-radius: var(--r); }
+.img-set b { font: 600 14px var(--display); }
+.img-set small { color: var(--muted); font-size: 12px; flex: 1; }
+.img-set small a { color: var(--peach); }
+.img-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+.img-bar .sp { flex: 1; }
+.img .src { position: absolute; top: 8px; right: 8px; padding: 2px 8px; border-radius: 999px; font: 500 10px var(--mono); background: rgba(16, 17, 21, .75); color: var(--muted); }
+.img-set input { flex: 1 1 200px; min-width: 0; height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--ink); font: 14px var(--body); outline: none; }
 .img-set input:focus { border-color: rgba(244, 184, 143, .5); }
-.img-set .sp { flex: 1; }
 .ph em.bad { color: var(--bad); font-style: normal; }
 .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
 .img { position: relative; margin: 0; border-radius: 14px; overflow: hidden; aspect-ratio: 4 / 5; background: var(--glass); border: 1px solid var(--line); transition: opacity .25s, filter .25s, box-shadow .25s; }
@@ -393,7 +398,7 @@ body.app .top, body.app main { max-width: 1680px; }
   .art .in { padding: 24px 22px 28px; }
   .chipbox span, .top .btn { display: none; }
   .cal:not(.month) .day:nth-child(n+5) { display: none; }
-  .cd-cols { grid-template-columns: 1fr; }
+  .cd-cols, .img-sources { grid-template-columns: 1fr; }
   .cal-tools, .cal-title { display: none; }
   .flash { grid-template-columns: 1fr; padding: 24px; } .flash h2 { font-size: 32px; }
   .dock { gap: 2px; padding: 6px; bottom: 12px; }
