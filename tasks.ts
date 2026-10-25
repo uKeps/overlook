@@ -2,7 +2,7 @@
 // API agents (Anthropic, or any OpenAI-compatible endpoint) work through four tools jailed to the vault's notes.
 // Tasks live in memory. ponytail: lost on restart; persist them if the history starts to matter.
 import { resolve, dirname, relative, isAbsolute, sep } from "node:path";
-import { realpathSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { realpathSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 
 // models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults).
@@ -61,7 +61,9 @@ export const getTask = (id: string) => { const t = tasks.get(id); if (!t) return
 export const stopTask = (id: string) => { const t = tasks.get(id); if (!t?.stop || t.end) return false; t.stop(); return true; };
 export const routineRunning = (name: string) => [...tasks.values()].some((t) => t.routine === name && !t.end);
 
-export function runTask(root: string, dir: string, agentId: string, prompt: string, opts: { model?: string; effort?: string; routine?: string } = {}) {
+type RunOpts = { model?: string; effort?: string; routine?: string };
+// The agent and the model/effort it will run with, or why it can't run.
+function resolveRun(dir: string, agentId: string, opts: RunOpts) {
   const a = loadAgents(dir).find((x) => x.id === agentId);
   if (!a) return "unknown agent";
   if (!ready(a)) return a.run ? `${a.run[0]} is not on the PATH` : `${a.name} needs ${a.api === "openai" && !models(a).length ? "a model in agents.json" : `${a.key ?? "a key"} set in .env`}`;
@@ -70,7 +72,13 @@ export function runTask(root: string, dir: string, agentId: string, prompt: stri
   if (opts.model && !m) return `${a.name} has no model "${opts.model}"`;
   const es = m?.efforts ?? efforts(a);
   if (opts.effort && !es.includes(opts.effort)) return `${a.name} has no effort "${opts.effort}"${m ? ` for ${m.label}` : ""}`;
-  const model = m?.id ?? "", effort = opts.effort || (es.includes(defaultEffort(a)) ? defaultEffort(a) : es[0] ?? "");
+  return { a, model: m?.id ?? "", effort: opts.effort || (es.includes(defaultEffort(a)) ? defaultEffort(a) : es[0] ?? "") };
+}
+
+export function runTask(root: string, dir: string, agentId: string, prompt: string, opts: RunOpts = {}) {
+  const r = resolveRun(dir, agentId, opts);
+  if (typeof r === "string") return r;
+  const { a, model, effort } = r;
   const session = a.run?.some((x) => x.includes("{session}")) ? crypto.randomUUID() : undefined;
   const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, prompt, routine: opts.routine, start: now(), events: [] };
   tasks.set(task.id, task);
@@ -105,6 +113,59 @@ async function cli(a: Agent, root: string, task: Task, ctrl: AbortController) {
   if (ctrl.signal.aborted) throw new Error("stopped");
   return code === 0;
 }
+// ---------------------------------------------------------------- Scheduled tasks
+// schedule.json is personal (not in git): agent tasks that run at a local date and time, once or on repeat.
+// A run missed while Overlook was down happens once at startup, then the next one is set in the future.
+type Repeat = "once" | "daily" | "weekdays" | "weekly";
+type Scheduled = { id: string; at: string; repeat: Repeat; agent: string; model?: string; effort?: string; prompt: string; last?: string; error?: string };
+const REPEATS = new Set(["once", "daily", "weekdays", "weekly"]);
+const scheduleFile = (dir: string) => `${dir}/schedule.json`;
+export const loadSchedule = (dir: string): Scheduled[] => { try { return JSON.parse(readFileSync(scheduleFile(dir), "utf8")); } catch { return []; } };
+const saveSchedule = (dir: string, xs: Scheduled[]) => writeFileSync(scheduleFile(dir), JSON.stringify(xs, null, 1)); // sync: the next read must see it
+const local = (d: Date) => `${d.toLocaleDateString("sv")}T${d.toTimeString().slice(0, 5)}`;
+function nextRun(at: string, repeat: Repeat, now: number) {
+  const d = new Date(at);
+  do {
+    d.setDate(d.getDate() + (repeat === "weekly" ? 7 : 1));
+    while (repeat === "weekdays" && (d.getDay() === 0 || d.getDay() === 6)) d.setDate(d.getDate() + 1);
+  } while (d.getTime() <= now);
+  return local(d);
+}
+export function addScheduled(root: string, dir: string, e: Partial<Scheduled>) {
+  if (typeof e.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(e.at) || isNaN(Date.parse(e.at))) return "at must be YYYY-MM-DDTHH:MM";
+  if (!REPEATS.has(String(e.repeat))) return "repeat must be once, daily, weekdays or weekly";
+  const prompt = String(e.prompt ?? "").trim().slice(0, 8000);
+  if (!prompt) return "missing prompt";
+  const r = resolveRun(dir, String(e.agent), { model: e.model || undefined, effort: e.effort || undefined });
+  if (typeof r === "string") return r;
+  const entry: Scheduled = { id: crypto.randomUUID().slice(0, 8), at: e.at, repeat: e.repeat as Repeat, agent: r.a.id, model: r.model, effort: r.effort, prompt };
+  saveSchedule(dir, [...loadSchedule(dir), entry]);
+  tick(root, dir); // already due: runs now
+  return entry;
+}
+export function removeScheduled(dir: string, id: string) {
+  const xs = loadSchedule(dir), left = xs.filter((x) => x.id !== id);
+  if (left.length === xs.length) return false;
+  saveSchedule(dir, left);
+  return true;
+}
+function tick(root: string, dir: string) {
+  const now = Date.now(), xs = loadSchedule(dir);
+  let changed = false;
+  for (const e of xs) {
+    if (new Date(e.at).getTime() > now || (e.repeat === "once" && e.error)) continue; // a one-off that failed waits to be deleted
+    const r = runTask(root, dir, e.agent, e.prompt, { model: e.model || undefined, effort: e.effort || undefined });
+    const error = typeof r === "string" ? r : undefined;
+    Object.assign(e, { last: new Date(now).toISOString(), error, at: e.repeat !== "once" ? nextRun(e.at, e.repeat, now) : error ? e.at : "" });
+    changed = true;
+  }
+  if (changed) saveSchedule(dir, xs.filter((e) => e.at));
+}
+export function startScheduler(root: string, dir: string) {
+  tick(root, dir);
+  setInterval(() => tick(root, dir), 30_000);
+}
+
 // ---------------------------------------------------------------- Open in…
 const terminal = () => { const x = bin("xdg-terminal-exec"); return x ? [x] : process.env.TERMINAL ? [process.env.TERMINAL, "-e"] : null; };
 export const openers = (a: Agent) => Object.entries(a.open ?? {}).map(([label, cmd]) => ({ label, session: cmd.some((x) => x.includes("{session}")) }));

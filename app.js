@@ -80,28 +80,14 @@ function ambient(url) {
 function clock() {
   const d = new Date();
   $("#time").textContent = d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
-  $("#date").textContent = d.toLocaleDateString(LOCALE, { weekday: "long", day: "numeric", month: "long" });
 }
 function needsYou() { return (D.focus?.length || 0) + due().length + inbox().length + (D.captured?.length || 0); }
 function runningNow() { return (S.tasks || []).filter((t) => !t.end).length; }
 
 function topBar() {
   if (!D) return;
-  const rev = {};
-  for (const n of D.notes) if (n.review_on) { const k = n.review_on < D.today ? D.today : n.review_on; rev[k] = (rev[k] || 0) + 1; }
-  const dailies = new Set(D.dailies);
-  const week = [...Array(7)].map((_, i) => {
-    const d = addDays(D.today, i), dt = new Date(d + "T12:00");
-    const nr = rev[d] || 0;
-    const dots = [...Array(Math.min(nr, 3))].map(() => "<i></i>").join("") + (dailies.has(d) ? '<i class="d"></i>' : "");
-    return `<a class="day ${i ? "" : "today"}" href="#/review" title="${nr} review(s)${dailies.has(d) ? " · daily note" : ""}">
-      <span>${dt.toLocaleDateString(LOCALE, { weekday: "short" })}</span><b>${dt.getDate()}</b><span class="m">${dots}</span></a>`;
-  }).join("");
-  const n = needsYou(), run = runningNow(), live = S.agents.length;
-  $("#week").innerHTML = `${week}<span class="wk-sep"></span>
-    <a class="chipbox" href="#/review">${icon("target", 18)}<span><b>Needs you</b>${n} ${n === 1 ? "item" : "items"}</span></a>
-    <a class="chipbox" href="#/agents">${icon("bolt", 18)}<span><b>Agents</b>${live} active${run ? ` · ${run} ${run === 1 ? "task" : "tasks"}` : ""}</span></a>`;
-
+  calRender();
+  const run = runningNow();
   const { pg, arg } = route();
   const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
@@ -110,6 +96,141 @@ function topBar() {
     (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
     `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>`;
 }
+
+// ---------------------------------------------------------------- Calendar: the week strip at the top, or a floating pill
+// Items come from Calendar.md (D.calendar) and schedule.json (S.schedule); reviews and daily notes add their own dots.
+// Pinned sits under the top bar; floating shrinks to a pill that opens on hover. The choice is per browser.
+const CAL_KEY = "overlook.calendar";
+let calMode = (() => { try { return localStorage.getItem(CAL_KEY) === "float" ? "float" : "pinned"; } catch { return "pinned"; } })();
+let calStart = "", calMonth = false, calDay = "", calFormDay = "", calKind = "event";
+const REPEAT = { once: "once", daily: "every day", weekdays: "weekdays", weekly: "every week" };
+const dayName = (d, o) => new Date(d + "T12:00").toLocaleDateString(LOCALE, o);
+// Where a scheduled task lands: its next run, then every day / weekday / week after it.
+function occursOn(e, d) {
+  const first = e.at.slice(0, 10);
+  if (!e.at || d < first) return false;
+  if (e.repeat === "once") return d === first;
+  const wd = new Date(d + "T12:00").getDay();
+  return e.repeat === "daily" || (e.repeat === "weekdays" ? wd > 0 && wd < 6 : wd === new Date(first + "T12:00").getDay());
+}
+function dayItems(d) {
+  return {
+    events: (D.calendar || []).filter((e) => e.date === d),
+    scheduled: (S.schedule || []).filter((e) => occursOn(e, d)).map((e) => ({ ...e, time: e.at.slice(11) })),
+    reviews: D.notes.filter((n) => n.review_on && (n.review_on === d || (d === D.today && n.review_on < d))),
+  };
+}
+function calDays() {
+  const start = calStart || D.today;
+  if (!calMonth) return [...Array(7)].map((_, i) => addDays(start, i));
+  const first = start.slice(0, 8) + "01", lead = new Date(first + "T12:00").getDay(); // the grid starts on the Sunday before the 1st
+  return [...Array(42)].map((_, i) => addDays(first, i - lead));
+}
+function calCell(d) {
+  const it = dayItems(d), month = (calStart || D.today).slice(0, 7);
+  const dots = [...it.events.map(() => "e"), ...it.scheduled.map(() => "s"), ...it.reviews.map(() => "r")].slice(0, 4)
+    .map((c) => `<i class="${c}"></i>`).join("") + (D.dailies.includes(d) ? '<i class="d"></i>' : "");
+  const title = [it.events.length && `${it.events.length} event(s)`, it.scheduled.length && `${it.scheduled.length} agent task(s)`, it.reviews.length && `${it.reviews.length} review(s)`].filter(Boolean).join(" · ");
+  return `<button type="button" class="day ${d === D.today ? "today" : ""} ${d === calDay ? "sel" : ""} ${calMonth && d.slice(0, 7) !== month ? "out" : ""}" data-act="cal-day" data-d="${d}" title="${title || "Nothing yet"}">
+    ${calMonth ? "" : `<span>${dayName(d, { weekday: "short" })}</span>`}<b>${Number(d.slice(8))}</b><span class="m">${dots}</span></button>`;
+}
+function calRender() {
+  const el = $("#cal");
+  if (!el || !D) return;
+  if (!el.dataset.ready) {
+    el.innerHTML = `<button type="button" class="cal-pill" data-act="cal-open" aria-label="Open the calendar"></button>
+      <div class="cal-body">
+        <div class="cal-strip">
+          <button type="button" class="cal-nav" data-act="cal-prev" aria-label="Previous">${icon("l", 16)}</button>
+          <div class="cal-grid" id="cal-grid"></div>
+          <button type="button" class="cal-nav" data-act="cal-next" aria-label="Next">${icon("r", 16)}</button>
+          <span class="wk-sep"></span><div class="cal-side" id="cal-side"></div>
+        </div>
+        <div class="cal-dayview" id="cal-dayview" hidden><div class="cd-head" id="cd-head"></div><div class="cd-cols"><div class="cd-list" id="cd-list"></div><form class="cd-add" id="cd-add"></form></div></div>
+      </div>`;
+    el.dataset.ready = "1";
+  }
+  el.classList.toggle("float", calMode === "float");
+  el.classList.toggle("month", calMonth);
+  el.classList.toggle("open", !!calDay);
+  document.body.classList.toggle("cal-float", calMode === "float");
+  const n = needsYou(), run = runningNow(), live = S.agents.length, todayCount = Object.values(dayItems(D.today)).flat().length;
+  el.querySelector(".cal-pill").innerHTML = `${icon("target", 16)}<b>${dayName(D.today, { weekday: "short" })} ${Number(D.today.slice(8))}</b><span>${todayCount ? `${todayCount} today` : "calendar"}</span>`;
+  $("#cal-grid").innerHTML = (calMonth ? ["S", "M", "T", "W", "T", "F", "S"].map((w) => `<span class="wd">${w}</span>`).join("") : "") + calDays().map(calCell).join("");
+  $("#cal-side").innerHTML = `<button type="button" class="cal-title" data-act="cal-month" title="${calMonth ? "Week view" : "Month view"}">${dayName(calStart || D.today, { month: "long", year: "numeric" })}</button>
+    <span class="cal-tools"><button type="button" data-act="cal-today" title="Back to today">Today</button>
+      <button type="button" data-act="cal-pin" title="${calMode === "float" ? "Pin it under the top bar" : "Float it in a corner"}">${calMode === "float" ? "Pin" : "Float"}</button></span>
+    <a class="chipbox" href="#/review">${icon("target", 18)}<span><b>Needs you</b>${n} ${n === 1 ? "item" : "items"}</span></a>
+    <a class="chipbox" href="#/agents">${icon("bolt", 18)}<span><b>Agents</b>${live} active${run ? ` · ${run} ${run === 1 ? "task" : "tasks"}` : ""}</span></a>`;
+  calDayRender();
+}
+function calDayRender() {
+  const view = $("#cal-dayview");
+  view.hidden = !calDay;
+  if (!calDay) return;
+  const d = calDay, it = dayItems(d), daily = `${D.daily}/${d}.md`;
+  $("#cd-head").innerHTML = `<h3>${dayName(d, { weekday: "long", month: "long", day: "numeric" })}</h3>
+    ${D.dailies.includes(d) ? `<a class="btn glass" href="${noteHref(daily)}">Daily note</a>` : ""}
+    <button type="button" class="btn glass" data-act="cal-close" aria-label="Close">Close <kbd>Esc</kbd></button>`;
+  const row = (ic, time, text, extra = "", del = "") => `<div class="row"><span class="ic">${icon(ic, 15)}</span><span class="x">${time || "all day"}</span><span class="txt">${text}</span>${extra}${del}</div>`;
+  const x = (attrs) => `<button type="button" class="del" ${attrs} aria-label="Delete">×</button>`;
+  $("#cd-list").innerHTML = [
+    ...it.events.map((e) => row("target", e.time, esc(e.title), "", x(`data-act="cal-del" data-date="${e.date}" data-time="${e.time}" data-title="${esc(e.title)}"`))),
+    ...it.scheduled.map((e) => row("bolt", e.time, `${esc(e.prompt)}<small>${esc([runnerName(e.agent), e.model, e.effort, REPEAT[e.repeat]].filter(Boolean).join(" · "))}${e.error ? ` · <em>${esc(e.error)}</em>` : ""}</small>`, "", x(`data-act="sched-del" data-id="${esc(e.id)}"`))),
+    ...it.reviews.map((n) => row("review", "", `<a href="${noteHref(n.path)}">Review ${esc(n.title)}</a>`)),
+  ].join("") || `<p class="empty">Nothing on this day yet.</p>`;
+  if (calFormDay !== d) { calFormDay = d; calFormRender(); }
+}
+// The add form is drawn when the day changes, never by the refresh, so what you type survives.
+function calFormRender() {
+  const f = $("#cd-add");
+  f.innerHTML = `<div class="seg" role="radiogroup" aria-label="What to add">${[["event", "Event"], ["task", "Agent task"]].map(([k, l]) =>
+      `<button type="button" role="radio" aria-checked="${calKind === k}" class="${calKind === k ? "on" : ""}" data-act="cal-kind" data-k="${k}">${l}</button>`).join("")}</div>
+    ${calKind === "event"
+      ? `<div class="cd-line"><input type="time" id="cd-time" aria-label="Time (optional)"><input id="cd-title" placeholder="What's happening?" aria-label="Event" maxlength="200" autocomplete="off"></div>`
+      : `<div class="cd-line"><input type="time" id="cd-time" required aria-label="Time"><select class="pick" id="cd-repeat" aria-label="Repeat">${Object.entries(REPEAT).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></div>
+        <div class="cd-line">${agentPicker("sch")}</div>
+        <textarea id="cd-prompt" rows="2" placeholder="What should the agent do?" aria-label="Task for the agent"></textarea>`}
+    <div class="cd-line"><small>${calKind === "event" ? "Saved to Calendar.md in your vault." : "Runs at that time while Overlook is on; a missed run happens when it starts."}</small>
+      <button class="btn peach" type="submit">${calKind === "event" ? "Add" : "Schedule"}</button></div>`;
+  if (calKind === "task") { $("#sch-agent").onchange = () => runOptions(false, "sch"); $("#sch-model").onchange = () => runOptions(true, "sch"); runOptions(false, "sch"); }
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const time = $("#cd-time").value;
+    try {
+      if (calKind === "event") {
+        const title = $("#cd-title").value.trim();
+        if (!title) return $("#cd-title").focus();
+        await api("/api/calendar", { date: calDay, time, title });
+        $("#cd-title").value = ""; $("#cd-time").value = ""; toast("Added to the calendar");
+      } else {
+        const prompt = $("#cd-prompt").value.trim();
+        if (!time || !prompt) return (time ? $("#cd-prompt") : $("#cd-time")).focus();
+        await api("/api/schedule", { at: `${calDay}T${time}`, repeat: $("#cd-repeat").value, prompt, ...runChoice("sch") });
+        $("#cd-prompt").value = ""; toast("Scheduled");
+      }
+      [D, S] = await Promise.all([api("/api"), api("/api/system")]); calRender();
+    } catch (err) { toast(err.message); }
+  };
+}
+const calShift = (dir) => {
+  const start = calStart || D.today;
+  if (!calMonth) calStart = addDays(start, dir * 7);
+  else { const d = new Date(start.slice(0, 8) + "01T12:00"); d.setMonth(d.getMonth() + dir); calStart = d.toLocaleDateString("sv"); }
+  calRender();
+};
+const CAL_ACTIONS = {
+  "cal-day": (el) => { calDay = calDay === el.dataset.d ? "" : el.dataset.d; calRender(); },
+  "cal-close": () => { calDay = ""; calRender(); },
+  "cal-prev": () => calShift(-1), "cal-next": () => calShift(1),
+  "cal-today": () => { calStart = ""; calDay = D.today; calRender(); },
+  "cal-month": () => { calMonth = !calMonth; calStart = calMonth ? (calStart || D.today).slice(0, 8) + "01" : ""; calRender(); },
+  "cal-pin": () => { calMode = calMode === "float" ? "pinned" : "float"; try { localStorage.setItem(CAL_KEY, calMode); } catch {} calRender(); },
+  "cal-open": () => { calDay = calDay || D.today; calRender(); },
+  "cal-kind": (el) => { calKind = el.dataset.k; calFormRender(); },
+  "cal-del": async (el) => { await api("/api/calendar/delete", { date: el.dataset.date, time: el.dataset.time, title: el.dataset.title }).catch((e) => toast(e.message)); D = await api("/api"); calRender(); },
+  "sched-del": async (el) => { await api("/api/schedule/delete", { id: el.dataset.id }).catch((e) => toast(e.message)); S = await api("/api/system"); calRender(); },
+};
 
 // ---------------------------------------------------------------- Home: suggestion carousel
 function suggestions() {
@@ -373,9 +494,7 @@ function agents() {
     <form class="task glass" id="run">
       <textarea id="run-prompt" rows="2" placeholder="What should it do in the vault? Enter runs, Shift+Enter adds a line" aria-label="Task for the agent"></textarea>
       <div class="task-bar">
-        <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
-        <select class="pick" id="run-model" aria-label="Model" hidden></select>
-        <div class="seg" id="run-effort" role="radiogroup" aria-label="Effort" hidden></div>
+        ${agentPicker("run")}
         <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
       </div>
       <small>${ready.length ? "CLI agents run in the vault folder; API agents can only list, search, read and write notes." : "No agent is set up yet: see README › Agents."}</small></form>
@@ -417,15 +536,18 @@ function agentsBody() {
     <h3>Findings</h3><div class="list glass">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`; }).join("")}</div>`;
 }
 // Model and effort pickers follow the chosen agent: only what agents.json lists for it. Effort levels can differ per model.
-function runOptions(keepModel) {
-  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {}, ms = r.models || [], sel = $("#run-model");
+function runOptions(keepModel, p = "run") {
+  const r = S.runners?.find((x) => x.id === $(`#${p}-agent`)?.value) || {}, ms = r.models || [], sel = $(`#${p}-model`);
   if (!keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
   const es = ms.find((m) => m.id === sel.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
-  const seg = $("#run-effort");
+  const seg = $(`#${p}-effort`);
   seg.hidden = !es.length;
   seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
 }
-const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort .on")?.dataset.v });
+const runChoice = (p = "run") => ({ agent: $(`#${p}-agent`)?.value, model: $(`#${p}-model`)?.hidden ? undefined : $(`#${p}-model`)?.value, effort: $(`#${p}-effort`)?.hidden ? undefined : $(`#${p}-effort .on`)?.dataset.v });
+// Agent, model and effort pickers; runOptions(false, p) fills the last two for the chosen agent.
+const agentPicker = (p) => `<select class="pick" id="${p}-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
+  <select class="pick" id="${p}-model" aria-label="Model" hidden></select><div class="seg" id="${p}-effort" role="radiogroup" aria-label="Effort" hidden></div>`;
 // "Open in…" buttons: the commands agents.json gives the agent; the ones that need a session only when there is one.
 const openButtons = (runner, attrs, hasSession) => (runner?.open || []).filter((o) => !o.session || hasSession)
   .map((o) => `<button class="btn glass" data-act="open" data-via="${esc(o.label)}" ${attrs}>${icon("ext", 14)} ${esc(o.label)}</button>`).join("");
@@ -573,6 +695,7 @@ function render() {
 }
 
 const ACTIONS = {
+  ...CAL_ACTIONS,
   prev: () => move(-1), next: () => move(1), go: (el) => { idx = Number(el.dataset.i); place(); },
   filter: (el) => { filter = el.dataset.k; notes(); },
   show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
@@ -614,6 +737,7 @@ $("#capture-text").addEventListener("keydown", async (e) => {
   D = await api("/api"); if (!route().pg) home(); topBar();
 });
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && calDay && !document.querySelector("dialog[open]")) { calDay = ""; calRender(); return; }
   if (e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
   if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }

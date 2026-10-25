@@ -184,3 +184,32 @@ test("open in… launches the agent's own command for a task session", async () 
   expect((await post("/api/open", { task: t.id, via: "Nope" })).status).toBe(400);
   expect((await post("/api/open", { key: "c:../../etc", via: "Log" })).status).toBe(400);
 });
+
+// ---------------------------------------------------------------- calendar and schedule
+test("Calendar.md keeps items sorted and validates input", async () => {
+  for (const e of [{ date: "2026-11-03", time: "14:00", title: "Exam" }, { date: "2026-11-01", title: "Holiday" }, { date: "2026-11-03", time: "09:30", title: "Review  session" }])
+    expect((await post("/api/calendar", e)).status).toBe(200);
+  const lines = readFileSync(`${VAULT}/Calendar.md`, "utf8").split("\n").filter((l) => l.startsWith("- "));
+  expect(lines).toEqual(["- 2026-11-01 · Holiday", "- 2026-11-03 09:30 · Review session", "- 2026-11-03 14:00 · Exam"]);
+  expect((await (await fetch(`${BASE}/api`)).json()).calendar).toContainEqual({ date: "2026-11-03", time: "14:00", title: "Exam" });
+  expect((await post("/api/calendar", { date: "2026-13-40", title: "x" })).status).toBe(400);
+  expect((await post("/api/calendar", { date: "2026-11-01", time: "25:00", title: "x" })).status).toBe(400);
+  expect((await post("/api/calendar/delete", { date: "2026-11-01", title: "Holiday" })).status).toBe(200);
+  expect(readFileSync(`${VAULT}/Calendar.md`, "utf8")).not.toContain("Holiday");
+});
+
+test("scheduled tasks run when due and repeat", async () => {
+  // Two days back is in the past in any time zone (bun test runs in UTC, the server in the machine's zone).
+  const at = `${new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10)}T09:00`;
+  const tasksBefore = (await (await fetch(`${BASE}/api/system`)).json()).tasks.length;
+  const once = await (await post("/api/schedule", { at, repeat: "once", agent: "echo", prompt: "scheduled once" })).json();
+  const daily = await (await post("/api/schedule", { at, repeat: "daily", agent: "echo", prompt: "scheduled daily" })).json();
+  const s = await (await fetch(`${BASE}/api/system`)).json();
+  expect(s.tasks.length).toBe(tasksBefore + 2);
+  expect(s.schedule.map((e: any) => e.id)).toEqual([daily.id]); // the one-off is done, the daily one moved on
+  expect(Date.parse(s.schedule[0].at)).toBeGreaterThan(Date.now());
+  expect(once.id).toBeTruthy();
+  expect((await post("/api/schedule", { at, repeat: "hourly", agent: "echo", prompt: "x" })).status).toBe(400);
+  expect((await post("/api/schedule", { at, repeat: "daily", agent: "missing", prompt: "x" })).status).toBe(400);
+  expect((await post("/api/schedule/delete", { id: daily.id })).status).toBe(200);
+});

@@ -52,6 +52,21 @@ Vault in Portuguese? Set `VAULT_LANG=pt` in `.env` and Overlook reads `2 Diário
 
 A one-line summary comes from a `> [!abstract]` callout right after the title.
 
+## Calendar
+
+The strip under the top bar is a week (or month) calendar. Click a day to see what's on it and to add:
+
+- **Events**, saved as plain lines in `Calendar.md` at the vault root (`- 2026-11-03 14:00 · Exam`, the time is
+  optional), so they show up in Obsidian and agents can read them.
+- **Agent tasks**: an agent, model, effort and prompt that run at a time, once or every day / weekday / week.
+  They live in `schedule.json` next to Overlook and run while it is on; a run missed while it was off
+  happens when it starts.
+
+Reviews due and daily notes show up as dots too. *Float* folds the strip into a small pill at the top that
+drops the calendar back in place on hover; *Pin* keeps it open.
+
+![Calendar](docs/screenshots/calendar.jpg)
+
 ## Optional pieces
 
 Everything below is off until you set it up. Skip what you don't need.
