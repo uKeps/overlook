@@ -96,7 +96,14 @@ test("the page and its assets are served and the frontend parses", async () => {
   js.transformSync(appJs);
   expect(appJs).not.toContain("refreshes every 3 s");
   expect(appJs).not.toContain("pid ${a.pid}");
-  expect(readFileSync(`${ROOT}/app.css`, "utf8")).toContain(".ph .r { margin-left: auto; display: flex; align-items: center; gap: 8px; }");
+  expect(appJs).toContain('document.body.classList.toggle("dock-float", dockMode === "float")');
+  expect(appJs).toContain('document.body.classList.toggle("home", !pg)');
+  const appCss = readFileSync(`${ROOT}/app.css`, "utf8");
+  expect(appCss).toContain(".ph .r { margin-left: auto; display: flex; align-items: center; gap: 8px; }");
+  expect(appCss).toContain("body.dock-float { padding-bottom: 76px; }");
+  expect(appCss).toContain("body.home { display: flex; flex-direction: column; }");
+  expect(appCss).toContain("body.home main { margin-top: auto; margin-bottom: auto; padding-top: 16px; padding-bottom: 16px; }");
+  expect(appCss).toContain("body.cal-float:has(.cal.float:is(:hover, :focus-within, .open)) main { margin-top: 96px; }");
 });
 
 test("agent CLI commands", () => {
