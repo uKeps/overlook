@@ -340,3 +340,11 @@ test("an agent gets a picture from Settings", async () => {
   expect((await post("/api/avatar", { agent: "echo", remove: true })).status).toBe(200);
   expect((await runner()).avatar).toBeNull();
 });
+
+test("ascii.rest is served from node_modules, and only its scripts", async () => {
+  const r = await fetch(`${BASE}/vendor/ascii/ascii.js`);
+  expect([r.status, r.headers.get("content-type")]).toEqual([200, "text/javascript; charset=utf-8"]);
+  expect((await fetch(`${BASE}/vendor/ascii/pieces/night-coast.js`)).status).toBe(200);
+  expect((await fetch(`${BASE}/vendor/ascii/..%2F..%2F..%2Fpackage.json`)).status).toBe(404);
+  expect((await fetch(`${BASE}/vendor/ascii/package.json`)).status).toBe(404);
+});

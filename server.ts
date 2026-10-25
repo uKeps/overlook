@@ -518,6 +518,12 @@ async function handle(req: Request, port: number) {
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
+  // ascii.rest (MIT), served from node_modules so the art loads from this machine, not from ascii.rest.
+  if (p.startsWith("/vendor/ascii/")) {
+    const rel = p.slice(14), f = Bun.file(`${import.meta.dir}/node_modules/ascii.rest/dist/${rel}`);
+    return /^[\w-]+(\/[\w-]+)?\.js$/.test(rel) && (await f.exists())
+      ? new Response(f, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 });
+  }
   if (p.startsWith("/avatar/")) { const f = /^[\w-]+$/.test(p.slice(8)) ? avatarPath(p.slice(8)) : null; return f ? new Response(Bun.file(f), { headers: { "cache-control": "max-age=31536000" } }) : new Response("404", { status: 404 }); }
   if (p.startsWith("/pin/")) { const f = await imageFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }

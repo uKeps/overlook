@@ -263,16 +263,24 @@ function suggestions() {
   for (const n of D.notes.filter((n) => n.type === "project")) s.push({ cat: "Project", ic: "bolt", title: n.title, sub: plain(n.summary), meta: [["Area", n.area || "-"], ["Touched", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
   const outside = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
   for (const n of outside) s.push({ cat: "Rediscover", ic: "leaf", title: n.title, sub: plain(n.summary), meta: [["Out of the cycle", "never reviewed"], ["Area", n.area || "-"]], href: noteHref(n.path), action: "Reread" });
-  return s.length ? s : [{ cat: "All caught up", ic: "leaf", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
+  return s.length ? s : [{ cat: "All caught up", ic: "leaf", piece: "bonsai", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
 }
 
 let idx = 0, SG = [];
+// Card art: the user's images, or animated ascii scenes (ascii.rest) — "auto" uses images when there are any.
+const ART_KEY = "overlook.cardArt";
+let cardArt = (() => { try { return localStorage.getItem(ART_KEY) || "auto"; } catch { return "auto"; } })();
+const SCENES = ["night-coast", "kyoto-dusk", "aurora-fjord", "lantern-lake", "misty-forest", "ocean-sunset", "desert-night", "tokyo-rain",
+  "alpine-dawn", "deep-reef", "earthrise", "storm-plains", "marine-drive", "taj-dawn", "varanasi-ghats"];
+const asciiCards = () => cardArt === "ascii" || (cardArt === "auto" && !D.pins?.length);
+const scene = (s, i) => s.piece || SCENES[(hash(D.today) + i) % SCENES.length];
+
 function home() {
   SG = suggestions();
   idx = Math.min(idx, SG.length - 1);
   const card = (s, i) => {
-    const p = pinFor(i);
-    return `<article class="card" data-i="${i}" style="background-image:url('${art(i)}?amb')">
+    const p = pinFor(i), ascii = asciiCards();
+    return `<article class="card ${ascii ? "ascii" : ""}" data-i="${i}" ${ascii ? "" : `style="background-image:url('${art(i)}?amb')"`}>
       <div class="card-main">
         <div class="card-top"><span class="tag glass">${icon(s.ic, 16)} ${esc(s.cat)}</span><span class="card-idx">${i + 1} / ${SG.length}</span></div>
         <div class="body">
@@ -282,8 +290,8 @@ function home() {
         </div>
         <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
       </div>
-      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
-        ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>
+      ${ascii ? `<div class="card-pin card-ascii"><ascii-art piece="${scene(s, i)}"></ascii-art></div>` : `<div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
+        ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>`}
     </article>`;
   };
   main.innerHTML = `<section class="car" id="car">${SG.map(card).join("")}
@@ -304,7 +312,7 @@ function place() {
     c.style.pointerEvents = a > 1 ? "none" : "";
   });
   document.querySelectorAll(".dots i").forEach((d, i) => d.classList.toggle("on", i === idx));
-  if (SG[idx]) ambient(art(idx));
+  if (SG[idx] && !asciiCards()) ambient(art(idx));
 }
 const move = (d) => { idx = (idx + d + SG.length) % SG.length; place(); };
 
@@ -353,7 +361,7 @@ function grid() {
 // ---------------------------------------------------------------- Reader
 async function reader(path) {
   const n = await api(`/api/note?path=${encodeURIComponent(path)}`).catch(() => null);
-  if (!n) { main.innerHTML = `<p class="empty">Note not found.</p>`; return; }
+  if (!n) { main.innerHTML = `<div class="lost"><ascii-art piece="not-found" mono label="Not found"></ascii-art><p class="empty">Note not found.</p></div>`; return; }
   main.innerHTML = `<div class="reader">
     <article class="art glass">
       <div class="in"><h1>${esc(n.title)}</h1>
@@ -812,6 +820,9 @@ async function settingsPage() {
     <div class="img-sources">
       <div class="img-set glass"><b>Calendar</b><small>Week strip under the top bar, or a pill that opens on hover.</small>${seg("set-cal", calMode)}</div>
       <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill.</small>${seg("set-dock", dockMode)}</div>
+      <div class="img-set glass"><b>Card art</b><small>Your images, animated ascii scenes, or images when you have them.</small>
+        <div class="seg" role="radiogroup">${[["auto", "Auto"], ["images", "Images"], ["ascii", "ASCII"]].map(([k, l]) =>
+          `<button type="button" role="radio" aria-checked="${cardArt === k}" class="${cardArt === k ? "on" : ""}" data-act="set-art" data-v="${k}">${l}</button>`).join("")}</div></div>
     </div>
     <h3>Vault &amp; server</h3>
     <form class="task glass" id="set-vault">
@@ -926,6 +937,7 @@ const ACTIONS = {
   },
   effort: (el) => el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }),
   "avatar-remove": async (el) => { await api("/api/avatar", { agent: el.dataset.id, remove: true }).catch((e) => toast(e.message)); S = await api("/api/system"); settingsPage(); },
+  "set-art": (el) => { cardArt = el.dataset.v; try { localStorage.setItem(ART_KEY, cardArt); } catch {} settingsPage(); toast(`Card art: ${el.textContent}`); },
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";
