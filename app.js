@@ -80,7 +80,6 @@ function ambient(url) {
 function clock() {
   const d = new Date();
   $("#time").textContent = d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
-  $("#date").textContent = d.toLocaleDateString(LOCALE, { weekday: "long", day: "numeric", month: "long" });
 }
 function needsYou() { return (D.focus?.length || 0) + due().length + inbox().length + (D.captured?.length || 0); }
 function runningNow() { return (S.tasks || []).filter((t) => !t.end).length; }

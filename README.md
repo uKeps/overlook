@@ -62,8 +62,8 @@ The strip under the top bar is a week (or month) calendar. Click a day to see wh
   They live in `schedule.json` next to Overlook and run while it is on; a run missed while it was off
   happens when it starts.
 
-Reviews due and daily notes show up as dots too. *Float* turns the strip into a pill in the corner that
-opens on hover; *Pin* puts it back.
+Reviews due and daily notes show up as dots too. *Float* folds the strip into a small pill at the top that
+drops the calendar back in place on hover; *Pin* keeps it open.
 
 ![Calendar](docs/screenshots/calendar.jpg)
 
