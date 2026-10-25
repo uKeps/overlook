@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vault HQ</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='5' fill='%23f4b88f'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="amb" id="amb1"></div><div class="amb" id="amb2"></div>
+
+<header class="top">
+  <div class="crumb"><b>Vault</b><span>/</span><span id="crumb">Home</span></div>
+  <div class="svcbar" id="svcbar"></div>
+  <div class="clock"><span id="hora"></span><small id="data"></small></div>
+  <button class="glass btn" data-act="capturar">Capturar <kbd>C</kbd></button>
+</header>
+
+<nav class="week glass" id="week" aria-label="Semana"></nav>
+
+<main id="main"></main>
+
+<nav class="dock glass" id="dock" aria-label="Páginas"></nav>
+
+<dialog id="cap" class="glass">
+  <label for="capt">Capturar na nota do dia</label>
+  <textarea id="capt" rows="3" placeholder="Uma ideia, um link, uma dúvida. Enter salva."></textarea>
+  <small>Vai para "Capturei" em <span id="capdia"></span>. O agente processa depois.</small>
+</dialog>
+<div class="toast glass" id="toast" role="status"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

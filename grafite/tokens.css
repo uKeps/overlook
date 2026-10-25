@@ -1,0 +1,25 @@
+/* Grafite: todos os tokens. Nada de cor, fonte ou medida de shell fora daqui. */
+:root {
+  color-scheme: dark;
+  --bg: #121212;
+  --text: #EAE8E3;
+  --text-2: #A3A19C;   /* parágrafos secundários */
+  --label: #9A9893;    /* rótulos, nav inativa */
+  --muted: #8E8C87;    /* texto auxiliar: nada mais escuro que isso em texto (4,5:1 sobre --bg) */
+  --line: #2B2B2A;     /* divisórias */
+  --line-2: #333331;   /* borda de botão secundário e kbd */
+  --accent: #F2B48C;
+  --ok: #8CCB9E;
+  --bad: #E0897A;
+  --on-image: #B5B3AD; /* rótulo mono sobre a imagem do carrossel */
+  --dash: #3A3A38;     /* traço inativo do indicador */
+
+  --serif: "Instrument Serif", Georgia, serif;
+  --sans: "Geist", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+
+  --max: 1160px;
+  --gutter: 24px;
+  --radius: 8px;
+  --fade: 150ms;
+}
