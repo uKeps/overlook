@@ -19,6 +19,9 @@ let paused = false; // configuration error (403): no automatic retries, only fro
 let lastLog = "";
 const pending = new Set<string>(); // OAuth "state" values in flight
 
+// ImageMagick is optional: without it, images are served and kept at their original size.
+export const magick = (args: string[]) => !!Bun.which("magick") && Bun.spawnSync(["magick", ...args]).exitCode === 0;
+
 const logOnce = (msg: string) => { if (msg !== lastLog) { console.error(`pinterest: ${msg}`); lastLog = msg; } };
 
 function readEnv(): Record<string, string> {
@@ -26,13 +29,13 @@ function readEnv(): Record<string, string> {
     return Object.fromEntries(readFileSync(ENV, "utf8").split("\n").filter((l) => /^\w+=/.test(l)).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).trim()]));
   } catch { return {}; }
 }
-function saveEnv(values: Record<string, string>) {
-  const lines = existsSync(ENV) ? readFileSync(ENV, "utf8").split("\n") : [];
+export function saveEnv(values: Record<string, string>) {
+  const lines = existsSync(ENV) ? readFileSync(ENV, "utf8").replace(/\n+$/, "").split("\n").filter(Boolean) : [];
   for (const [k, v] of Object.entries(values)) {
     const i = lines.findIndex((l) => l.startsWith(`${k}=`));
     if (i >= 0) lines[i] = `${k}=${v}`; else lines.push(`${k}=${v}`);
   }
-  writeFileSync(ENV, lines.join("\n").replace(/\n*$/, "\n"), { mode: 0o600 });
+  writeFileSync(ENV, lines.join("\n") + "\n", { mode: 0o600 });
 }
 const credentials = () => { const e = readEnv(); return e.PINTEREST_CLIENT_ID && e.PINTEREST_CLIENT_SECRET ? e : null; };
 const basic = (e: Record<string, string>) => "Basic " + Buffer.from(`${e.PINTEREST_CLIENT_ID}:${e.PINTEREST_CLIENT_SECRET}`).toString("base64");
@@ -85,8 +88,8 @@ async function all(path: string) {
   return items;
 }
 
-// Drops small images (<720x600), GIFs and narrow vertical phone screenshots (ratio < 0.72) that look stretched on the cards.
-const goodImage = (w: number, h: number, url: string) => w >= 720 && h >= 600 && w / h >= 0.72 && !/\.gif($|\?)/i.test(url);
+// Drops only what can't look right on a card: tiny images and GIFs. Taste is the user's call (Images page: hide).
+const goodImage = (w: number, h: number, url: string) => Math.min(w, h) >= 400 && !/\.gif($|\?)/i.test(url);
 
 // Public board (https://pinterest.com/<user>/<board>/): reads the pins from the SSR payload (__PWS_INITIAL_PROPS__), no OAuth or Trial needed.
 // ponytail: 3 parallel reads (the SSR samples ~25 pins per request) merged by hash; the official API pages through everything.
@@ -129,7 +132,7 @@ export async function sync(manual = false) {
           const r = await fetch(p.url);
           if (!r.ok) continue;
           await Bun.write(file, r);
-          Bun.spawnSync(["magick", `${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]);
+          magick([`${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]);
         }
         pins.push({ id: p.id, link: p.link, title: p.title, color: p.color });
       }
@@ -146,13 +149,17 @@ export async function sync(manual = false) {
           const r = await fetch(largest.url);
           if (!r.ok) continue;
           await Bun.write(file, r);
-          Bun.spawnSync(["magick", `${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]); // without ImageMagick, the original stays
+          magick([`${file}[0]`, "-resize", "1800x1800>", "-quality", "82", file]); // without ImageMagick, the original stays
         }
         pins.push({ id: p.id, link: `https://www.pinterest.com/pin/${p.id}/`, title: String(p.title || p.alt_text || p.description || "").slice(0, 140), color: p.dominant_color ?? "" });
       }
     }
-    const kept = new Set(pins.flatMap((p) => [`${p.id}.jpg`, `${p.id}-amb.jpg`]));
-    for (const f of readdirSync(CACHE)) if (f.endsWith(".jpg") && !kept.has(f)) unlinkSync(`${CACHE}/${f}`); // left the board, leaves the cache
+    // The public page shows a different sample of the board on each visit, so a pin missing from this read hasn't
+    // necessarily left: keep what earlier syncs found and let the collection grow. The API lists the whole board,
+    // so there a missing pin really is gone, and it leaves the cache.
+    if (isPublic) { const fresh = new Set(pins.map((p) => p.id)); pins.push(...state.images.filter((p) => !fresh.has(p.id) && existsSync(`${CACHE}/${p.id}.jpg`))); }
+    const kept = new Set(pins.flatMap((p) => [`${p.id}.jpg`, `${p.id}-amb.jpg`, `${p.id}-thumb.jpg`]));
+    if (!isPublic) for (const f of readdirSync(CACHE)) if (f.endsWith(".jpg") && !kept.has(f)) unlinkSync(`${CACHE}/${f}`);
     state = { status: "ok", error: "", last: new Date().toISOString(), syncing: false, images: pins };
     writeFileSync(INDEX, JSON.stringify({ last: state.last, pins }, null, 1));
     paused = false; lastLog = "";
@@ -174,19 +181,23 @@ export function startPinterest(callbackUrl: string) {
   setInterval(() => sync(), SIX_HOURS);
 }
 
-export const pinterestState = () => {
-  const board = (() => { try { return JSON.parse(readFileSync(`${DIR}/pinterest.json`, "utf8")).board ?? ""; } catch { return ""; } })();
-  return { ...state, total: state.images.length, board, redirect };
-};
+// The board's images for images.ts, which merges them with the user's folder and applies their picks.
+export const pinImages = () => state.images;
+export function resync() { paused = false; return sync(true); }
+const boardName = () => { try { return String(JSON.parse(readFileSync(`${DIR}/pinterest.json`, "utf8")).board ?? ""); } catch { return ""; } };
 
-export async function pinFile(id: string, amb = false) {
+export const pinterestState = () => ({ ...state, board: boardName(), total: state.images.length, redirect });
+
+// The cached image, or a smaller copy made on first request: "amb" (blurred, for the ambient background) or "thumb" (for the grid).
+export async function pinFile(id: string, variant: "" | "amb" | "thumb" = "") {
   if (!/^[0-9a-f]+$/.test(id)) return null;
   const orig = `${CACHE}/${id}.jpg`;
   if (!(await Bun.file(orig).exists())) return null;
-  if (!amb) return Bun.file(orig);
-  const out = `${CACHE}/${id}-amb.jpg`;
+  if (!variant) return Bun.file(orig);
+  const out = `${CACHE}/${id}-${variant}.jpg`;
   if (!(await Bun.file(out).exists())) {
-    Bun.spawnSync(["magick", `${orig}[0]`, "-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135", "-quality", "78", out]);
+    const args = variant === "amb" ? ["-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135"] : ["-resize", "480x480>"];
+    magick([`${orig}[0]`, ...args, "-quality", "78", out]);
     if (!(await Bun.file(out).exists())) return Bun.file(orig);
   }
   return Bun.file(out);

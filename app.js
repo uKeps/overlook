@@ -29,7 +29,10 @@ const I = {
   reload: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', play: '<path d="m7 4 13 8-13 8z"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   gap: '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 4 8M8 12h4"/><path d="m3 3 18 18"/>',
+  pin: '<path d="M12 17v5M8 3h8l-1.5 7 3.5 3.5H6L9.5 10z"/>', fold: '<path d="m6 9 6 6 6-6"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
   leaf: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.4 5-6"/>',
+  settings: '<path d="M4 6h3M11 6h9M4 12h9M17 12h3M4 18h3M11 18h9"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
@@ -46,8 +49,12 @@ function toast(msg) {
 // Opened over Tailscale (phone): embedded apps use the tailnet links, built from the current host.
 const remote = location.hostname.endsWith(".ts.net");
 const address = (s) => (remote ? (s.tailnet ? `https://${location.hostname}:${s.tailnet}` : "") : s.proxy ? `http://127.0.0.1:${s.proxy}` : s.url);
-const pinFor = (s) => (D?.pins?.length ? D.pins[(typeof s === "number" ? hash(D.today) + s : hash(String(s))) % D.pins.length] : null);
-const art = (s) => (pinFor(s) ? `/pin/${pinFor(s).id}` : D?.art ? `/art/${hash(String(s)) % D.art}` : "");
+// Card i gets image i: shifted by the date in random mode, the same every day when the user fixed their starred images.
+// A Home card the user gave an image keeps it (keyed by what the card is about, so it follows the card around).
+const cardKey = (s) => `${s.cat}|${s.title}`;
+const pinFor = (s) => (typeof s === "number" && SG[s] && D?.pinCards?.[cardKey(SG[s])]) ||
+  (D?.pins?.length ? D.pins[(typeof s === "number" ? (D.pinMode === "fixed" ? 0 : hash(D.today)) + s : hash(String(s))) % D.pins.length] : null);
+const art = (s) => (pinFor(s) ? `/pin/${pinFor(s).id}` : "");
 const obs = (p) => `obsidian://open?vault=${encodeURIComponent(D.vault)}&file=${encodeURIComponent(p.replace(/\.md$/, ""))}`;
 const noteHref = (p) => `#/n/${encodeURIComponent(p)}`;
 const unlink = (s) => s.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => b || a);
@@ -80,36 +87,169 @@ function ambient(url) {
 function clock() {
   const d = new Date();
   $("#time").textContent = d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
-  $("#date").textContent = d.toLocaleDateString(LOCALE, { weekday: "long", day: "numeric", month: "long" });
 }
 function needsYou() { return (D.focus?.length || 0) + due().length + inbox().length + (D.captured?.length || 0); }
 function runningNow() { return (S.tasks || []).filter((t) => !t.end).length; }
 
 function topBar() {
   if (!D) return;
-  const rev = {};
-  for (const n of D.notes) if (n.review_on) { const k = n.review_on < D.today ? D.today : n.review_on; rev[k] = (rev[k] || 0) + 1; }
-  const dailies = new Set(D.dailies);
-  const week = [...Array(7)].map((_, i) => {
-    const d = addDays(D.today, i), dt = new Date(d + "T12:00");
-    const nr = rev[d] || 0;
-    const dots = [...Array(Math.min(nr, 3))].map(() => "<i></i>").join("") + (dailies.has(d) ? '<i class="d"></i>' : "");
-    return `<a class="day ${i ? "" : "today"}" href="#/review" title="${nr} review(s)${dailies.has(d) ? " · daily note" : ""}">
-      <span>${dt.toLocaleDateString(LOCALE, { weekday: "short" })}</span><b>${dt.getDate()}</b><span class="m">${dots}</span></a>`;
-  }).join("");
-  const n = needsYou(), run = runningNow(), live = S.agents.length;
-  $("#week").innerHTML = `${week}<span class="wk-sep"></span>
-    <a class="chipbox" href="#/review">${icon("target", 18)}<span><b>Needs you</b>${n} ${n === 1 ? "item" : "items"}</span></a>
-    <a class="chipbox" href="#/agents">${icon("bolt", 18)}<span><b>Agents</b>${live} active${run ? ` · ${run} ${run === 1 ? "task" : "tasks"}` : ""}</span></a>`;
-
+  calRender();
+  const run = runningNow();
   const { pg, arg } = route();
-  const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
+  // Floating dock: a pill with the current page and the sum of the badges; the dock rises over it on hover.
+  const badges = due().length + run + S.services.filter((s) => !s.ok).length;
+  const here = { "": ["home", "Home"], notes: ["notes", "Notes"], n: ["notes", "Notes"], w: ["notes", "Notes"], review: ["review", "Review"], graph: ["graph", "Graph"],
+    agents: ["agents", "Agents"], a: ["agents", "Agents"], t: ["agents", "Agents"], services: ["services", "Services"], images: ["services", "Images"], s: ["services", "Service"], settings: ["settings", "Settings"] }[pg] || ["home", "Home"];
+  $("#dockwrap").classList.toggle("float", dockMode === "float");
+  document.body.classList.toggle("dock-float", dockMode === "float");
+  $("#dock-pill").innerHTML = `${icon(here[0], 16)}<span>${here[1]}</span>${badges ? `<span class="badge">${badges}</span>` : ""}`;
+  const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) || (pg === "images" && id === "services") ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
     item("notes", "Notes", "notes") + item("review", "Review", "review", due().length) + item("graph", "Graph", "graph") +
-    item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) +
+    item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) + item("settings", "Settings", "settings") +
     (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
-    `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>`;
+    `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>` +
+    `<button data-act="dock-mode" data-tip="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}" aria-label="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}">${icon(dockMode === "float" ? "pin" : "fold", 18)}</button>`;
 }
+
+// ---------------------------------------------------------------- Calendar: the week strip at the top, or a floating pill
+// Items come from Calendar.md (D.calendar) and schedule.json (S.schedule); reviews and daily notes add their own dots.
+// Pinned sits under the top bar; floating shrinks to a pill that opens on hover. The choice is per browser.
+const CAL_KEY = "overlook.calendar", DOCK_KEY = "overlook.dock";
+let dockMode = (() => { try { return localStorage.getItem(DOCK_KEY) === "float" ? "float" : "pinned"; } catch { return "pinned"; } })();
+let calMode = (() => { try { return localStorage.getItem(CAL_KEY) === "float" ? "float" : "pinned"; } catch { return "pinned"; } })();
+let calStart = "", calMonth = false, calDay = "", calFormDay = "", calKind = "event";
+const REPEAT = { once: "once", daily: "every day", weekdays: "weekdays", weekly: "every week" };
+const dayName = (d, o) => new Date(d + "T12:00").toLocaleDateString(LOCALE, o);
+// Where a scheduled task lands: its next run, then every day / weekday / week after it.
+function occursOn(e, d) {
+  const first = e.at.slice(0, 10);
+  if (!e.at || d < first) return false;
+  if (e.repeat === "once") return d === first;
+  const wd = new Date(d + "T12:00").getDay();
+  return e.repeat === "daily" || (e.repeat === "weekdays" ? wd > 0 && wd < 6 : wd === new Date(first + "T12:00").getDay());
+}
+function dayItems(d) {
+  return {
+    events: (D.calendar || []).filter((e) => e.date === d),
+    scheduled: (S.schedule || []).filter((e) => occursOn(e, d)).map((e) => ({ ...e, time: e.at.slice(11) })),
+    reviews: D.notes.filter((n) => n.review_on && (n.review_on === d || (d === D.today && n.review_on < d))),
+  };
+}
+function calDays() {
+  const start = calStart || D.today;
+  if (!calMonth) return [...Array(7)].map((_, i) => addDays(start, i));
+  const first = start.slice(0, 8) + "01", lead = new Date(first + "T12:00").getDay(); // the grid starts on the Sunday before the 1st
+  return [...Array(42)].map((_, i) => addDays(first, i - lead));
+}
+function calCell(d) {
+  const it = dayItems(d), month = (calStart || D.today).slice(0, 7);
+  const dots = [...it.events.map(() => "e"), ...it.scheduled.map(() => "s"), ...it.reviews.map(() => "r")].slice(0, 4)
+    .map((c) => `<i class="${c}"></i>`).join("") + (D.dailies.includes(d) ? '<i class="d"></i>' : "");
+  const title = [it.events.length && `${it.events.length} event(s)`, it.scheduled.length && `${it.scheduled.length} agent task(s)`, it.reviews.length && `${it.reviews.length} review(s)`].filter(Boolean).join(" · ");
+  return `<button type="button" class="day ${d === D.today ? "today" : ""} ${d === calDay ? "sel" : ""} ${calMonth && d.slice(0, 7) !== month ? "out" : ""}" data-act="cal-day" data-d="${d}" title="${title || "Nothing yet"}">
+    ${calMonth ? "" : `<span>${dayName(d, { weekday: "short" })}</span>`}<b>${Number(d.slice(8))}</b><span class="m">${dots}</span></button>`;
+}
+function calRender() {
+  const el = $("#cal");
+  if (!el || !D) return;
+  if (!el.dataset.ready) {
+    el.innerHTML = `<button type="button" class="cal-pill" data-act="cal-open" aria-label="Open the calendar"></button>
+      <div class="cal-body">
+        <div class="cal-strip">
+          <button type="button" class="cal-nav" data-act="cal-prev" aria-label="Previous">${icon("l", 16)}</button>
+          <div class="cal-grid" id="cal-grid"></div>
+          <button type="button" class="cal-nav" data-act="cal-next" aria-label="Next">${icon("r", 16)}</button>
+          <span class="wk-sep"></span><div class="cal-side" id="cal-side"></div>
+        </div>
+        <div class="cal-dayview" id="cal-dayview" hidden><div class="cd-head" id="cd-head"></div><div class="cd-cols"><div class="cd-list" id="cd-list"></div><form class="cd-add" id="cd-add"></form></div></div>
+      </div>`;
+    el.dataset.ready = "1";
+  }
+  el.classList.toggle("float", calMode === "float");
+  el.classList.toggle("month", calMonth);
+  el.classList.toggle("open", !!calDay);
+  document.body.classList.toggle("cal-float", calMode === "float");
+  const n = needsYou(), run = runningNow(), live = S.agents.length, todayCount = Object.values(dayItems(D.today)).flat().length;
+  el.querySelector(".cal-pill").innerHTML = `${icon("target", 16)}<b>${dayName(D.today, { weekday: "short" })} ${Number(D.today.slice(8))}</b><span>${todayCount ? `${todayCount} today` : "calendar"}</span>`;
+  $("#cal-grid").innerHTML = (calMonth ? ["S", "M", "T", "W", "T", "F", "S"].map((w) => `<span class="wd">${w}</span>`).join("") : "") + calDays().map(calCell).join("");
+  $("#cal-side").innerHTML = `<button type="button" class="cal-title" data-act="cal-month" title="${calMonth ? "Week view" : "Month view"}">${dayName(calStart || D.today, { month: "long", year: "numeric" })}</button>
+    <span class="cal-tools"><button type="button" data-act="cal-today" title="Back to today">Today</button>
+      <button type="button" data-act="cal-pin" title="${calMode === "float" ? "Pin it under the top bar" : "Float it in a corner"}">${calMode === "float" ? "Pin" : "Float"}</button></span>
+    <a class="chipbox" href="#/review">${icon("target", 18)}<span><b>Needs you</b>${n} ${n === 1 ? "item" : "items"}</span></a>
+    <a class="chipbox" href="#/agents">${icon("bolt", 18)}<span><b>Agents</b>${live} active${run ? ` · ${run} ${run === 1 ? "task" : "tasks"}` : ""}</span></a>`;
+  calDayRender();
+}
+function calDayRender() {
+  const view = $("#cal-dayview");
+  view.hidden = !calDay;
+  if (!calDay) return;
+  const d = calDay, it = dayItems(d), daily = `${D.daily}/${d}.md`;
+  $("#cd-head").innerHTML = `<h3>${dayName(d, { weekday: "long", month: "long", day: "numeric" })}</h3>
+    ${D.dailies.includes(d) ? `<a class="btn glass" href="${noteHref(daily)}">Daily note</a>` : ""}
+    <button type="button" class="btn glass" data-act="cal-close" aria-label="Close">Close <kbd>Esc</kbd></button>`;
+  const row = (ic, time, text, extra = "", del = "") => `<div class="row"><span class="ic">${icon(ic, 15)}</span><span class="x">${time || "all day"}</span><span class="txt">${text}</span>${extra}${del}</div>`;
+  const x = (attrs) => `<button type="button" class="del" ${attrs} aria-label="Delete">×</button>`;
+  $("#cd-list").innerHTML = [
+    ...it.events.map((e) => row("target", e.time, esc(e.title), "", x(`data-act="cal-del" data-date="${e.date}" data-time="${e.time}" data-title="${esc(e.title)}"`))),
+    ...it.scheduled.map((e) => row("bolt", e.time, `${esc(e.prompt)}<small>${esc([runnerName(e.agent), e.model, e.effort, REPEAT[e.repeat]].filter(Boolean).join(" · "))}${e.error ? ` · <em>${esc(e.error)}</em>` : ""}</small>`, "", x(`data-act="sched-del" data-id="${esc(e.id)}"`))),
+    ...it.reviews.map((n) => row("review", "", `<a href="${noteHref(n.path)}">Review ${esc(n.title)}</a>`)),
+  ].join("") || `<p class="empty">Nothing on this day yet.</p>`;
+  if (calFormDay !== d) { calFormDay = d; calFormRender(); }
+}
+// The add form is drawn when the day changes, never by the refresh, so what you type survives.
+function calFormRender() {
+  const f = $("#cd-add");
+  f.innerHTML = `<div class="seg" role="radiogroup" aria-label="What to add">${[["event", "Event"], ["task", "Agent task"]].map(([k, l]) =>
+      `<button type="button" role="radio" aria-checked="${calKind === k}" class="${calKind === k ? "on" : ""}" data-act="cal-kind" data-k="${k}">${l}</button>`).join("")}</div>
+    ${calKind === "event"
+      ? `<div class="cd-line"><input type="time" id="cd-time" aria-label="Time (optional)"><input id="cd-title" placeholder="What's happening?" aria-label="Event" maxlength="200" autocomplete="off"></div>`
+      : `<div class="cd-line"><input type="time" id="cd-time" required aria-label="Time"><select class="pick" id="cd-repeat" aria-label="Repeat">${Object.entries(REPEAT).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></div>
+        <div class="cd-line">${agentPicker("sch")}</div>
+        <textarea id="cd-prompt" rows="2" placeholder="What should the agent do?" aria-label="Task for the agent"></textarea>`}
+    <div class="cd-line"><small>${calKind === "event" ? "Saved to Calendar.md in your vault." : "Runs at that time while Overlook is on; a missed run happens when it starts."}</small>
+      <button class="btn peach" type="submit">${calKind === "event" ? "Add" : "Schedule"}</button></div>`;
+  if (calKind === "task") { $("#sch-agent").onchange = () => runOptions(false, "sch"); $("#sch-model").onchange = () => runOptions(true, "sch"); runOptions(false, "sch"); }
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const time = $("#cd-time").value;
+    try {
+      if (calKind === "event") {
+        const title = $("#cd-title").value.trim();
+        if (!title) return $("#cd-title").focus();
+        await api("/api/calendar", { date: calDay, time, title });
+        $("#cd-title").value = ""; $("#cd-time").value = ""; toast("Added to the calendar");
+      } else {
+        const prompt = $("#cd-prompt").value.trim();
+        if (!time || !prompt) return (time ? $("#cd-prompt") : $("#cd-time")).focus();
+        await api("/api/schedule", { at: `${calDay}T${time}`, repeat: $("#cd-repeat").value, prompt, ...runChoice("sch") });
+        $("#cd-prompt").value = ""; toast("Scheduled");
+      }
+      [D, S] = await Promise.all([api("/api"), api("/api/system")]); calRender();
+    } catch (err) { toast(err.message); }
+  };
+}
+const calShift = (dir) => {
+  const start = calStart || D.today;
+  if (!calMonth) calStart = addDays(start, dir * 7);
+  else { const d = new Date(start.slice(0, 8) + "01T12:00"); d.setMonth(d.getMonth() + dir); calStart = d.toLocaleDateString("sv"); }
+  calRender();
+};
+const CAL_ACTIONS = {
+  "cal-day": (el) => { calDay = calDay === el.dataset.d ? "" : el.dataset.d; calRender(); },
+  "cal-close": () => { calDay = ""; calRender(); },
+  "cal-prev": () => calShift(-1), "cal-next": () => calShift(1),
+  "cal-today": () => { calStart = ""; calDay = D.today; calRender(); },
+  "cal-month": () => { calMonth = !calMonth; calStart = calMonth ? (calStart || D.today).slice(0, 8) + "01" : ""; calRender(); },
+  "dock-mode": () => { dockMode = dockMode === "float" ? "pinned" : "float"; try { localStorage.setItem(DOCK_KEY, dockMode); } catch {} document.activeElement?.blur(); topBar(); },
+  "cal-pin": () => { calMode = calMode === "float" ? "pinned" : "float"; try { localStorage.setItem(CAL_KEY, calMode); } catch {} calRender(); },
+  "cal-open": () => { calDay = calDay || D.today; calRender(); },
+  "cal-kind": (el) => { calKind = el.dataset.k; calFormRender(); },
+  "cal-del": async (el) => { await api("/api/calendar/delete", { date: el.dataset.date, time: el.dataset.time, title: el.dataset.title }).catch((e) => toast(e.message)); D = await api("/api"); calRender(); },
+  "sched-del": async (el) => { await api("/api/schedule/delete", { id: el.dataset.id }).catch((e) => toast(e.message)); S = await api("/api/system"); calRender(); },
+  "set-cal": (el) => { calMode = el.dataset.v; try { localStorage.setItem(CAL_KEY, calMode); } catch {} calRender(); el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }); },
+  "set-dock": (el) => { dockMode = el.dataset.v; try { localStorage.setItem(DOCK_KEY, dockMode); } catch {} topBar(); el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }); },
+};
 
 // ---------------------------------------------------------------- Home: suggestion carousel
 function suggestions() {
@@ -142,7 +282,8 @@ function home() {
         </div>
         <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
       </div>
-      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}</div>
+      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
+        ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>
     </article>`;
   };
   main.innerHTML = `<section class="car" id="car">${SG.map(card).join("")}
@@ -370,13 +511,17 @@ function agents() {
   const ready = (S.runners || []).filter((r) => r.ready);
   main.innerHTML = `<div class="ph"><h1>Agents</h1><p>Put any agent from <code>agents.json</code> to work on the vault, or watch the ones already running.</p></div>
     <h3>Put an agent to work</h3>
-    <form class="talk glass" id="run"><select id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select><select id="run-model" aria-label="Model" hidden></select><select id="run-effort" aria-label="Effort" hidden></select>
+    <form class="task glass" id="run">
       <textarea id="run-prompt" rows="2" placeholder="What should it do in the vault? Enter runs, Shift+Enter adds a line" aria-label="Task for the agent"></textarea>
-      <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+      <div class="task-bar">
+        ${agentPicker("run")}
+        <button class="btn peach" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+      </div>
       <small>${ready.length ? "CLI agents run in the vault folder; API agents can only list, search, read and write notes." : "No agent is set up yet: see README › Agents."}</small></form>
     <div id="agents-body"></div>`;
   $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
-  $("#run-agent").onchange = runOptions;
+  $("#run-agent").onchange = () => runOptions();
+  $("#run-model").onchange = () => runOptions(true);
   runOptions();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
@@ -390,7 +535,7 @@ function agentsBody() {
     <h3>Running now</h3><div class="cards">${S.agents.map((a) => {
       const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
       return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${icon(ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
-        <div class="ft"><span class="pill">pid ${a.pid}</span><span class="pill">${duration(a.seconds)}</span><span class="watch">watch live ${icon("r", 14)}</span></div></a>`;
+        <div class="ft"><span class="pill">${duration(a.seconds)}</span><span class="watch">watch live ${icon("r", 14)}</span></div></a>`;
     }).join("") || '<p class="empty">No agents running.</p>'}</div>
     ${S.background?.length ? `<h3>In the background</h3><div class="cards">${S.background.map((f) => `<a class="ag glass link" href="#/a/${f.key}">
         <div class="hd"><span class="ic">${icon("agents")}</span><div><h4>${esc(f.title)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
@@ -410,13 +555,22 @@ function agentsBody() {
     }).join("") || '<p class="empty">No runs logged.</p>'}</div>
     <h3>Findings</h3><div class="list glass">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`; }).join("")}</div>`;
 }
-// Model and effort pickers follow the chosen agent: only what agents.json lists for it.
-function runOptions() {
-  const r = S.runners?.find((x) => x.id === $("#run-agent")?.value) || {};
-  const fill = (id, list = [], pick) => { const el = $(id); el.hidden = !list.length; el.innerHTML = list.map((v) => `<option ${v === pick ? "selected" : ""}>${esc(v)}</option>`).join(""); };
-  fill("#run-model", r.models, r.models?.[0]); fill("#run-effort", r.efforts, r.effort);
+// Model and effort pickers follow the chosen agent: only what agents.json lists for it. Effort levels can differ per model.
+function runOptions(keepModel, p = "run") {
+  const r = S.runners?.find((x) => x.id === $(`#${p}-agent`)?.value) || {}, ms = r.models || [], sel = $(`#${p}-model`);
+  if (!keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
+  const es = ms.find((m) => m.id === sel.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
+  const seg = $(`#${p}-effort`);
+  seg.hidden = !es.length;
+  seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
 }
-const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort")?.value });
+const runChoice = (p = "run") => ({ agent: $(`#${p}-agent`)?.value, model: $(`#${p}-model`)?.hidden ? undefined : $(`#${p}-model`)?.value, effort: $(`#${p}-effort`)?.hidden ? undefined : $(`#${p}-effort .on`)?.dataset.v });
+// Agent, model and effort pickers; runOptions(false, p) fills the last two for the chosen agent.
+const agentPicker = (p) => `<select class="pick" id="${p}-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
+  <select class="pick" id="${p}-model" aria-label="Model" hidden></select><div class="seg" id="${p}-effort" role="radiogroup" aria-label="Effort" hidden></div>`;
+// "Open in…" buttons: the commands agents.json gives the agent; the ones that need a session only when there is one.
+const openButtons = (runner, attrs, hasSession) => (runner?.open || []).filter((o) => !o.session || hasSession)
+  .map((o) => `<button class="btn glass" data-act="open" data-via="${esc(o.label)}" ${attrs}>${icon("ext", 14)} ${esc(o.label)}</button>`).join("");
 const taskMeta = (t) => [runnerName(t.agent), t.model, t.effort].filter(Boolean).join(" · ");
 async function runPrompt() {
   const t = $("#run-prompt"), prompt = t.value.trim();
@@ -439,7 +593,8 @@ async function taskPage(id) {
     if (signature === taskLast) return;
     taskLast = signature;
     $("#task-head").innerHTML = `<h1>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))}</p>
-      <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}</div>`;
+      <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}
+        ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}</div>`;
     const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
     feed.innerHTML = t.events.map((e) => `<div class="row ev ${e.t}">
         <span class="who">${esc(e.t === "tool" ? e.name : e.t === "you" ? "task" : e.t === "text" ? runnerName(t.agent) : e.t)}</span>
@@ -474,9 +629,9 @@ async function agentPage(key) {
     if (signature === agLast) return;
     agLast = signature;
     const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
-    const status = a.live ? "running" : STATE[a.state] || "idle";
-    $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.pid ? ` · pid ${a.pid}` : ""}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
-      <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span><small style="color:var(--muted)">${status} · refreshes every 3 s</small></div>`;
+    $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
+      <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span>
+        ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(key)}"`, true)}</div>`;
     $("#agent-needs").innerHTML = a.needs ? `<div class="needs glass"><b>Needs you</b>${fmt(a.needs)}</div>` : "";
     $("#talk-hint").textContent = a.name === "agy" ? "Continues this conversation in AGY (agy -p --conversation)."
       : a.live ? "This session is open in a terminal: the reply comes in a background copy, and the terminal stays intact."
@@ -507,9 +662,91 @@ async function agentPage(key) {
   ambient(art(`agent ${key}`));
 }
 
+// ---------------------------------------------------------------- Images (what the cards show)
+// Two sources: a folder of your own photos and the Pinterest board. Hide an image and it never shows; star some and
+// switch to "Starred only" to fix which images the cards use, in that order.
+let imgTimer = null, imgSource = "";
+async function imagesPage() {
+  clearTimeout(imgTimer);
+  const p = await api("/api/images").catch(() => null);
+  if (route().pg !== "images") return;
+  if (!p) { main.innerHTML = '<p class="empty">Images are not available.</p>'; return; }
+  const pin = p.pinterest, visible = p.images.filter((i) => !p.hidden.includes(i.id));
+  const starred = p.starred.filter((id) => visible.some((i) => i.id === id));
+  const inUse = p.mode === "fixed" && starred.length ? starred.length : visible.length;
+  const count = (src) => p.images.filter((i) => i.source === src).length;
+  const list = p.images.filter((i) => !imgSource || i.source === imgSource);
+  const boardUrl = pin.board ? `https://www.pinterest.com/${pin.board.replace(/^\/|\/$/g, "")}/` : "";
+  main.innerHTML = `<div class="ph"><h1>Images</h1><p>${p.images.length} images · ${inUse} in use on the cards</p></div>
+    <div class="img-sources">
+      <form class="img-set glass" id="img-folder">
+        <b>Your photos</b><small>${p.folder ? (p.folderOk ? `${count("folder")} in the folder` : "folder not found") : "a folder on this computer"}</small>
+        <input id="img-folder-path" value="${esc(p.folder)}" placeholder="~/Pictures/my-photos" autocomplete="off" aria-label="Folder with your photos">
+        <button class="btn glass" type="submit">Save</button>
+      </form>
+      <form class="img-set glass" id="img-board-form">
+        <b>Pinterest</b><small>${pin.board ? `${count("pinterest")} from <a href="${esc(boardUrl)}" target="_blank">${esc(pin.board)} ↗</a>` : "a board"}${pin.status === "error" ? ` · <em class="bad">${esc(pin.error)}</em>` : ""}</small>
+        <input id="img-board" value="${esc(pin.board)}" placeholder="user/board" autocomplete="off" aria-label="Pinterest board">
+        <button class="btn glass" type="submit">Save</button>
+        <button class="btn glass" type="button" data-act="pinsync" ${pin.syncing || !pin.board ? "disabled" : ""}>${pin.syncing ? "Syncing…" : "Sync"}</button>
+      </form>
+    </div>
+    <div class="img-bar">
+      <div class="seg" role="radiogroup" aria-label="Show">${[["", `All ${p.images.length}`], ["folder", `Your photos ${count("folder")}`], ["pinterest", `Pinterest ${count("pinterest")}`]].map(([k, l]) =>
+        `<button type="button" role="radio" aria-checked="${imgSource === k}" class="${imgSource === k ? "on" : ""}" data-act="img-source" data-k="${k}">${l}</button>`).join("")}</div>
+      <span class="sp"></span>
+      <div class="seg" role="radiogroup" aria-label="Which images the cards use">${[["random", "Random, changes daily"], ["fixed", `Starred only${starred.length ? ` (${starred.length})` : ""}`]].map(([k, l]) =>
+        `<button type="button" role="radio" aria-checked="${p.mode === k}" class="${p.mode === k ? "on" : ""}" data-act="img-mode" data-k="${k}">${l}</button>`).join("")}</div>
+    </div>
+    ${p.mode === "fixed" && !starred.length ? '<p class="empty">No starred images yet, so the cards still rotate. Star the ones you want.</p>' : ""}
+    <div class="img-grid">${list.map((im) => {
+      const off = p.hidden.includes(im.id), n = p.starred.indexOf(im.id) + 1;
+      return `<figure class="img ${off ? "off" : ""} ${n ? "star" : ""}">
+        <img src="/pin/${im.id}?thumb" loading="lazy" alt="${esc(im.title || "Image")}">
+        ${n ? `<span class="n">${n}</span>` : ""}<span class="src">${im.source === "folder" ? "yours" : "pinterest"}</span>
+        <figcaption><button type="button" data-act="img-star" data-id="${im.id}" aria-pressed="${!!n}" title="${n ? "Unstar" : "Star: use it when the cards show starred images only"}">${n ? "★ Starred" : "☆ Star"}</button>
+          <button type="button" data-act="img-hide" data-id="${im.id}" aria-pressed="${off}">${off ? "Show" : "Hide"}</button>
+          ${im.link ? `<a href="${esc(im.link)}" target="_blank" aria-label="Open on Pinterest">↗</a>` : ""}</figcaption></figure>`;
+    }).join("") || `<p class="empty">${p.images.length ? "Nothing here." : "No images yet: point to a folder of your photos, or set a Pinterest board."}</p>`}</div>`;
+  $("#img-folder").onsubmit = async (e) => { e.preventDefault(); if (await savePrefs({ folder: $("#img-folder-path").value })) toast("Folder saved"); };
+  $("#img-board-form").onsubmit = async (e) => { e.preventDefault(); if (await savePrefs({ board: $("#img-board").value })) toast("Board saved, syncing it now"); };
+  if (pin.syncing) imgTimer = setTimeout(imagesPage, 2500); // follow a sync in progress
+  ambient(art("images"));
+}
+async function savePrefs(change) {
+  let ok = true;
+  try { await api("/api/images/prefs", change); } catch (e) { toast(e.message); ok = false; }
+  D = await api("/api");
+  imagesPage();
+  return ok;
+}
+// The picker: every visible image of the board, plus Automatic to hand the card back to the rotation.
+let pickKey = "";
+const IMG_ACTIONS = {
+  "pick-open": async (el) => {
+    const s = SG[Number(el.dataset.i)], p = await api("/api/images").catch(() => null);
+    if (!s || !p) return;
+    pickKey = cardKey(s);
+    const cur = D.pinCards?.[pickKey]?.id, imgs = p.images.filter((i) => !p.hidden.includes(i.id));
+    $("#picker").innerHTML = `<div class="pk-head"><h3>Image for “${esc(s.title)}”</h3><button type="button" class="btn glass" data-act="pick" data-id="">Automatic</button>
+        <button type="button" class="btn glass" data-act="pick-close" aria-label="Close">Close <kbd>Esc</kbd></button></div>
+      <div class="pk-grid">${imgs.map((im) => `<button type="button" class="${im.id === cur ? "on" : ""}" data-act="pick" data-id="${im.id}" aria-label="${esc(im.title || "Image")}"><img src="/pin/${im.id}?thumb" loading="lazy" alt=""></button>`).join("")}</div>`;
+    $("#picker").showModal();
+  },
+  "pick-close": () => $("#picker").close(),
+  pick: async (el) => {
+    try { await api("/api/images/prefs", { cards: { [pickKey]: el.dataset.id || null } }); } catch (e) { return toast(e.message); }
+    $("#picker").close(); D = await api("/api"); home(); toast(el.dataset.id ? "Image chosen for this card" : "Back to automatic");
+  },
+  "img-mode": (el) => savePrefs({ mode: el.dataset.k }),
+  "img-source": (el) => { imgSource = el.dataset.k; imagesPage(); },
+  "img-hide": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ hidden: p.hidden.includes(id) ? p.hidden.filter((x) => x !== id) : [...p.hidden, id] }); },
+  "img-star": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ starred: p.starred.includes(id) ? p.starred.filter((x) => x !== id) : [...p.starred, id] }); },
+};
+
 // ---------------------------------------------------------------- Services
 function services() {
-  main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps and Pinterest. Listed in <code>services.json</code>.</p></div>
+  main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps and Pinterest. Listed in <code>services.json</code>.</p><div class="r"><a class="btn glass" href="#/images">Manage images</a></div></div>
     <div class="cards">${S.services.map((s) => {
       if (s.internal === "pinterest") {
         const p = s.pinterest || {};
@@ -517,8 +754,9 @@ function services() {
         return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icon || "book")}</span>
             <div><h4>${esc(s.name)}</h4><small>${esc(p.status === "error" ? p.error : s.desc)}</small></div><span class="live ${s.ok ? "" : p.status === "error" ? "off" : "idle"}" style="margin-left:auto"></span></div>
           <div class="ft"><span class="pill">${esc(p.board || "pinterest")}</span><span class="pill">${p.total ?? 0} images</span>
-            <span style="margin-left:auto;display:flex;gap:6px"><button class="btn glass" data-act="pinsync" ${p.syncing ? "disabled" : ""}>${p.syncing ? "Syncing…" : "Sync now"}</button>
-            <a class="btn peach" href="${esc(board)}" target="_blank">Open ${icon("ext", 14)}</a></span></div></div>`;
+            <span style="margin-left:auto;display:flex;gap:6px"><button class="btn glass" data-act="pinsync" ${p.syncing ? "disabled" : ""}>${p.syncing ? "Syncing…" : "Sync"}</button>
+            <a class="btn glass" href="${esc(board)}" target="_blank" aria-label="Open the board on Pinterest" data-tip="Open on Pinterest">${icon("ext", 14)}</a>
+            <a class="btn peach" href="#/images">Manage images</a></span></div></div>`;
       }
       return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icon || "services")}</span>
           <div><h4>${esc(s.name)}</h4><small>${esc(s.desc)}</small></div><span class="live ${s.ok ? "" : "off"}" style="margin-left:auto"></span></div>
@@ -543,14 +781,94 @@ function service(id) {
   ambient(art(s.name));
 }
 
+// ---------------------------------------------------------------- Settings
+async function settingsPage() {
+  const cfg = await api("/api/settings").catch(() => null);
+  if (route().pg !== "settings") return;
+  if (!cfg) { main.innerHTML = '<p class="empty">Settings are not available.</p>'; return; }
+  const seg = (act, cur) => `<div class="seg" role="radiogroup">${[["pinned", "Pinned"], ["float", "Floating"]].map(([k, l]) =>
+    `<button type="button" role="radio" aria-checked="${cur === k}" class="${cur === k ? "on" : ""}" data-act="${act}" data-v="${k}">${l}</button>`).join("")}</div>`;
+  main.innerHTML = `<div class="ph"><h1>Settings</h1><p>One place for layout, vault, card images, agents and services.</p></div>
+    <h3>Appearance</h3>
+    <div class="img-sources">
+      <div class="img-set glass"><b>Calendar</b><small>Week strip under the top bar, or a pill that opens on hover.</small>${seg("set-cal", calMode)}</div>
+      <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill.</small>${seg("set-dock", dockMode)}</div>
+    </div>
+    <h3>Vault &amp; server</h3>
+    <form class="task glass" id="set-vault">
+      <div class="set-row">
+        <label>Vault path <input id="set-vault-dir" value="${esc(cfg.vaultDir)}" autocomplete="off"></label>
+        <label>Language <select class="pick" id="set-vault-lang"><option value="en" ${cfg.vaultLang === "en" ? "selected" : ""}>English (en)</option><option value="pt" ${cfg.vaultLang === "pt" ? "selected" : ""}>Portuguese (pt)</option></select></label>
+        <label>Port <input id="set-port" type="number" min="1024" max="65535" value="${esc(cfg.port)}"></label>
+        <button class="btn peach" type="submit">Save</button>
+      </div>
+      <small>Vault path and language apply immediately and persist to <code>.env</code>; port takes effect on the next restart.</small>
+    </form>
+    <h3>Card images</h3>
+    <form class="task glass" id="set-images">
+      <div class="set-row">
+        <label>Photo folder <input id="set-folder" value="${esc(cfg.folder)}" placeholder="~/Pictures/my-photos" autocomplete="off"></label>
+        <label>Pinterest board <input id="set-board" value="${esc(cfg.board)}" placeholder="user/board" autocomplete="off"></label>
+        <a class="btn glass" href="#/images">Manage images</a>
+        <button class="btn peach" type="submit">Save</button>
+      </div>
+      <small>Saved in <code>pinterest.json</code>. Use Manage images to star, hide or pick images per card.</small>
+    </form>
+    <h3>Agents (<code>agents.json</code>)</h3>
+    <form class="task glass" id="set-agents-form">
+      <textarea class="code" id="set-agents" rows="10" spellcheck="false" aria-label="Agents JSON">${esc(JSON.stringify(cfg.agents, null, 2))}</textarea>
+      <div class="task-bar"><small>Each agent has <code>id</code>, <code>name</code>, and <code>run</code> (CLI command with <code>{prompt}</code>, <code>{model}</code>, <code>{effort}</code>, <code>{session}</code>) or <code>api</code> (<code>anthropic</code> / <code>openai</code>), plus optional <code>models</code>, <code>efforts</code> and <code>open</code> commands.</small>
+        <button class="btn peach" type="submit">Save</button></div>
+    </form>
+    <h3>Services (<code>services.json</code>)</h3>
+    <form class="task glass" id="set-services-form">
+      <textarea class="code" id="set-services" rows="8" spellcheck="false" aria-label="Services JSON">${esc(JSON.stringify(cfg.services, null, 2))}</textarea>
+      <div class="task-bar"><small>Each service has <code>id</code>, <code>name</code>, <code>url</code> and <code>desc</code> (plus optional <code>icon</code>, <code>dock</code>, <code>width</code>, <code>max</code>, <code>proxy</code>, <code>tailnet</code>).</small>
+        <button class="btn peach" type="submit">Save</button></div>
+    </form>`;
+  $("#set-vault").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/settings", { vaultDir: $("#set-vault-dir").value, vaultLang: $("#set-vault-lang").value, port: Number($("#set-port").value) });
+      [D, S] = await Promise.all([api("/api"), api("/api/system")]); topBar(); toast("Vault & server settings saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-images").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/settings", { folder: $("#set-folder").value, board: $("#set-board").value });
+      D = await api("/api"); toast("Card image sources saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-agents-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const list = JSON.parse($("#set-agents").value);
+      await api("/api/settings", { agents: list });
+      S = await api("/api/system"); topBar(); toast("Agents saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-services-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const list = JSON.parse($("#set-services").value);
+      await api("/api/settings", { services: list });
+      S = await api("/api/system"); topBar(); toast("Services saved");
+    } catch (err) { toast(err.message); }
+  };
+  ambient(art("settings"));
+}
+
 // ---------------------------------------------------------------- routes and events
-const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
+const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], images: [imagesPage, "Images"], settings: [settingsPage, "Settings"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
 function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
 function render() {
   if (!D) return;
+  if (document.activeElement?.closest?.("#dockwrap")) document.activeElement.blur(); // a floating dock folds after you pick a page
   graphStop?.(); graphStop = null;
   const { pg, arg } = route();
   $("#crumb").textContent = pg === "a" ? S.background?.find((x) => x.key === arg)?.title || AGENT_NAME[S.agents.find((x) => x.key === arg)?.name]?.[0] || "Agent" : pg === "s" ? S.services.find((s) => s.id === arg)?.name || "Service" : PAGES[pg][1];
+  document.body.classList.toggle("home", !pg);
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
   if (pg !== "s") $("#svcbar").innerHTML = "";
   main.style.animation = "none"; main.offsetHeight; main.style.animation = "";
@@ -559,6 +877,7 @@ function render() {
 }
 
 const ACTIONS = {
+  ...CAL_ACTIONS, ...IMG_ACTIONS,
   prev: () => move(-1), next: () => move(1), go: (el) => { idx = Number(el.dataset.i); place(); },
   filter: (el) => { filter = el.dataset.k; notes(); },
   show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
@@ -566,6 +885,10 @@ const ACTIONS = {
   routine: async (el) => {
     try { const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() }); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
   },
+  open: async (el) => {
+    try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
+  },
+  effort: (el) => el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }),
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";
@@ -573,7 +896,7 @@ const ACTIONS = {
       const p = await api("/api/pinterest/sync", {});
       toast(p.status === "ok" ? `${p.images.length} images in the cache` : p.error || "Sync failed");
     } catch (e) { toast(e.message); }
-    [D, S] = await Promise.all([api("/api"), api("/api/system")]); services(); topBar();
+    [D, S] = await Promise.all([api("/api"), api("/api/system")]); render();
   },
   reload: () => { const f = $("#svcf"); f.src = f.src; },
   capture: () => { $("#capture-day").textContent = D.today; $("#capture").showModal(); $("#capture-text").focus(); },
@@ -582,6 +905,8 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("a[target]")) return;
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
+  const res = e.target.closest(".ev.result");
+  if (res && !getSelection().toString()) res.classList.toggle("open");
   const side = e.target.closest(".card.side");
   if (side) { e.preventDefault(); idx = Number(side.dataset.i); place(); }
 });
@@ -596,6 +921,7 @@ $("#capture-text").addEventListener("keydown", async (e) => {
   D = await api("/api"); if (!route().pg) home(); topBar();
 });
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && calDay && !document.querySelector("dialog[open]")) { calDay = ""; calRender(); return; }
   if (e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
   if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }

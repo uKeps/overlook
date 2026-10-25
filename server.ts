@@ -4,14 +4,17 @@
 //   bun server.ts map     -> one line per note, so agents can find their way
 //   bun server.ts today   -> what the Home shows, as short text for an agent
 import { resolve, basename, dirname } from "node:path";
-import { readdirSync, readlinkSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { readlinkSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
-import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback } from "./pinterest";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning } from "./tasks";
+import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv } from "./pinterest";
+import { setPrefs, shownImages, imagesState, imageFile } from "./images";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
 
-const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
+const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
+let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
 const PORT = Number(process.env.PORT) || 3333;
+let cfgPort = PORT;
 // Machine name on Tailscale, read at startup: survives renaming the machine.
 const TAILNET = (() => {
   try { return JSON.parse(Bun.spawnSync(["tailscale", "status", "--json"]).stdout.toString()).Self.DNSName.replace(/\.$/, ""); } catch { return ""; }
@@ -19,24 +22,24 @@ const TAILNET = (() => {
 // Accepted Host: loopback on the right port or the tailnet name (blocks DNS rebinding without locking out the phone).
 const hostOk = (h: string, port: number) =>
   h === `127.0.0.1:${port}` || h === `localhost:${port}` || (!!TAILNET && (h === TAILNET || h.startsWith(`${TAILNET}:`)));
-const VAULT = basename(ROOT);
-const ART = resolve(process.env.ART_DIR || `${homedir()}/Pictures/Wallpapers`); // card art when there is no Pinterest
+let VAULT = basename(ROOT);
 
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
   en: {
-    daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md",
+    daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md",
     keys: { type: "type", review: "review_on", interval: "interval" }, types: {} as Record<string, string>,
     routines: { morning: "Follow the morning routine in the Routines section of AGENTS.md.", inbox: "Follow the inbox routine in the Routines section of AGENTS.md." },
   },
   pt: {
-    daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md",
+    daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
     keys: { type: "tipo", review: "revisar_em", interval: "intervalo" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
   },
 };
-const L = LAYOUTS[process.env.VAULT_LANG === "pt" ? "pt" : "en"];
-const ROUTINES: Record<string, string> = L.routines;
+let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
+let L = LAYOUTS[vaultLang];
+let ROUTINES: Record<string, string> = L.routines;
 
 type Note = {
   path: string; title: string; folder: string; type: string; area: string; tags: string[];
@@ -102,6 +105,41 @@ async function section(name: string) {
   return sec.split("\n").filter((l) => /^\s*- /.test(l)).map((l) => l.replace(/^\s*- (\[.\] )?/, ""));
 }
 
+// Calendar.md at the vault root: one line per item, `- YYYY-MM-DD HH:MM · what` (the time is optional). Plain Markdown,
+// so Obsidian shows it and agents can read it. Overlook keeps the lines sorted and leaves everything else alone.
+type CalItem = { date: string; time: string; title: string };
+const CAL_LINE = /^- (\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))? · (.+)$/;
+const calLine = (e: CalItem) => `- ${e.date}${e.time ? ` ${e.time}` : ""} · ${e.title}`;
+const calKey = (e: CalItem) => `${e.date} ${e.time}`;
+async function calendar(): Promise<CalItem[]> {
+  const f = Bun.file(`${ROOT}/${L.calendar}`);
+  if (!(await f.exists())) return [];
+  return (await f.text()).split("\n").flatMap((l) => { const m = l.match(CAL_LINE); return m ? [{ date: m[1], time: m[2] ?? "", title: m[3] }] : []; });
+}
+function calItem(b: any): CalItem | string {
+  const date = String(b?.date ?? ""), time = String(b?.time ?? ""), title = String(b?.title ?? "").replace(/\s+/g, " ").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(Date.parse(date))) return "date must be YYYY-MM-DD";
+  if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return "time must be HH:MM";
+  if (!title || title.length > 200) return "title must be 1 to 200 characters";
+  return { date, time, title };
+}
+async function calendarEdit(e: CalItem, remove: boolean) {
+  const f = Bun.file(`${ROOT}/${L.calendar}`);
+  const ls = (await f.exists()) ? (await f.text()).replace(/\n$/, "").split("\n")
+    : ["# Calendar", "", "One line per item: `- YYYY-MM-DD HH:MM · what` (the time is optional). Overlook reads and writes this file.", ""];
+  if (remove) {
+    const i = ls.indexOf(calLine(e));
+    if (i < 0) return false;
+    ls.splice(i, 1);
+  } else {
+    const items = ls.map((l, i) => [i, l.match(CAL_LINE)] as const).filter(([, m]) => m);
+    const after = items.find(([, m]) => calKey({ date: m![1], time: m![2] ?? "", title: "" }) > calKey(e));
+    ls.splice(after ? after[0] : items.length ? items[items.length - 1][0] + 1 : ls.length, 0, calLine(e));
+  }
+  await Bun.write(f, ls.join("\n") + "\n");
+  return true;
+}
+
 async function state() {
   const ns = await notes();
   const dailies: string[] = [];
@@ -111,8 +149,8 @@ async function state() {
     notes: ns, missing: (await missing(ns)).slice(0, 10),
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
-    art: art().length,
-    pins: pinterestState().images,
+    calendar: await calendar(),
+    ...(({ pins, mode, cards }) => ({ pins, pinMode: mode, pinCards: cards }))(shownImages()),
   };
 }
 
@@ -163,24 +201,6 @@ async function capture(text: string) {
   await Bun.write(f, ls.join("\n"));
 }
 
-// 4K wallpapers are heavy in the browser and over Tailscale: serve a 1600px copy, generated once.
-// ponytail: generated on first request, blocking the server ~0.3 s per image; pre-generate if it bothers.
-const CACHE = `${homedir()}/.cache/hq-arte`;
-// "amb" is the ambient background: tiny, already blurred and darkened, so the CSS needs no filter (it cost ~10 fps).
-async function thumbnail(name: string, amb: boolean) {
-  const out = `${CACHE}/${name.replace(/\.\w+$/, "")}${amb ? "-amb" : ""}.jpg`;
-  if (!(await Bun.file(out).exists())) {
-    mkdirSync(CACHE, { recursive: true });
-    const args = amb ? ["-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135"] : ["-resize", "1600x1600>"];
-    if (Bun.spawnSync(["magick", `${ART}/${name}`, ...args, "-quality", "78", out]).exitCode !== 0) return Bun.file(`${ART}/${name}`);
-  }
-  return Bun.file(out);
-}
-
-function art() {
-  try { return readdirSync(ART).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort(); } catch { return []; }
-}
-
 // Live agents: processes named in agents.json (claude/agy/codex/gemini by default), with the folder they run in.
 // "key" identifies the conversation (c:<session> for Claude, g:<conversation> for AGY): the agent page outlives the process.
 const CLAUDE = Bun.which("claude") ?? `${homedir()}/.local/bin/claude`, AGY = Bun.which("agy") ?? `${homedir()}/.local/bin/agy`;
@@ -215,11 +235,12 @@ async function background() {
 
 type Service = { id: string; name: string; url: string; desc: string; icon?: string; dock?: boolean; width?: number; max?: number; proxy?: number; tailnet?: number; internal?: string };
 // services.json is personal (not in git); without it the list is empty.
-const serviceList = (): Promise<Service[]> => Bun.file(`${import.meta.dir}/services.json`).json().catch(() => []);
+const serviceList = (): Service[] => { try { return JSON.parse(readFileSync(`${import.meta.dir}/services.json`, "utf8")); } catch { return []; } };
 
 // What an agent is doing, read from its conversation on disk. Read-only.
 type Event = { t: "you" | "text" | "tool" | "result"; txt: string; name?: string; at?: string };
 const clip = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "…" : s);
+const MESSAGE = 20_000; // a whole message reads in full; the cap only guards against a runaway one
 const ID = /^[0-9a-f-]{8,64}$/; // session/conversation ids become file paths: hex and dash only, no ../
 
 async function claudeConversation(sessionId: string): Promise<Event[]> {
@@ -236,7 +257,7 @@ async function claudeConversation(sessionId: string): Promise<Event[]> {
     const at = d.timestamp, c = d.message.content;
     const items = typeof c === "string" ? [{ type: "text", text: c }] : Array.isArray(c) ? c : [];
     for (const x of items) {
-      if (x.type === "text" && x.text?.trim() && !x.text.startsWith("<")) ev.push({ t: d.type === "user" ? "you" : "text", txt: clip(x.text.trim(), 1500), at });
+      if (x.type === "text" && x.text?.trim() && !x.text.startsWith("<")) ev.push({ t: d.type === "user" ? "you" : "text", txt: clip(x.text.trim(), MESSAGE), at });
       else if (x.type === "tool_use") {
         const i = x.input ?? {};
         ev.push({ t: "tool", name: x.name, txt: clip(String(i.description ?? i.command ?? i.file_path ?? i.pattern ?? i.url ?? i.prompt ?? JSON.stringify(i)), 300), at });
@@ -268,7 +289,7 @@ async function agyConversation(id: string): Promise<Event[]> {
         let det = ""; try { const o = JSON.parse(j!.slice(j!.indexOf("{"), j!.lastIndexOf("}") + 1)); det = o.toolSummary ?? o.CommandLine ?? o.Path ?? ""; } catch {}
         const name = new TextDecoder().decode(r.step_payload).match(/call_\d+[^a-z_]*([a-z_]{3,})/)?.[1] ?? "tool";
         ev.push({ t: "tool", name, txt: clip(String(det || j || "").replace(homedir(), "~"), 300) });
-      } else if (r.step_type === 15 && sentences.length) ev.push({ t: "text", txt: clip(sentences[sentences.length - 1], 1500) });
+      } else if (r.step_type === 15 && sentences.length) ev.push({ t: "text", txt: clip(sentences[sentences.length - 1], MESSAGE) });
     }
     return ev.slice(-80);
   } finally { db.close(); }
@@ -290,7 +311,7 @@ async function agent(key: string) {
   const job = readJson(`${homedir()}/.claude/jobs/${id.slice(0, 8)}/state.json`);
   if (!events.length) {
     const tl = await Bun.file(`${homedir()}/.claude/jobs/${id.slice(0, 8)}/timeline.jsonl`).text().catch(() => "");
-    events = tl.split("\n").flatMap((l) => { try { const d = JSON.parse(l); return [{ t: "text" as const, txt: clip(d.text || `${d.state}: ${d.detail}`, 1500), at: d.at }]; } catch { return []; } }).slice(-80);
+    events = tl.split("\n").flatMap((l) => { try { const d = JSON.parse(l); return [{ t: "text" as const, txt: clip(d.text || `${d.state}: ${d.detail}`, MESSAGE), at: d.at }]; } catch { return []; } }).slice(-80);
   }
   if (!events.length && !live && !s) return null;
   return { name: "claude", key, live: !!live, pid: live?.pid, seconds: live?.seconds, cwd: live?.cwd ?? String(s?.cwd ?? "").replace(homedir(), "~"),
@@ -330,9 +351,67 @@ async function services() {
 
 // Agents you can put to work from the Agents page, from agents.json (or the built-in CLIs).
 const runners = () => loadAgents(import.meta.dir).filter((a) => a.run || a.api)
-  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a) }));
+  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a) }));
+// "Open in…" for a task (its session, in the vault) or a live/background session (its own folder). Nothing comes from the client but ids.
+async function open(b: any) {
+  const all = loadAgents(import.meta.dir);
+  if (typeof b.task === "string") {
+    const t = getTask(b.task), a = t && all.find((x) => x.id === t.agent);
+    return a ? openIn(a, String(b.via), ROOT, t!.session) : "task not found";
+  }
+  const s = typeof b.key === "string" ? await agent(b.key) : null, a = s && all.find((x) => x.process === s.name);
+  if (!s || !a) return "session not found";
+  const cwd = s.cwd.replace(/^~/, homedir());
+  return openIn(a, String(b.via), existsSync(cwd) ? cwd : ROOT, b.key.slice(2));
+}
 const str = (x: unknown) => (typeof x === "string" ? x : undefined);
 const started = (t: ReturnType<typeof runTask>) => (typeof t === "string" ? new Response(t, { status: 400 }) : json({ id: t.id }));
+
+const validUrl = (u: unknown) => { try { const p = new URL(String(u)); return p.protocol === "http:" || p.protocol === "https:"; } catch { return false; } };
+const validAgent = (a: any) =>
+  a && typeof a === "object" && typeof a.id === "string" && /^[\w-]+$/.test(a.id) &&
+  typeof a.name === "string" && a.name.trim().length > 0 &&
+  ((Array.isArray(a.run) && a.run.length > 0 && a.run.every((x: any) => typeof x === "string" && x.length > 0)) ||
+    a.api === "anthropic" || a.api === "openai");
+const validService = (s: any) =>
+  s && typeof s === "object" && typeof s.id === "string" && /^[\w-]+$/.test(s.id) &&
+  typeof s.name === "string" && s.name.trim().length > 0 && validUrl(s.url) && typeof s.desc === "string";
+
+function settings() {
+  const img = imagesState();
+  return { vaultDir: ROOT, vaultLang, port: cfgPort, folder: img.folder, board: img.board, agents: loadAgents(import.meta.dir), services: serviceList() };
+}
+function saveSettings(b: any) {
+  if (!b || typeof b !== "object" || Array.isArray(b)) return "invalid settings";
+  let nextRoot = ROOT;
+  if (b.vaultDir !== undefined) {
+    const raw = typeof b.vaultDir === "string" ? b.vaultDir.trim() : "";
+    const abs = raw ? resolve(raw.replace(/^~(?=$|\/)/, homedir())) : "";
+    if (!abs || !existsSync(abs) || !statSync(abs).isDirectory()) return `no folder at ${b.vaultDir}`;
+    nextRoot = abs;
+  }
+  if (b.vaultLang !== undefined && b.vaultLang !== "en" && b.vaultLang !== "pt") return "vaultLang must be en or pt";
+  let nextPort = cfgPort;
+  if (b.port !== undefined) {
+    const p = typeof b.port === "number" ? b.port : typeof b.port === "string" && b.port.trim() ? Number(b.port) : NaN;
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) return "port must be 1024–65535";
+    nextPort = p;
+  }
+  if (b.agents !== undefined && (!Array.isArray(b.agents) || !b.agents.every(validAgent))) return "invalid agents";
+  if (b.services !== undefined && (!Array.isArray(b.services) || !b.services.every(validService))) return "invalid services";
+  if (b.folder !== undefined || b.board !== undefined) {
+    const r = setPrefs({ ...(b.folder !== undefined ? { folder: b.folder } : {}), ...(b.board !== undefined ? { board: b.board } : {}) });
+    if (typeof r === "string") return r;
+  }
+  const env: Record<string, string> = {};
+  if (b.vaultDir !== undefined) { ROOT = nextRoot; VAULT = basename(ROOT); env.VAULT_DIR = ROOT; }
+  if (b.vaultLang !== undefined) { vaultLang = b.vaultLang; L = LAYOUTS[vaultLang]; ROUTINES = L.routines; env.VAULT_LANG = vaultLang; }
+  if (b.port !== undefined) { cfgPort = nextPort; env.PORT = String(cfgPort); }
+  if (Object.keys(env).length) saveEnv(env);
+  if (b.agents !== undefined) writeFileSync(`${import.meta.dir}/agents.json`, JSON.stringify(b.agents, null, 2) + "\n");
+  if (b.services !== undefined) writeFileSync(`${import.meta.dir}/services.json`, JSON.stringify(b.services, null, 2) + "\n");
+  return settings();
+}
 
 const cmd = process.argv[2];
 if (cmd === "map") {
@@ -360,13 +439,12 @@ if (cmd === "today") {
 
 const json = (x: unknown) => (x ? Response.json(x) : new Response("not found", { status: 404 }));
 const STATIC = new Set(["/app.js", "/app.css"]);
-const GRAFITE = new Set(["/grafite/app.js", "/grafite/app.css", "/grafite/tokens.css"]);
-const PORT_V2 = PORT + 2;
 // Minimal OAuth landing page (escaped text: the message may come from Pinterest).
 const page = (t: string, msg: string) => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${t}</title>
 <body style="background:#121212;color:#EAE8E3;font:15px/1.6 system-ui;display:grid;place-items:center;min-height:90vh;margin:0;padding:24px">
 <main style="max-width:520px"><h1 style="font-weight:400">${t}</h1><p style="color:#A3A19C">${msg.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!)}</p><p><a style="color:#F2B48C" href="/#/services">Back to Services →</a></p></main>`, { headers: { "content-type": "text/html; charset=utf-8" } });
 
+startScheduler(ROOT, import.meta.dir);
 startPinterest(`${TAILNET ? `https://${TAILNET}` : `http://127.0.0.1:${PORT}`}/auth/pinterest/callback`); // Tailscale HTTPS redirect
 
 async function handle(req: Request, port: number) {
@@ -381,29 +459,31 @@ async function handle(req: Request, port: number) {
     if (p === "/api/capture" && typeof b.text === "string" && b.text.trim()) { await capture(b.text.slice(0, 2000)); return json({ ok: true }); }
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
     if (p === "/api/pinterest/sync") return json(await sync(true));
+    if (p === "/api/images/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/settings") { const r = saveSettings(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
+    if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
+    if (p === "/api/calendar" || p === "/api/calendar/delete") {
+      const e = calItem(b);
+      if (typeof e === "string") return new Response(e, { status: 400 });
+      return json((await calendarEdit(e, p.endsWith("/delete"))) && { ok: true });
+    }
+    if (p === "/api/schedule") { const r = addScheduled(ROOT, import.meta.dir, b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/schedule/delete") return json(removeScheduled(import.meta.dir, String(b.id)) && { ok: true });
     if (p === "/api/task/stop") return json(stopTask(String(b.id)) && { ok: true });
     return new Response("404", { status: 404 });
   }
   if (p === "/api") return json(await state());
   if (p === "/api/pinterest") return json(pinterestState());
+  if (p === "/api/images") return json(imagesState());
+  if (p === "/api/settings") return json(settings());
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
-  if (p === "/api/system") return json({ agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
-  if (p.startsWith("/art/")) {
-    const a = art(), i = Number(p.slice(5));
-    return Number.isInteger(i) && a.length
-      ? new Response(await thumbnail(a[i % a.length], url.searchParams.has("amb")), { headers: { "cache-control": "max-age=86400" } })
-      : new Response("404", { status: 404 });
-  }
+  if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
-  if (p === "/grafite") return Response.redirect("/grafite/", 301);
-  if (p === "/grafite/") return new Response(Bun.file(`${import.meta.dir}/grafite/index.html`));
-  if (GRAFITE.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
-  if (p.startsWith("/v2")) return Response.redirect("/", 302);
-  if (p.startsWith("/pin/")) { const f = await pinFile(p.slice(5), url.searchParams.has("amb")); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
+  if (p.startsWith("/pin/")) { const f = await imageFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }
   if (p === "/auth/pinterest/callback") { const error = await authorizeCallback(url); return page(error ? "Not connected" : "Pinterest connected", error || `${pinterestState().total} images in the cache.`); }
   if (p === "/") return new Response(Bun.file(`${import.meta.dir}/index.html`));
@@ -411,8 +491,7 @@ async function handle(req: Request, port: number) {
 }
 
 Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: (req) => handle(req, PORT) });
-Bun.serve({ hostname: "127.0.0.1", port: PORT_V2, fetch: (req) => handle(req, PORT_V2) });
-console.log(`Overlook on http://127.0.0.1:${PORT} · v2 on http://127.0.0.1:${PORT_V2}`);
+console.log(`Overlook on http://127.0.0.1:${PORT}`);
 
 // A service that forbids iframes (X-Frame-Options DENY) gets a proxy that only allows Overlook as the frame.
 // The embedded app keeps calling its API on the target directly, so the target must allow 127.0.0.1:<proxy> in its CORS.
@@ -434,7 +513,7 @@ for (const s of await serviceList()) {
       const rh = new Headers(r.headers);
       rh.delete("x-frame-options"); rh.delete("content-encoding"); rh.delete("content-length"); // fetch already decompressed
       const csp = rh.get("content-security-policy");
-      if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT} http://127.0.0.1:${PORT_V2} http://localhost:${PORT_V2}${TAILNET ? ` https://${TAILNET}` : ""}`));
+      if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT}${TAILNET ? ` https://${TAILNET}` : ""}`));
       return new Response(r.body, { status: r.status, headers: rh });
     },
   });

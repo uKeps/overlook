@@ -6,9 +6,9 @@ from disk. No database, no build step, no cloud.
 
 ![Home](docs/screenshots/home.jpg)
 
-| Note reader | Alternate UI (`/grafite/`) |
+| Note reader | Agents |
 | --- | --- |
-| ![Note](docs/screenshots/note.jpg) | ![Grafite](docs/screenshots/grafite.jpg) |
+| ![Note](docs/screenshots/note.jpg) | ![Agents](docs/screenshots/agents.jpg) |
 
 ## Quick start
 
@@ -52,23 +52,41 @@ Vault in Portuguese? Set `VAULT_LANG=pt` in `.env` and Overlook reads `2 Diário
 
 A one-line summary comes from a `> [!abstract]` callout right after the title.
 
+## Calendar
+
+The strip under the top bar is a week (or month) calendar. Click a day to see what's on it and to add:
+
+- **Events**, saved as plain lines in `Calendar.md` at the vault root (`- 2026-11-03 14:00 · Exam`, the time is
+  optional), so they show up in Obsidian and agents can read them.
+- **Agent tasks**: an agent, model, effort and prompt that run at a time, once or every day / weekday / week.
+  They live in `schedule.json` next to Overlook and run while it is on; a run missed while it was off
+  happens when it starts.
+
+Reviews due and daily notes show up as dots too. *Float* folds the strip into a small pill at the top that
+drops the calendar back in place on hover; *Pin* keeps it open. The dock at the bottom folds the same way
+(the last button on it).
+
+![Calendar](docs/screenshots/calendar.jpg)
+
 ## Optional pieces
 
-Everything below is off until you set it up. Skip what you don't need.
+Everything below is off until you set it up, and all of it (vault path, language, port, calendar/dock mode, card image sources, `agents.json` and `services.json`) can be edited from the **Settings** page in the dock or in the files directly. Skip what you don't need.
 
-### Pinterest (card images)
+### Card images: your photos and Pinterest
 
-Without Pinterest, cards use images from `ART_DIR` (default `~/Pictures/Wallpapers`), or none.
+The Home cards show images from two sources, both set up in **Images** (Services → *Manage images*):
 
-**Public board, no account setup:**
+- **Your photos**: any folder on this computer, e.g. one you downloaded (`~/Pictures/my-photos`). JPG, PNG,
+  WebP and AVIF at the top level of the folder; new files show up on their own.
+- **Pinterest**: a public board as `user/board`, synced every 6 hours into `cache/` (or *Sync* now). This
+  reads the public board page, not an official API, so it may break if Pinterest changes it, and that page
+  only shows a sample of a big board each time: the collection grows with every sync. The official API
+  (below) lists the whole board.
 
-```sh
-cp pinterest.example.json pinterest.json   # set "board": "your-user/your-board"
-cp services.example.json services.json     # shows its status under Services
-```
-
-Restart. Images sync every 6 hours into `cache/`, or on demand from Services → *Sync now*.
-This reads the public board page, not an official API, so it may break if Pinterest changes it.
+In the same page, hide images you don't want, star the ones you do, and pick *Random* (the cards rotate
+through the visible images every day) or *Starred only* (the starred ones, in the order you starred them).
+On the Home, *Choose image* on a card gives that card a specific image (*Automatic* hands it back). The
+choices are saved in `pinterest.json` (`cp pinterest.example.json pinterest.json` to start from a file).
 
 **Private board (official API):** create an app at
 [developers.pinterest.com](https://developers.pinterest.com/apps/) with redirect URI
@@ -104,6 +122,16 @@ To choose your own, `cp agents.example.json agents.json` and edit it. Two kinds 
 Any entry can list `models` and `efforts` (plus a default `effort`). The task form then shows a model
 and an effort picker for that agent: API agents send the choice to the provider, and CLI agents get it
 through `{model}` and `{effort}` in `run`, e.g. `"--model", "{model}"`. Only listed values are accepted.
+A model can be a plain id or `{"id": "gemini-4-argon", "label": "Gemini 4 Argon", "efforts": ["low", "high"]}`
+when it needs a display name or its own effort levels (for a CLI that bakes the effort into the model id,
+use `"--model", "{model}-{effort}"`).
+
+**Open in…** Each entry can also list `open` commands, shown as buttons on a session's page and on a task's
+page: `{session}` is the session id, `{cwd}` its folder, and a first token of `{terminal}` means your own
+terminal (`xdg-terminal-exec`, or `$TERMINAL -e`). The built-in ones resume a Claude Code session with
+`claude --resume`, an AGY conversation with `agy --conversation`, and open the folder in the Antigravity
+app. Claude Code tasks get a fresh `--session-id`, so a finished task can be picked up in the terminal.
+Any other app works the same way, as long as it can be launched with a command.
 
 Tasks are kept in memory (the last 50) and can be stopped from their page.
 The Morning and Inbox routines show up when the vault has an `AGENTS.md` with a Routines section.
