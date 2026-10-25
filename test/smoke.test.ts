@@ -235,4 +235,10 @@ test("the Images page hides, stars and fixes the card images", async () => {
   expect((await post("/api/pinterest/prefs", { mode: "shuffle" })).status).toBe(400);
   expect((await post("/api/pinterest/prefs", { board: "a/b/c/d" })).status).toBe(400);
   expect((await fetch(`${BASE}/pin/aa11?thumb`)).status).toBe(200);
+  // One Home card can be given its own image, and handed back to automatic.
+  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": "bb22" } })).status).toBe(200);
+  expect((await (await fetch(`${BASE}/api`)).json()).pinCards["Review|HTTP"].id).toBe("bb22");
+  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": null } })).status).toBe(200);
+  expect((await (await fetch(`${BASE}/api`)).json()).pinCards).toEqual({});
+  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": "../x" } })).status).toBe(400);
 });

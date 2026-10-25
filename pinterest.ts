@@ -88,8 +88,8 @@ async function all(path: string) {
   return items;
 }
 
-// Drops small images (<720x600), GIFs and narrow vertical phone screenshots (ratio < 0.72) that look stretched on the cards.
-const goodImage = (w: number, h: number, url: string) => w >= 720 && h >= 600 && w / h >= 0.72 && !/\.gif($|\?)/i.test(url);
+// Drops only what can't look right on a card: tiny images and GIFs. Taste is the user's call (Images page: hide).
+const goodImage = (w: number, h: number, url: string) => Math.min(w, h) >= 400 && !/\.gif($|\?)/i.test(url);
 
 // Public board (https://pinterest.com/<user>/<board>/): reads the pins from the SSR payload (__PWS_INITIAL_PROPS__), no OAuth or Trial needed.
 // ponytail: 3 parallel reads (the SSR samples ~25 pins per request) merged by hash; the official API pages through everything.
@@ -154,8 +154,12 @@ export async function sync(manual = false) {
         pins.push({ id: p.id, link: `https://www.pinterest.com/pin/${p.id}/`, title: String(p.title || p.alt_text || p.description || "").slice(0, 140), color: p.dominant_color ?? "" });
       }
     }
+    // The public page shows a different sample of the board on each visit, so a pin missing from this read hasn't
+    // necessarily left: keep what earlier syncs found and let the collection grow. The API lists the whole board,
+    // so there a missing pin really is gone, and it leaves the cache.
+    if (isPublic) { const fresh = new Set(pins.map((p) => p.id)); pins.push(...state.images.filter((p) => !fresh.has(p.id) && existsSync(`${CACHE}/${p.id}.jpg`))); }
     const kept = new Set(pins.flatMap((p) => [`${p.id}.jpg`, `${p.id}-amb.jpg`, `${p.id}-thumb.jpg`]));
-    for (const f of readdirSync(CACHE)) if (f.endsWith(".jpg") && !kept.has(f)) unlinkSync(`${CACHE}/${f}`); // left the board, leaves the cache
+    if (!isPublic) for (const f of readdirSync(CACHE)) if (f.endsWith(".jpg") && !kept.has(f)) unlinkSync(`${CACHE}/${f}`);
     state = { status: "ok", error: "", last: new Date().toISOString(), syncing: false, images: pins };
     writeFileSync(INDEX, JSON.stringify({ last: state.last, pins }, null, 1));
     paused = false; lastLog = "";
@@ -179,13 +183,14 @@ export function startPinterest(callbackUrl: string) {
 
 // What the user picked in the Images page, kept in pinterest.json next to the board: hidden images never show;
 // "fixed" uses only the starred ones, in their order, instead of a daily rotation.
-type Prefs = { board: string; mode: "random" | "fixed"; hidden: string[]; starred: string[] };
+type Prefs = { board: string; mode: "random" | "fixed"; hidden: string[]; starred: string[]; cards: Record<string, string> };
 const CONFIG = `${DIR}/pinterest.json`;
 const readConfig = (): Record<string, any> => { try { return JSON.parse(readFileSync(CONFIG, "utf8")); } catch { return {}; } };
 const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i) => typeof i === "string" && /^[0-9a-f]+$/.test(i)) : []);
 function prefs(): Prefs {
   const c = readConfig();
-  return { board: String(c.board ?? ""), mode: c.mode === "fixed" ? "fixed" : "random", hidden: ids(c.hidden), starred: ids(c.starred) };
+  const cards = Object.fromEntries(Object.entries(c.cards ?? {}).filter(([, v]) => typeof v === "string" && /^[0-9a-f]+$/.test(v))) as Record<string, string>;
+  return { board: String(c.board ?? ""), mode: c.mode === "fixed" ? "fixed" : "random", hidden: ids(c.hidden), starred: ids(c.starred), cards };
 }
 export function setPrefs(b: any) {
   const c = readConfig(), next: Record<string, unknown> = {};
@@ -193,6 +198,18 @@ export function setPrefs(b: any) {
   for (const k of ["hidden", "starred"]) if (b[k] !== undefined) {
     if (!Array.isArray(b[k]) || b[k].length > 5000 || ids(b[k]).length !== b[k].length) return `${k} must be a list of image ids`;
     next[k] = [...new Set(b[k] as string[])];
+  }
+  // cards: { "<card key>": "<image id>" } picks the image of one Home card; null puts the card back on automatic.
+  if (b.cards !== undefined) {
+    if (typeof b.cards !== "object" || b.cards === null || Array.isArray(b.cards)) return "cards must map a card to an image id";
+    const cards = { ...prefs().cards };
+    for (const [k, v] of Object.entries(b.cards)) {
+      if (!k || k.length > 300) return "card key too long";
+      if (v === null) delete cards[k];
+      else if (typeof v === "string" && /^[0-9a-f]+$/.test(v)) { delete cards[k]; cards[k] = v; }
+      else return "cards must map a card to an image id";
+    }
+    next.cards = Object.fromEntries(Object.entries(cards).slice(-200)); // the most recent 200 choices
   }
   if (b.board !== undefined) {
     const board = String(b.board).trim().replace(/^https?:\/\/[^/]+\//, "").replace(/\/$/, "");
@@ -207,7 +224,8 @@ export function setPrefs(b: any) {
 export function shownPins() {
   const p = prefs(), visible = state.images.filter((i) => !p.hidden.includes(i.id));
   const starred = p.mode === "fixed" ? p.starred.map((id) => visible.find((i) => i.id === id)).filter((i): i is Pin => !!i) : [];
-  return { mode: starred.length ? "fixed" : "random", pins: starred.length ? starred : visible };
+  const cards = Object.fromEntries(Object.entries(p.cards).flatMap(([k, id]) => { const i = state.images.find((x) => x.id === id); return i ? [[k, i]] : []; }));
+  return { mode: starred.length ? "fixed" : "random", pins: starred.length ? starred : visible, cards };
 }
 
 export const pinterestState = () => ({ ...state, ...prefs(), total: state.images.length, redirect });

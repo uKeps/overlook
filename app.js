@@ -29,6 +29,7 @@ const I = {
   reload: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', play: '<path d="m7 4 13 8-13 8z"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   gap: '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 4 8M8 12h4"/><path d="m3 3 18 18"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
   leaf: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.4 5-6"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
@@ -47,7 +48,10 @@ function toast(msg) {
 const remote = location.hostname.endsWith(".ts.net");
 const address = (s) => (remote ? (s.tailnet ? `https://${location.hostname}:${s.tailnet}` : "") : s.proxy ? `http://127.0.0.1:${s.proxy}` : s.url);
 // Card i gets image i: shifted by the date in random mode, the same every day when the user fixed their starred images.
-const pinFor = (s) => (D?.pins?.length ? D.pins[(typeof s === "number" ? (D.pinMode === "fixed" ? 0 : hash(D.today)) + s : hash(String(s))) % D.pins.length] : null);
+// A Home card the user gave an image keeps it (keyed by what the card is about, so it follows the card around).
+const cardKey = (s) => `${s.cat}|${s.title}`;
+const pinFor = (s) => (typeof s === "number" && SG[s] && D?.pinCards?.[cardKey(SG[s])]) ||
+  (D?.pins?.length ? D.pins[(typeof s === "number" ? (D.pinMode === "fixed" ? 0 : hash(D.today)) + s : hash(String(s))) % D.pins.length] : null);
 const art = (s) => (pinFor(s) ? `/pin/${pinFor(s).id}` : D?.art ? `/art/${hash(String(s)) % D.art}` : "");
 const obs = (p) => `obsidian://open?vault=${encodeURIComponent(D.vault)}&file=${encodeURIComponent(p.replace(/\.md$/, ""))}`;
 const noteHref = (p) => `#/n/${encodeURIComponent(p)}`;
@@ -264,7 +268,8 @@ function home() {
         </div>
         <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
       </div>
-      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}</div>
+      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
+        ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>
     </article>`;
   };
   main.innerHTML = `<section class="car" id="car">${SG.map(card).join("")}
@@ -683,7 +688,24 @@ async function savePrefs(change) {
   D = await api("/api");
   imagesPage();
 }
+// The picker: every visible image of the board, plus Automatic to hand the card back to the rotation.
+let pickKey = "";
 const IMG_ACTIONS = {
+  "pick-open": async (el) => {
+    const s = SG[Number(el.dataset.i)], p = await api("/api/pinterest").catch(() => null);
+    if (!s || !p) return;
+    pickKey = cardKey(s);
+    const cur = D.pinCards?.[pickKey]?.id, imgs = p.images.filter((i) => !p.hidden.includes(i.id));
+    $("#picker").innerHTML = `<div class="pk-head"><h3>Image for “${esc(s.title)}”</h3><button type="button" class="btn glass" data-act="pick" data-id="">Automatic</button>
+        <button type="button" class="btn glass" data-act="pick-close" aria-label="Close">Close <kbd>Esc</kbd></button></div>
+      <div class="pk-grid">${imgs.map((im) => `<button type="button" class="${im.id === cur ? "on" : ""}" data-act="pick" data-id="${im.id}" aria-label="${esc(im.title || "Image")}"><img src="/pin/${im.id}?thumb" loading="lazy" alt=""></button>`).join("")}</div>`;
+    $("#picker").showModal();
+  },
+  "pick-close": () => $("#picker").close(),
+  pick: async (el) => {
+    try { await api("/api/pinterest/prefs", { cards: { [pickKey]: el.dataset.id || null } }); } catch (e) { return toast(e.message); }
+    $("#picker").close(); D = await api("/api"); home(); toast(el.dataset.id ? "Image chosen for this card" : "Back to automatic");
+  },
   "img-mode": (el) => savePrefs({ mode: el.dataset.k }),
   "img-hide": async (el) => { const p = await api("/api/pinterest"), id = el.dataset.id; savePrefs({ hidden: p.hidden.includes(id) ? p.hidden.filter((x) => x !== id) : [...p.hidden, id] }); },
   "img-star": async (el) => { const p = await api("/api/pinterest"), id = el.dataset.id; savePrefs({ starred: p.starred.includes(id) ? p.starred.filter((x) => x !== id) : [...p.starred, id] }); },

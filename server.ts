@@ -147,7 +147,7 @@ async function state() {
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
     art: art().length, calendar: await calendar(),
-    pins: shownPins().pins, pinMode: shownPins().mode,
+    ...(({ pins, mode, cards }) => ({ pins, pinMode: mode, pinCards: cards }))(shownPins()),
   };
 }
 

@@ -86,8 +86,11 @@ Restart. Images sync every 6 hours into `cache/`, or on demand from Services →
 
 Services → *Manage images* shows the whole board: change the board, hide images you don't want, star
 the ones you do, and pick *Random* (the cards rotate through the visible images every day) or *Starred only*
-(the starred ones, in the order you starred them). The choices are saved in `pinterest.json`.
-This reads the public board page, not an official API, so it may break if Pinterest changes it.
+(the starred ones, in the order you starred them). On the Home, *Choose image* on a card gives that card a
+specific image (*Automatic* hands it back). The choices are saved in `pinterest.json`.
+This reads the public board page, not an official API, so it may break if Pinterest changes it. That page
+only shows a sample of a big board each time, so the collection grows with every sync instead of arriving
+all at once; the official API (below) lists the whole board.
 
 **Private board (official API):** create an app at
 [developers.pinterest.com](https://developers.pinterest.com/apps/) with redirect URI
