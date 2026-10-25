@@ -103,7 +103,8 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appCss).toContain("body.dock-float { padding-bottom: 76px; }");
   expect(appCss).toContain("body.home { display: flex; flex-direction: column; }");
   expect(appCss).toContain("body.home main { margin-top: auto; margin-bottom: auto; padding-top: 16px; padding-bottom: 16px; }");
-  expect(appCss).toContain("body.cal-float:has(.cal.float:is(:hover, :focus-within, .open)) main { margin-top: 96px; }");
+  expect(appCss).toContain("body.cal-float main { padding-top: 84px; }");
+  expect(appCss).not.toContain("body.cal-float:has(");
 });
 
 test("agent CLI commands", () => {
