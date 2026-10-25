@@ -151,7 +151,7 @@ export async function sync(manual = false) {
         pins.push({ id: p.id, link: `https://www.pinterest.com/pin/${p.id}/`, title: String(p.title || p.alt_text || p.description || "").slice(0, 140), color: p.dominant_color ?? "" });
       }
     }
-    const kept = new Set(pins.flatMap((p) => [`${p.id}.jpg`, `${p.id}-amb.jpg`]));
+    const kept = new Set(pins.flatMap((p) => [`${p.id}.jpg`, `${p.id}-amb.jpg`, `${p.id}-thumb.jpg`]));
     for (const f of readdirSync(CACHE)) if (f.endsWith(".jpg") && !kept.has(f)) unlinkSync(`${CACHE}/${f}`); // left the board, leaves the cache
     state = { status: "ok", error: "", last: new Date().toISOString(), syncing: false, images: pins };
     writeFileSync(INDEX, JSON.stringify({ last: state.last, pins }, null, 1));
@@ -174,19 +174,51 @@ export function startPinterest(callbackUrl: string) {
   setInterval(() => sync(), SIX_HOURS);
 }
 
-export const pinterestState = () => {
-  const board = (() => { try { return JSON.parse(readFileSync(`${DIR}/pinterest.json`, "utf8")).board ?? ""; } catch { return ""; } })();
-  return { ...state, total: state.images.length, board, redirect };
-};
+// What the user picked in the Images page, kept in pinterest.json next to the board: hidden images never show;
+// "fixed" uses only the starred ones, in their order, instead of a daily rotation.
+type Prefs = { board: string; mode: "random" | "fixed"; hidden: string[]; starred: string[] };
+const CONFIG = `${DIR}/pinterest.json`;
+const readConfig = (): Record<string, any> => { try { return JSON.parse(readFileSync(CONFIG, "utf8")); } catch { return {}; } };
+const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i) => typeof i === "string" && /^[0-9a-f]+$/.test(i)) : []);
+function prefs(): Prefs {
+  const c = readConfig();
+  return { board: String(c.board ?? ""), mode: c.mode === "fixed" ? "fixed" : "random", hidden: ids(c.hidden), starred: ids(c.starred) };
+}
+export function setPrefs(b: any) {
+  const c = readConfig(), next: Record<string, unknown> = {};
+  if (b.mode !== undefined) { if (b.mode !== "random" && b.mode !== "fixed") return "mode must be random or fixed"; next.mode = b.mode; }
+  for (const k of ["hidden", "starred"]) if (b[k] !== undefined) {
+    if (!Array.isArray(b[k]) || b[k].length > 5000 || ids(b[k]).length !== b[k].length) return `${k} must be a list of image ids`;
+    next[k] = [...new Set(b[k] as string[])];
+  }
+  if (b.board !== undefined) {
+    const board = String(b.board).trim().replace(/^https?:\/\/[^/]+\//, "").replace(/\/$/, "");
+    if (board && !/^[\w%. -]{1,100}(\/[\w%. -]{1,100})?$/.test(board)) return "board must be user/board (public) or a board name";
+    next.board = board;
+  }
+  writeFileSync(CONFIG, JSON.stringify({ ...c, ...next }, null, 1));
+  if (next.board !== undefined && next.board !== c.board) { paused = false; sync(true); } // a new board: fetch it now
+  return pinterestState();
+}
+// The images the cards use, in order.
+export function shownPins() {
+  const p = prefs(), visible = state.images.filter((i) => !p.hidden.includes(i.id));
+  const starred = p.mode === "fixed" ? p.starred.map((id) => visible.find((i) => i.id === id)).filter((i): i is Pin => !!i) : [];
+  return { mode: starred.length ? "fixed" : "random", pins: starred.length ? starred : visible };
+}
 
-export async function pinFile(id: string, amb = false) {
+export const pinterestState = () => ({ ...state, ...prefs(), total: state.images.length, redirect });
+
+// The cached image, or a smaller copy made on first request: "amb" (blurred, for the ambient background) or "thumb" (for the grid).
+export async function pinFile(id: string, variant: "" | "amb" | "thumb" = "") {
   if (!/^[0-9a-f]+$/.test(id)) return null;
   const orig = `${CACHE}/${id}.jpg`;
   if (!(await Bun.file(orig).exists())) return null;
-  if (!amb) return Bun.file(orig);
-  const out = `${CACHE}/${id}-amb.jpg`;
+  if (!variant) return Bun.file(orig);
+  const out = `${CACHE}/${id}-${variant}.jpg`;
   if (!(await Bun.file(out).exists())) {
-    Bun.spawnSync(["magick", `${orig}[0]`, "-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135", "-quality", "78", out]);
+    const args = variant === "amb" ? ["-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135"] : ["-resize", "480x480>"];
+    Bun.spawnSync(["magick", `${orig}[0]`, ...args, "-quality", "78", out]);
     if (!(await Bun.file(out).exists())) return Bun.file(orig);
   }
   return Bun.file(out);

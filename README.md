@@ -82,7 +82,11 @@ cp pinterest.example.json pinterest.json   # set "board": "your-user/your-board"
 cp services.example.json services.json     # shows its status under Services
 ```
 
-Restart. Images sync every 6 hours into `cache/`, or on demand from Services → *Sync now*.
+Restart. Images sync every 6 hours into `cache/`, or on demand from Services → *Sync*.
+
+Services → *Manage images* shows the whole board: change the board, hide images you don't want, star
+the ones you do, and pick *Random* (the cards rotate through the visible images every day) or *Starred only*
+(the starred ones, in the order you starred them). The choices are saved in `pinterest.json`.
 This reads the public board page, not an official API, so it may break if Pinterest changes it.
 
 **Private board (official API):** create an app at

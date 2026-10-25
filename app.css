@@ -269,6 +269,25 @@ a.row:hover, .row.hov:hover { background: var(--glass); }
 .row .txt a:hover { color: var(--peach); }
 .empty { color: var(--faint); padding: 18px; }
 
+/* Images: the Pinterest board, to hide or star what the cards use */
+.img-set { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; border-radius: var(--r); margin-bottom: 18px; }
+.img-set label { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.img-set input { width: 260px; height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--ink); font: 14px var(--body); outline: none; }
+.img-set input:focus { border-color: rgba(244, 184, 143, .5); }
+.img-set .sp { flex: 1; }
+.ph em.bad { color: var(--bad); font-style: normal; }
+.img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+.img { position: relative; margin: 0; border-radius: 14px; overflow: hidden; aspect-ratio: 4 / 5; background: var(--glass); border: 1px solid var(--line); transition: opacity .25s, filter .25s, box-shadow .25s; }
+.img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.img.off { opacity: .35; filter: grayscale(1); }
+.img.star { box-shadow: 0 0 0 2px var(--peach); }
+.img .n { position: absolute; top: 8px; left: 8px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; background: var(--peach); color: var(--peach-ink); font: 700 12px var(--display); }
+.img figcaption { position: absolute; inset: auto 0 0 0; display: flex; gap: 6px; padding: 28px 8px 8px; background: linear-gradient(transparent, rgba(0, 0, 0, .75)); opacity: 0; transition: opacity .2s; }
+.img:hover figcaption, .img:focus-within figcaption, .img.star figcaption, .img.off figcaption { opacity: 1; }
+.img figcaption button, .img figcaption a { height: 28px; padding: 0 10px; border-radius: 8px; background: rgba(22, 23, 27, .8); border: 1px solid var(--line); color: var(--ink); font-size: 12px; display: inline-flex; align-items: center; }
+.img figcaption button[aria-pressed=true] { border-color: rgba(244, 184, 143, .6); color: var(--peach); }
+.img figcaption a { margin-left: auto; }
+
 /* Graph */
 .graph { border-radius: 22px; height: min(680px, 70vh); position: relative; overflow: hidden; }
 .graph canvas { width: 100%; height: 100%; display: block; cursor: grab; }
