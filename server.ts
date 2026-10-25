@@ -237,6 +237,7 @@ const serviceList = (): Promise<Service[]> => Bun.file(`${import.meta.dir}/servi
 // What an agent is doing, read from its conversation on disk. Read-only.
 type Event = { t: "you" | "text" | "tool" | "result"; txt: string; name?: string; at?: string };
 const clip = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "…" : s);
+const MESSAGE = 20_000; // a whole message reads in full; the cap only guards against a runaway one
 const ID = /^[0-9a-f-]{8,64}$/; // session/conversation ids become file paths: hex and dash only, no ../
 
 async function claudeConversation(sessionId: string): Promise<Event[]> {
@@ -253,7 +254,7 @@ async function claudeConversation(sessionId: string): Promise<Event[]> {
     const at = d.timestamp, c = d.message.content;
     const items = typeof c === "string" ? [{ type: "text", text: c }] : Array.isArray(c) ? c : [];
     for (const x of items) {
-      if (x.type === "text" && x.text?.trim() && !x.text.startsWith("<")) ev.push({ t: d.type === "user" ? "you" : "text", txt: clip(x.text.trim(), 1500), at });
+      if (x.type === "text" && x.text?.trim() && !x.text.startsWith("<")) ev.push({ t: d.type === "user" ? "you" : "text", txt: clip(x.text.trim(), MESSAGE), at });
       else if (x.type === "tool_use") {
         const i = x.input ?? {};
         ev.push({ t: "tool", name: x.name, txt: clip(String(i.description ?? i.command ?? i.file_path ?? i.pattern ?? i.url ?? i.prompt ?? JSON.stringify(i)), 300), at });
@@ -285,7 +286,7 @@ async function agyConversation(id: string): Promise<Event[]> {
         let det = ""; try { const o = JSON.parse(j!.slice(j!.indexOf("{"), j!.lastIndexOf("}") + 1)); det = o.toolSummary ?? o.CommandLine ?? o.Path ?? ""; } catch {}
         const name = new TextDecoder().decode(r.step_payload).match(/call_\d+[^a-z_]*([a-z_]{3,})/)?.[1] ?? "tool";
         ev.push({ t: "tool", name, txt: clip(String(det || j || "").replace(homedir(), "~"), 300) });
-      } else if (r.step_type === 15 && sentences.length) ev.push({ t: "text", txt: clip(sentences[sentences.length - 1], 1500) });
+      } else if (r.step_type === 15 && sentences.length) ev.push({ t: "text", txt: clip(sentences[sentences.length - 1], MESSAGE) });
     }
     return ev.slice(-80);
   } finally { db.close(); }
@@ -307,7 +308,7 @@ async function agent(key: string) {
   const job = readJson(`${homedir()}/.claude/jobs/${id.slice(0, 8)}/state.json`);
   if (!events.length) {
     const tl = await Bun.file(`${homedir()}/.claude/jobs/${id.slice(0, 8)}/timeline.jsonl`).text().catch(() => "");
-    events = tl.split("\n").flatMap((l) => { try { const d = JSON.parse(l); return [{ t: "text" as const, txt: clip(d.text || `${d.state}: ${d.detail}`, 1500), at: d.at }]; } catch { return []; } }).slice(-80);
+    events = tl.split("\n").flatMap((l) => { try { const d = JSON.parse(l); return [{ t: "text" as const, txt: clip(d.text || `${d.state}: ${d.detail}`, MESSAGE), at: d.at }]; } catch { return []; } }).slice(-80);
   }
   if (!events.length && !live && !s) return null;
   return { name: "claude", key, live: !!live, pid: live?.pid, seconds: live?.seconds, cwd: live?.cwd ?? String(s?.cwd ?? "").replace(homedir(), "~"),

@@ -823,6 +823,8 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("a[target]")) return;
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
+  const res = e.target.closest(".ev.result");
+  if (res && !getSelection().toString()) res.classList.toggle("open");
   const side = e.target.closest(".card.side");
   if (side) { e.preventDefault(); idx = Number(side.dataset.i); place(); }
 });
