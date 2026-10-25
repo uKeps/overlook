@@ -63,7 +63,8 @@ The strip under the top bar is a week (or month) calendar. Click a day to see wh
   happens when it starts.
 
 Reviews due and daily notes show up as dots too. *Float* folds the strip into a small pill at the top that
-drops the calendar back in place on hover; *Pin* keeps it open.
+drops the calendar back in place on hover; *Pin* keeps it open. The dock at the bottom folds the same way
+(the last button on it).
 
 ![Calendar](docs/screenshots/calendar.jpg)
 
