@@ -27,7 +27,8 @@ function prefs(): Prefs {
 // ponytail: top level of one folder, listed on every call; recurse or cache the listing if folders get huge.
 const expand = (p: string) => resolve(p.replace(/^~(?=$|\/)/, homedir()));
 const folderSetting = () => prefs().folder || process.env.ART_DIR || ""; // ART_DIR: the old wallpaper fallback, still honoured
-const folderId = (path: string) => "f" + createHash("sha1").update(path).digest("hex").slice(0, 15);
+// "u" can't start a Pinterest id (those are hex or digits), so a folder photo is never mistaken for a pin.
+const folderId = (path: string) => "u" + createHash("sha1").update(path).digest("hex").slice(0, 15);
 function folderImages() {
   const f = folderSetting();
   if (!f) return [];
@@ -100,7 +101,7 @@ export function imagesState() {
 // blurred, for the background). Made once with ImageMagick, redone when the photo changes; without it, the original.
 export async function imageFile(id: string, variant: "" | "amb" | "thumb" = "") {
   if (!ID.test(id)) return null;
-  if (!id.startsWith("f")) return pinFile(id, variant);
+  if (!id.startsWith("u")) return pinFile(id, variant);
   const src = folderImages().find((i) => i.id === id)?.file;
   if (!src) return null;
   const out = `${CACHE}/${id}-${variant || "full"}.jpg`;

@@ -348,3 +348,9 @@ test("ascii.rest is served from node_modules, and only its scripts", async () =>
   expect((await fetch(`${BASE}/vendor/ascii/..%2F..%2F..%2Fpackage.json`)).status).toBe(404);
   expect((await fetch(`${BASE}/vendor/ascii/package.json`)).status).toBe(404);
 });
+
+test("a Pinterest image whose id starts with f is still a pin, not a folder photo", async () => {
+  writeFileSync(`${ROOT}/cache/pinterest/fa55.jpg`, "x");
+  expect((await fetch(`${BASE}/pin/fa55`)).status).toBe(200);
+  expect((await fetch(`${BASE}/pin/fa55?amb`)).status).toBe(200);
+});
