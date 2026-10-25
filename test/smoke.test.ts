@@ -319,3 +319,9 @@ test("the Settings page reads and updates vault, images, agents and services", a
   expect((await (await fetch(`${BASE}/api`)).json()).daily).toBe("2 Daily");
 });
 
+
+test("a Pinterest image whose id starts with f is still a pin, not a folder photo", async () => {
+  writeFileSync(`${ROOT}/cache/pinterest/fa55.jpg`, "x");
+  expect((await fetch(`${BASE}/pin/fa55`)).status).toBe(200);
+  expect((await fetch(`${BASE}/pin/fa55?amb`)).status).toBe(200);
+});
