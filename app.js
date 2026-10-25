@@ -32,6 +32,7 @@ const I = {
   pin: '<path d="M12 17v5M8 3h8l-1.5 7 3.5 3.5H6L9.5 10z"/>', fold: '<path d="m6 9 6 6 6-6"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
   leaf: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.4 5-6"/>',
+  settings: '<path d="M4 6h3M11 6h9M4 12h9M17 12h3M4 18h3M11 18h9"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
@@ -98,14 +99,14 @@ function topBar() {
   // Floating dock: a pill with the current page and the sum of the badges; the dock rises over it on hover.
   const badges = due().length + run + S.services.filter((s) => !s.ok).length;
   const here = { "": ["home", "Home"], notes: ["notes", "Notes"], n: ["notes", "Notes"], w: ["notes", "Notes"], review: ["review", "Review"], graph: ["graph", "Graph"],
-    agents: ["agents", "Agents"], a: ["agents", "Agents"], t: ["agents", "Agents"], services: ["services", "Services"], images: ["services", "Images"], s: ["services", "Service"] }[pg] || ["home", "Home"];
+    agents: ["agents", "Agents"], a: ["agents", "Agents"], t: ["agents", "Agents"], services: ["services", "Services"], images: ["services", "Images"], s: ["services", "Service"], settings: ["settings", "Settings"] }[pg] || ["home", "Home"];
   $("#dockwrap").classList.toggle("float", dockMode === "float");
   document.body.classList.toggle("dock-float", dockMode === "float");
   $("#dock-pill").innerHTML = `${icon(here[0], 16)}<span>${here[1]}</span>${badges ? `<span class="badge">${badges}</span>` : ""}`;
   const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) || (pg === "images" && id === "services") ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
     item("notes", "Notes", "notes") + item("review", "Review", "review", due().length) + item("graph", "Graph", "graph") +
-    item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) +
+    item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) + item("settings", "Settings", "settings") +
     (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
     `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>` +
     `<button data-act="dock-mode" data-tip="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}" aria-label="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}">${icon(dockMode === "float" ? "pin" : "fold", 18)}</button>`;
@@ -246,6 +247,8 @@ const CAL_ACTIONS = {
   "cal-kind": (el) => { calKind = el.dataset.k; calFormRender(); },
   "cal-del": async (el) => { await api("/api/calendar/delete", { date: el.dataset.date, time: el.dataset.time, title: el.dataset.title }).catch((e) => toast(e.message)); D = await api("/api"); calRender(); },
   "sched-del": async (el) => { await api("/api/schedule/delete", { id: el.dataset.id }).catch((e) => toast(e.message)); S = await api("/api/system"); calRender(); },
+  "set-cal": (el) => { calMode = el.dataset.v; try { localStorage.setItem(CAL_KEY, calMode); } catch {} calRender(); el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }); },
+  "set-dock": (el) => { dockMode = el.dataset.v; try { localStorage.setItem(DOCK_KEY, dockMode); } catch {} topBar(); el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }); },
 };
 
 // ---------------------------------------------------------------- Home: suggestion carousel
@@ -743,7 +746,7 @@ const IMG_ACTIONS = {
 
 // ---------------------------------------------------------------- Services
 function services() {
-  main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps and Pinterest. Listed in <code>services.json</code>.</p></div>
+  main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps and Pinterest. Listed in <code>services.json</code>.</p><div class="r"><a class="btn glass" href="#/images">Manage images</a></div></div>
     <div class="cards">${S.services.map((s) => {
       if (s.internal === "pinterest") {
         const p = s.pinterest || {};
@@ -778,8 +781,86 @@ function service(id) {
   ambient(art(s.name));
 }
 
+// ---------------------------------------------------------------- Settings
+async function settingsPage() {
+  const cfg = await api("/api/settings").catch(() => null);
+  if (route().pg !== "settings") return;
+  if (!cfg) { main.innerHTML = '<p class="empty">Settings are not available.</p>'; return; }
+  const seg = (act, cur) => `<div class="seg" role="radiogroup">${[["pinned", "Pinned"], ["float", "Floating"]].map(([k, l]) =>
+    `<button type="button" role="radio" aria-checked="${cur === k}" class="${cur === k ? "on" : ""}" data-act="${act}" data-v="${k}">${l}</button>`).join("")}</div>`;
+  main.innerHTML = `<div class="ph"><h1>Settings</h1><p>One place for layout, vault, card images, agents and services.</p></div>
+    <h3>Appearance</h3>
+    <div class="img-sources">
+      <div class="img-set glass"><b>Calendar</b><small>Week strip under the top bar, or a pill that opens on hover.</small>${seg("set-cal", calMode)}</div>
+      <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill.</small>${seg("set-dock", dockMode)}</div>
+    </div>
+    <h3>Vault &amp; server</h3>
+    <form class="task glass" id="set-vault">
+      <div class="set-row">
+        <label>Vault path <input id="set-vault-dir" value="${esc(cfg.vaultDir)}" autocomplete="off"></label>
+        <label>Language <select class="pick" id="set-vault-lang"><option value="en" ${cfg.vaultLang === "en" ? "selected" : ""}>English (en)</option><option value="pt" ${cfg.vaultLang === "pt" ? "selected" : ""}>Portuguese (pt)</option></select></label>
+        <label>Port <input id="set-port" type="number" min="1024" max="65535" value="${esc(cfg.port)}"></label>
+        <button class="btn peach" type="submit">Save</button>
+      </div>
+      <small>Vault path and language apply immediately and persist to <code>.env</code>; port takes effect on the next restart.</small>
+    </form>
+    <h3>Card images</h3>
+    <form class="task glass" id="set-images">
+      <div class="set-row">
+        <label>Photo folder <input id="set-folder" value="${esc(cfg.folder)}" placeholder="~/Pictures/my-photos" autocomplete="off"></label>
+        <label>Pinterest board <input id="set-board" value="${esc(cfg.board)}" placeholder="user/board" autocomplete="off"></label>
+        <a class="btn glass" href="#/images">Manage images</a>
+        <button class="btn peach" type="submit">Save</button>
+      </div>
+      <small>Saved in <code>pinterest.json</code>. Use Manage images to star, hide or pick images per card.</small>
+    </form>
+    <h3>Agents (<code>agents.json</code>)</h3>
+    <form class="task glass" id="set-agents-form">
+      <textarea class="code" id="set-agents" rows="10" spellcheck="false" aria-label="Agents JSON">${esc(JSON.stringify(cfg.agents, null, 2))}</textarea>
+      <div class="task-bar"><small>Each agent has <code>id</code>, <code>name</code>, and <code>run</code> (CLI command with <code>{prompt}</code>, <code>{model}</code>, <code>{effort}</code>, <code>{session}</code>) or <code>api</code> (<code>anthropic</code> / <code>openai</code>), plus optional <code>models</code>, <code>efforts</code> and <code>open</code> commands.</small>
+        <button class="btn peach" type="submit">Save</button></div>
+    </form>
+    <h3>Services (<code>services.json</code>)</h3>
+    <form class="task glass" id="set-services-form">
+      <textarea class="code" id="set-services" rows="8" spellcheck="false" aria-label="Services JSON">${esc(JSON.stringify(cfg.services, null, 2))}</textarea>
+      <div class="task-bar"><small>Each service has <code>id</code>, <code>name</code>, <code>url</code> and <code>desc</code> (plus optional <code>icon</code>, <code>dock</code>, <code>width</code>, <code>max</code>, <code>proxy</code>, <code>tailnet</code>).</small>
+        <button class="btn peach" type="submit">Save</button></div>
+    </form>`;
+  $("#set-vault").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/settings", { vaultDir: $("#set-vault-dir").value, vaultLang: $("#set-vault-lang").value, port: Number($("#set-port").value) });
+      [D, S] = await Promise.all([api("/api"), api("/api/system")]); topBar(); toast("Vault & server settings saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-images").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/settings", { folder: $("#set-folder").value, board: $("#set-board").value });
+      D = await api("/api"); toast("Card image sources saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-agents-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const list = JSON.parse($("#set-agents").value);
+      await api("/api/settings", { agents: list });
+      S = await api("/api/system"); topBar(); toast("Agents saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-services-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const list = JSON.parse($("#set-services").value);
+      await api("/api/settings", { services: list });
+      S = await api("/api/system"); topBar(); toast("Services saved");
+    } catch (err) { toast(err.message); }
+  };
+  ambient(art("settings"));
+}
+
 // ---------------------------------------------------------------- routes and events
-const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], images: [imagesPage, "Images"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
+const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], images: [imagesPage, "Images"], settings: [settingsPage, "Settings"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
 function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
 function render() {
   if (!D) return;

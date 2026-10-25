@@ -70,7 +70,7 @@ drops the calendar back in place on hover; *Pin* keeps it open. The dock at the 
 
 ## Optional pieces
 
-Everything below is off until you set it up. Skip what you don't need.
+Everything below is off until you set it up, and all of it (vault path, language, port, calendar/dock mode, card image sources, `agents.json` and `services.json`) can be edited from the **Settings** page in the dock or in the files directly. Skip what you don't need.
 
 ### Card images: your photos and Pinterest
 
