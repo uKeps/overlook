@@ -388,6 +388,9 @@ function runOptions() {
   fill("#run-model", r.models, r.models?.[0]); fill("#run-effort", r.efforts, r.effort);
 }
 const runChoice = () => ({ agent: $("#run-agent")?.value, model: $("#run-model")?.hidden ? undefined : $("#run-model")?.value, effort: $("#run-effort")?.hidden ? undefined : $("#run-effort")?.value });
+// "Open in…" buttons: the commands agents.json gives the agent; the ones that need a session only when there is one.
+const openButtons = (runner, attrs, hasSession) => (runner?.open || []).filter((o) => !o.session || hasSession)
+  .map((o) => `<button class="btn" data-act="open" data-via="${esc(o.label)}" ${attrs}>${esc(o.label)} ↗</button>`).join("");
 const taskMeta = (t) => [runnerName(t.agent), t.model, t.effort].filter(Boolean).join(" · ");
 async function runPrompt() {
   const t = $("#run-prompt"), prompt = t.value.trim();
@@ -411,7 +414,7 @@ async function taskPage(id) {
     taskLast = signature;
     $("#task-head").innerHTML = heading(esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task"),
       `${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))} · ${taskStatus(t)}`,
-      t.end ? "" : `<div class="r"><button class="btn" data-act="stop" data-id="${esc(t.id)}">Stop</button></div>`);
+      `<div class="r">${t.end ? "" : `<button class="btn" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}</div>`);
     const atEnd = innerHeight + scrollY >= document.body.scrollHeight - 160;
     $("#feed").innerHTML = t.events.map((e) => `<div class="row ev ${e.t}">
         <span class="x mono">${new Date(e.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })}</span>
@@ -445,7 +448,8 @@ async function agentPage(key) {
     agLast = signature;
     const status = a.live ? "running" : STATE[a.state] || "idle";
     $("#agent-head").innerHTML = heading(esc(a.title || AGENT_NAME[a.name] || a.name),
-      `${esc(AGENT_NAME[a.name] || a.name)} · <span class="mono">${esc(a.cwd)}</span>${a.pid ? ` · pid ${a.pid}` : ""}${a.seconds ? ` · ${duration(a.seconds)}` : ""} · ${status}`);
+      `${esc(AGENT_NAME[a.name] || a.name)} · <span class="mono">${esc(a.cwd)}</span>${a.pid ? ` · pid ${a.pid}` : ""}${a.seconds ? ` · ${duration(a.seconds)}` : ""} · ${status}`,
+      `<div class="r">${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(key)}"`, true)}</div>`);
     $("#agent-needs").innerHTML = a.needs ? `<div class="needs"><p class="label" style="margin:0 0 6px">Needs you</p><p>${fmt(a.needs)}</p></div>` : "";
     $("#talk-hint").textContent = a.name === "agy" ? "Continues this conversation in AGY (agy -p --conversation)."
       : a.live ? "Session open in a terminal: the reply comes in a background copy, and the terminal stays intact."
@@ -527,6 +531,9 @@ const ACTIONS = {
   enroll: async (el) => { await api("/api/review", { path: el.dataset.p, remembered: false }); toast("In the cycle: first review tomorrow"); D = await api("/api"); render(); },
   routine: async (el) => {
     try { const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() }); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
+  },
+  open: async (el) => {
+    try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
   },
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {

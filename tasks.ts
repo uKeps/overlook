@@ -6,20 +6,24 @@ import { realpathSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
 // models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults);
-// a CLI agent receives the choice through {model} and {effort} in `run`.
+// a CLI agent receives the choice through {model} and {effort} in `run`, and {session} gets a fresh UUID per task.
+// open: "Open in…" commands for a session, with {session}, {cwd}, and {terminal} (the user's terminal) as the first token.
 export type Agent = {
   id: string; name: string; process?: string; run?: string[]; api?: "anthropic" | "openai"; url?: string; key?: string;
-  model?: string; models?: string[]; effort?: string; efforts?: string[];
+  model?: string; models?: string[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>;
 };
 type Event = { t: "you" | "text" | "tool" | "result" | "error"; txt: string; name?: string; at: string };
-type Task = { id: string; agent: string; model: string; effort: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
+type Task = { id: string; agent: string; model: string; effort: string; session?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
 
 // Without agents.json: the CLIs Overlook always knew about. A CLI shows up as runnable only when it is on the PATH.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULTS: Agent[] = [
-  { id: "claude", name: "Claude Code", process: "claude", run: ["claude", "-p", "{prompt}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
-    models: ["opus", "sonnet", "haiku"], efforts: EFFORTS, effort: "high" },
-  { id: "agy", name: "Antigravity", process: "agy", run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "auto", "--print-timeout", "10m"], efforts: EFFORTS, effort: "high" },
+  { id: "claude", name: "Claude Code", process: "claude", models: ["opus", "sonnet", "haiku"], efforts: EFFORTS, effort: "high",
+    run: ["claude", "-p", "{prompt}", "--session-id", "{session}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
+    open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] } },
+  { id: "agy", name: "Antigravity", process: "agy", efforts: EFFORTS, effort: "high",
+    run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "auto", "--print-timeout", "10m"],
+    open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] } },
   { id: "codex", name: "Codex", process: "codex", run: ["codex", "exec", "{prompt}"] },
   { id: "gemini", name: "Gemini", process: "gemini", run: ["gemini", "-p", "{prompt}"] },
 ];
@@ -59,7 +63,8 @@ export function runTask(root: string, dir: string, agentId: string, prompt: stri
   if (opts.model && !models(a).includes(opts.model)) return `${a.name} has no model "${opts.model}"`;
   if (opts.effort && !efforts(a).includes(opts.effort)) return `${a.name} has no effort "${opts.effort}"`;
   const model = opts.model || models(a)[0] || "", effort = opts.effort || defaultEffort(a);
-  const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, prompt, routine: opts.routine, start: now(), events: [] };
+  const session = a.run?.some((x) => x.includes("{session}")) ? crypto.randomUUID() : undefined;
+  const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, prompt, routine: opts.routine, start: now(), events: [] };
   tasks.set(task.id, task);
   if (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
   log(task, { t: "you", txt: prompt });
@@ -78,7 +83,7 @@ async function cli(a: Agent, root: string, task: Task, ctrl: AbortController) {
   // An empty {model}/{effort} drops the token and the flag before it, so the CLI falls back to its own default.
   const args: string[] = [];
   for (const x of rest) {
-    const v = x.replaceAll("{prompt}", task.prompt).replaceAll("{model}", task.model).replaceAll("{effort}", task.effort);
+    const v = x.replaceAll("{prompt}", task.prompt).replaceAll("{model}", task.model).replaceAll("{effort}", task.effort).replaceAll("{session}", task.session ?? "");
     if (/\{(model|effort)\}/.test(x) && !(x.includes("{model}") ? task.model : task.effort)) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
     args.push(v);
   }
@@ -92,6 +97,29 @@ async function cli(a: Agent, root: string, task: Task, ctrl: AbortController) {
   if (ctrl.signal.aborted) throw new Error("stopped");
   return code === 0;
 }
+// ---------------------------------------------------------------- Open in…
+const terminal = () => { const x = bin("xdg-terminal-exec"); return x ? [x] : process.env.TERMINAL ? [process.env.TERMINAL, "-e"] : null; };
+export const openers = (a: Agent) => Object.entries(a.open ?? {}).map(([label, cmd]) => ({ label, session: cmd.some((x) => x.includes("{session}")) }));
+// Launches detached; the caller has already validated session and cwd.
+export function openIn(a: Agent, label: string, cwd: string, session = "") {
+  const cmd = a.open?.[label];
+  if (!cmd) return `${a.name} has no "${label}"`;
+  if (cmd.some((x) => x.includes("{session}")) && !session) return "no session to open";
+  const [head, ...rest] = cmd.map((x) => x.replaceAll("{session}", session).replaceAll("{cwd}", cwd));
+  let args: string[];
+  if (head === "{terminal}") {
+    const t = terminal();
+    if (!t) return "no terminal found: install xdg-terminal-exec or set TERMINAL in .env";
+    // The terminal may open in its own default folder, and a resumed session belongs to its project folder.
+    args = [...t, "sh", "-c", 'cd "$0" && exec "$@"', cwd, bin(rest[0]) ?? rest[0], ...rest.slice(1)];
+  } else {
+    if (!bin(head)) return `${head} is not installed`;
+    args = [bin(head)!, ...rest];
+  }
+  Bun.spawn(args, { cwd, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+  return true;
+}
+
 async function lines(stream: ReadableStream<Uint8Array>, on: (l: string) => void) {
   const dec = new TextDecoder();
   let buf = "";

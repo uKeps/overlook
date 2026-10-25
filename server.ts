@@ -8,7 +8,7 @@ import { readdirSync, readlinkSync, mkdirSync, readFileSync, existsSync } from "
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback } from "./pinterest";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn } from "./tasks";
 
 const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -330,7 +330,19 @@ async function services() {
 
 // Agents you can put to work from the Agents page, from agents.json (or the built-in CLIs).
 const runners = () => loadAgents(import.meta.dir).filter((a) => a.run || a.api)
-  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a) }));
+  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a) }));
+// "Open in…" for a task (its session, in the vault) or a live/background session (its own folder). Nothing comes from the client but ids.
+async function open(b: any) {
+  const all = loadAgents(import.meta.dir);
+  if (typeof b.task === "string") {
+    const t = getTask(b.task), a = t && all.find((x) => x.id === t.agent);
+    return a ? openIn(a, String(b.via), ROOT, t!.session) : "task not found";
+  }
+  const s = typeof b.key === "string" ? await agent(b.key) : null, a = s && all.find((x) => x.process === s.name);
+  if (!s || !a) return "session not found";
+  const cwd = s.cwd.replace(/^~/, homedir());
+  return openIn(a, String(b.via), existsSync(cwd) ? cwd : ROOT, b.key.slice(2));
+}
 const str = (x: unknown) => (typeof x === "string" ? x : undefined);
 const started = (t: ReturnType<typeof runTask>) => (typeof t === "string" ? new Response(t, { status: 400 }) : json({ id: t.id }));
 
@@ -383,6 +395,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pinterest/sync") return json(await sync(true));
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
+    if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     if (p === "/api/task/stop") return json(stopTask(String(b.id)) && { ok: true });
     return new Response("404", { status: 404 });
   }

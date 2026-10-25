@@ -28,6 +28,7 @@ beforeAll(async () => {
     { id: "echo", name: "Echo", process: "echo", run: ["echo", "got", "{prompt}", "--model", "{model}", "--effort", "{effort}"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" },
     { id: "bare", name: "Bare", run: ["echo", "got", "{prompt}", "--model", "{model}"] },
     { id: "sleeper", name: "Sleeper", run: ["sleep", "30"] },
+    { id: "opener", name: "Opener", run: ["true", "{session}"], open: { Log: ["sh", "-c", "echo {session} > opened.txt"] } },
     { id: "missing", name: "Missing", run: ["definitely-not-installed-overlook"] },
     { id: "fake-openai", name: "Fake OpenAI", api: "openai", url: `${FAKE}/v1`, model: "fake", key: "FAKE_KEY" },
     { id: "fake-claude", name: "Fake Claude", api: "anthropic", url: FAKE, model: "claude-opus-5-5", key: "FAKE_KEY" },
@@ -122,7 +123,7 @@ const run = async (agent: string, prompt = "go", extra = {}) => (await (await po
 test("agents.json drives the runner list", async () => {
   const s = await (await fetch(`${BASE}/api/system`)).json();
   const ready = Object.fromEntries(s.runners.map((r: any) => [r.id, r.ready]));
-  expect(ready).toEqual({ echo: true, bare: true, sleeper: true, missing: false, "fake-openai": true, "fake-claude": true });
+  expect(ready).toEqual({ echo: true, bare: true, sleeper: true, opener: true, missing: false, "fake-openai": true, "fake-claude": true });
   const claude = s.runners.find((r: any) => r.id === "fake-claude");
   expect([claude.models, claude.effort]).toEqual([["claude-opus-5-5"], "high"]);
   expect(s.agentsMd).toBe(false);
@@ -167,4 +168,14 @@ test("a Claude agent runs the tool loop through the SDK", async () => {
   expect([calls[0].body.model, calls[0].body.output_config.effort]).toEqual(["claude-opus-5-5", "low"]);
   expect(calls[0].body.tools.every((x: any) => x.strict)).toBe(true);
   expect(calls[1].body.messages.at(-1).content[0]).toMatchObject({ type: "tool_result", tool_use_id: "t1" });
+});
+
+test("open in… launches the agent's own command for a task session", async () => {
+  const t = await finished(await run("opener"));
+  expect(t.session).toMatch(/^[0-9a-f-]{36}$/);
+  expect((await post("/api/open", { task: t.id, via: "Log" })).status).toBe(200);
+  for (let i = 0; i < 50 && !existsSync(`${VAULT}/opened.txt`); i++) await Bun.sleep(50);
+  expect(readFileSync(`${VAULT}/opened.txt`, "utf8").trim()).toBe(t.session);
+  expect((await post("/api/open", { task: t.id, via: "Nope" })).status).toBe(400);
+  expect((await post("/api/open", { key: "c:../../etc", via: "Log" })).status).toBe(400);
 });

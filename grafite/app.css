@@ -35,7 +35,7 @@ main { max-width: var(--max); margin: 0 auto; padding: 40px var(--gutter) 80px; 
 .ph { display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap; margin-bottom: 36px; }
 .ph h1 { font: 400 56px/1 var(--serif); letter-spacing: -0.01em; }
 .ph p { font-size: 14px; color: var(--muted); }
-.ph .r { margin-left: auto; }
+.ph .r { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .label { font: 400 12px var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--label); margin: 44px 0 6px; }
 .col { max-width: 860px; }
 
