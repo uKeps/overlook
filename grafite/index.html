@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,18 +12,18 @@
 </head>
 <body>
 <header class="top">
-  <nav class="nav" id="nav" aria-label="Páginas"></nav>
-  <span class="hora" id="hora"></span>
-  <button class="btn" data-act="capturar">Capturar <kbd>C</kbd></button>
+  <nav class="nav" id="nav" aria-label="Pages"></nav>
+  <span class="time" id="time"></span>
+  <button class="btn" data-act="capture">Capture <kbd>C</kbd></button>
 </header>
 <div class="svcbar" id="svcbar"></div>
 
 <main id="main"></main>
 
-<dialog id="cap">
-  <label for="capt">Capturar na nota do dia</label>
-  <textarea id="capt" rows="3" placeholder="Uma ideia, um link, uma dúvida. Enter salva."></textarea>
-  <small>Vai para "Capturei" em <span id="capdia"></span>. O agente processa depois.</small>
+<dialog id="capture">
+  <label for="capture-text">Capture to the daily note</label>
+  <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question. Enter saves."></textarea>
+  <small>Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
 </dialog>
 <div class="toast" id="toast" role="status"></div>
 

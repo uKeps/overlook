@@ -1,0 +1,4 @@
+[
+  {"id": "pinterest", "name": "Pinterest", "url": "https://www.pinterest.com", "desc": "Images for the Home carousel", "icon": "book", "internal": "pinterest"},
+  {"id": "example", "name": "My local app", "url": "http://127.0.0.1:8080", "desc": "Any localhost you want to see in Overlook", "icon": "services"}
+]

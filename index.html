@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -15,20 +15,20 @@
 <header class="top">
   <div class="crumb"><b>Vault</b><span>/</span><span id="crumb">Home</span></div>
   <div class="svcbar" id="svcbar"></div>
-  <div class="clock"><span id="hora"></span><small id="data"></small></div>
-  <button class="glass btn" data-act="capturar">Capturar <kbd>C</kbd></button>
+  <div class="clock"><span id="time"></span><small id="date"></small></div>
+  <button class="glass btn" data-act="capture">Capture <kbd>C</kbd></button>
 </header>
 
-<nav class="week glass" id="week" aria-label="Semana"></nav>
+<nav class="week glass" id="week" aria-label="Week"></nav>
 
 <main id="main"></main>
 
-<nav class="dock glass" id="dock" aria-label="Páginas"></nav>
+<nav class="dock glass" id="dock" aria-label="Pages"></nav>
 
-<dialog id="cap" class="glass">
-  <label for="capt">Capturar na nota do dia</label>
-  <textarea id="capt" rows="3" placeholder="Uma ideia, um link, uma dúvida. Enter salva."></textarea>
-  <small>Vai para "Capturei" em <span id="capdia"></span>. O agente processa depois.</small>
+<dialog id="capture" class="glass">
+  <label for="capture-text">Capture to the daily note</label>
+  <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question. Enter saves."></textarea>
+  <small>Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
 </dialog>
 <div class="toast glass" id="toast" role="status"></div>
 

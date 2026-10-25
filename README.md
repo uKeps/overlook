@@ -2,13 +2,13 @@
 
 A local dashboard for an Obsidian vault: today's focus, spaced review, notes, graph, quick capture,
 plus the coding agents (Claude Code, AGY) running on your machine. It reads your Markdown straight
-from disk. No database, no build step, no cloud. UI is in Brazilian Portuguese.
+from disk. No database, no build step, no cloud.
 
 ![Home](docs/screenshots/home.jpg)
 
 | Note reader | Alternate UI (`/grafite/`) |
 | --- | --- |
-| ![Note](docs/screenshots/nota.jpg) | ![Grafite](docs/screenshots/grafite.jpg) |
+| ![Note](docs/screenshots/note.jpg) | ![Grafite](docs/screenshots/grafite.jpg) |
 
 ## Quick start
 
@@ -33,19 +33,22 @@ ones just show up empty.
 | Path | Used for |
 | --- | --- |
 | `1 Inbox/` … `8 …/` | Notes. Any folder starting with a digit 1–8 and a space (`7 …` is skipped: drawings) |
-| `2 Diário/YYYY-MM-DD.md` | Daily note. `## Foco de hoje` feeds the Home carousel, captures land in `## Capturei` |
-| `2 Diário/_Template.md` | Optional template for new daily notes |
-| `9 Agente/Log.md`, `Achados.md` | Optional agent log and gotchas (bullet lines) |
+| `2 Daily/YYYY-MM-DD.md` | Daily note. `## Focus` feeds the Home carousel, captures land in `## Captured` |
+| `2 Daily/_Template.md` | Optional template for new daily notes |
+| `9 Agent/Log.md`, `Findings.md` | Optional agent log and gotchas (bullet lines) |
 
 Frontmatter Overlook reads, all optional:
 
 ```yaml
-tipo: conceito        # conceito, nota, fonte, projeto...
-area: programacao
+type: concept         # concept, project and daily get special treatment; anything else is a label
+area: programming     # colors the graph
 tags: [web, api]
-revisar_em: 2026-01-10  # shows up in Revisar on/after this date
-intervalo: 2            # days; doubles when you remember, resets to 1 when you forget
+review_on: 2026-01-10 # shows up in Review on/after this date
+interval: 2           # days; doubles when you remember, resets to 1 when you forget
 ```
+
+Vault in Portuguese? Set `VAULT_LANG=pt` in `.env` and Overlook reads `2 Diário`, `## Foco de hoje`,
+`## Capturei`, `9 Agente/Achados.md` and the `tipo` / `revisar_em` / `intervalo` keys instead.
 
 A one-line summary comes from a `> [!abstract]` callout right after the title.
 
@@ -61,10 +64,10 @@ Without Pinterest, cards use images from `ART_DIR` (default `~/Pictures/Wallpape
 
 ```sh
 cp pinterest.example.json pinterest.json   # set "board": "your-user/your-board"
-cp servicos.example.json servicos.json     # shows its status under Serviços
+cp services.example.json services.json     # shows its status under Services
 ```
 
-Restart. Images sync every 6 hours into `cache/`, or on demand from Serviços → *Sincronizar agora*.
+Restart. Images sync every 6 hours into `cache/`, or on demand from Services → *Sync now*.
 This reads the public board page, not an official API, so it may break if Pinterest changes it.
 
 **Private board (official API):** create an app at
@@ -76,8 +79,8 @@ http://127.0.0.1:3333/auth/pinterest. Tokens are written back to `.env` and refr
 
 ### Services
 
-`servicos.json` lists anything you run locally; Overlook pings each URL and can embed it.
-See `servicos.example.json` for the fields.
+`services.json` lists anything you run locally; Overlook pings each URL and can embed it.
+See `services.example.json` for the fields.
 
 ### Agents
 
@@ -111,7 +114,7 @@ WantedBy=default.target
 
 ## For agents
 
-`bun server.ts mapa` prints one line per note; `bun server.ts hoje` prints what the Home shows.
+`bun server.ts map` prints one line per note; `bun server.ts today` prints what the Home shows.
 
 ## License
 

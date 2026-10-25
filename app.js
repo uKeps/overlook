@@ -1,36 +1,37 @@
-// Overlook. Rotas por hash, dados de /api (vault) e /api/sistema (agentes, serviços, rotinas).
+// Overlook. Hash routes, data from /api (vault) and /api/system (agents, services, routines).
 const $ = (s, el = document) => el.querySelector(s);
 const main = $("#main");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const fold = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-const rel = new Intl.RelativeTimeFormat("pt-BR", { numeric: "auto" });
+const LOCALE = "en-US";
+const rel = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" });
 const hash = (s) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
-const dias = (a, b) => Math.round((new Date(b) - new Date(a)) / 864e5);
-const somaDias = (d, n) => new Date(new Date(d + "T12:00").getTime() + n * 864e5).toLocaleDateString("sv");
+const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 864e5);
+const addDays = (d, n) => new Date(new Date(d + "T12:00").getTime() + n * 864e5).toLocaleDateString("sv");
 
 let D = null; // vault
-let S = { agentes: [], servicos: [], rotinas: {} }; // sistema
+let S = { agents: [], services: [], routines: {} }; // system
 
 const I = {
   home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
-  notas: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
-  revisar: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
-  grafo: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.4 6.6l7.2 1M7 8.3l2.2 7.3M16.6 10.1l-5 6"/>',
-  agentes: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1.5M15 13v1.5"/>',
-  servicos: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  notes: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
+  review: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  graph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.4 6.6l7.2 1M7 8.3l2.2 7.3M16.6 10.1l-5 6"/>',
+  agents: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1.5M15 13v1.5"/>',
+  services: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   spark: '<path d="M12 3l1.9 5.6 5.6 1.9-5.6 1.9L12 18l-1.9-5.6-5.6-1.9 5.6-1.9z"/>',
   l: '<path d="m15 18-6-6 6-6"/>', r: '<path d="m9 18 6-6-6-6"/>', ext: '<path d="M7 17 17 7M9 7h8v8"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/>',
   bolt: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
-  livro: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5V21h16"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5V21h16"/>',
   tv: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/>',
   reload: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', play: '<path d="m7 4 13 8-13 8z"/>',
-  alvo: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
-  lacuna: '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 4 8M8 12h4"/><path d="m3 3 18 18"/>',
-  folha: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.4 5-6"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+  gap: '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 4 8M8 12h4"/><path d="m3 3 18 18"/>',
+  leaf: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.4 5-6"/>',
 };
-const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
+const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
 async function api(p, body) {
   const r = await fetch(p, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
@@ -42,119 +43,119 @@ function toast(msg) {
   t.textContent = msg; t.classList.add("on");
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 2600);
 }
-// Aberto pelo Tailscale (celular): apps embutidos pelos links do tailnet, montados a partir do host atual.
-const remoto = location.hostname.endsWith(".ts.net");
-const endereco = (s) => (remoto ? (s.tailnet ? `https://${location.hostname}:${s.tailnet}` : "") : s.proxy ? `http://127.0.0.1:${s.proxy}` : s.url);
-const pinObj = (s) => (D?.pins?.length ? D.pins[(typeof s === "number" ? hash(D.hoje) + s : hash(String(s))) % D.pins.length] : null);
-const arte = (s) => (pinObj(s) ? `/pin/${pinObj(s).id}` : D?.arte ? `/arte/${hash(String(s)) % D.arte}` : "");
+// Opened over Tailscale (phone): embedded apps use the tailnet links, built from the current host.
+const remote = location.hostname.endsWith(".ts.net");
+const address = (s) => (remote ? (s.tailnet ? `https://${location.hostname}:${s.tailnet}` : "") : s.proxy ? `http://127.0.0.1:${s.proxy}` : s.url);
+const pinFor = (s) => (D?.pins?.length ? D.pins[(typeof s === "number" ? hash(D.today) + s : hash(String(s))) % D.pins.length] : null);
+const art = (s) => (pinFor(s) ? `/pin/${pinFor(s).id}` : D?.art ? `/art/${hash(String(s)) % D.art}` : "");
 const obs = (p) => `obsidian://open?vault=${encodeURIComponent(D.vault)}&file=${encodeURIComponent(p.replace(/\.md$/, ""))}`;
-const nota = (p) => `#/n/${encodeURIComponent(p)}`;
-const semLinks = (s) => s.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => b || a);
+const noteHref = (p) => `#/n/${encodeURIComponent(p)}`;
+const unlink = (s) => s.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => b || a);
 const emLinks = (s) => esc(s).replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => `<em>${b || a}</em>`);
-const comLinks = (s) => esc(s).replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => `<a href="#/w/${encodeURIComponent(a)}">${b || a}</a>`);
-const limpo = (s) => semLinks(s || "").replace(/[*`_]/g, "");
-const nomeDe = (p) => p.split("/").pop().replace(/\.md$/, "");
-const resolver = (nome) => D.notas.find((n) => nomeDe(n.path) === nome || n.titulo === nome);
-function quando(ms) {
+const withLinks = (s) => esc(s).replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => `<a href="#/w/${encodeURIComponent(a)}">${b || a}</a>`);
+const plain = (s) => unlink(s || "").replace(/[*`_]/g, "");
+const nameOf = (p) => p.split("/").pop().replace(/\.md$/, "");
+const resolveNote = (name) => D.notes.find((n) => nameOf(n.path) === name || n.title === name);
+function ago(ms) {
   const s = (ms - Date.now()) / 1000;
   for (const [u, n] of [["day", 86400], ["hour", 3600], ["minute", 60]]) if (Math.abs(s) >= n) return rel.format(Math.round(s / n), u);
-  return "agora";
+  return "now";
 }
-const duracao = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : `${Math.floor(s / 86400)} d`);
-const vencidas = () => D.notas.filter((n) => n.revisar_em && n.revisar_em <= D.hoje).sort((a, b) => a.revisar_em.localeCompare(b.revisar_em));
-const inbox = () => D.notas.filter((n) => n.pasta.startsWith("1 "));
-const PASTAS = { "1": "Inbox", "2": "Diário", "3": "Conceitos", "4": "Ideias", "5": "Fontes", "6": "Projetos", "8": "Estudos" };
+const duration = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : `${Math.floor(s / 86400)} d`);
+const due = () => D.notes.filter((n) => n.review_on && n.review_on <= D.today).sort((a, b) => a.review_on.localeCompare(b.review_on));
+const inbox = () => D.notes.filter((n) => n.folder.startsWith("1 "));
+const folderLabel = (f) => f.replace(/^\d+\s*-?\s*/, "");
+const dailyPath = () => `${D.daily}/${D.today}`;
 
-// Fundo ambiente: duas camadas em crossfade com a arte do que está em foco.
-let ambAtual = "", ambA = false;
-function ambiente(url) {
-  if (!url || url === ambAtual) return;
-  ambAtual = url; ambA = !ambA;
+// Ambient background: two layers crossfading with the art of what is in focus.
+let ambCurrent = "", ambA = false;
+function ambient(url) {
+  if (!url || url === ambCurrent) return;
+  ambCurrent = url; ambA = !ambA;
   const [on, off] = ambA ? [$("#amb1"), $("#amb2")] : [$("#amb2"), $("#amb1")];
   on.style.backgroundImage = `url(${url}?amb)`; on.classList.add("on"); off.classList.remove("on");
 }
 
-// ---------------------------------------------------------------- topo, semana, dock
-function relogio() {
+// ---------------------------------------------------------------- top bar, week, dock
+function clock() {
   const d = new Date();
-  $("#hora").textContent = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  $("#data").textContent = d.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+  $("#time").textContent = d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
+  $("#date").textContent = d.toLocaleDateString(LOCALE, { weekday: "long", day: "numeric", month: "long" });
 }
-function precisa() { return (D.foco?.length || 0) + vencidas().length + inbox().length + (D.capturas?.length || 0); }
-function rodandoAgora() { return Object.values(S.rotinas).filter((r) => !r.fim).length; }
+function needsYou() { return (D.focus?.length || 0) + due().length + inbox().length + (D.captured?.length || 0); }
+function runningNow() { return Object.values(S.routines).filter((r) => !r.end).length; }
 
-function topo() {
+function topBar() {
   if (!D) return;
   const rev = {};
-  for (const n of D.notas) if (n.revisar_em) { const k = n.revisar_em < D.hoje ? D.hoje : n.revisar_em; rev[k] = (rev[k] || 0) + 1; }
-  const diarias = new Set(D.diarias);
-  const semana = [...Array(7)].map((_, i) => {
-    const d = somaDias(D.hoje, i), dt = new Date(d + "T12:00");
+  for (const n of D.notes) if (n.review_on) { const k = n.review_on < D.today ? D.today : n.review_on; rev[k] = (rev[k] || 0) + 1; }
+  const dailies = new Set(D.dailies);
+  const week = [...Array(7)].map((_, i) => {
+    const d = addDays(D.today, i), dt = new Date(d + "T12:00");
     const nr = rev[d] || 0;
-    const dots = [...Array(Math.min(nr, 3))].map(() => "<i></i>").join("") + (diarias.has(d) ? '<i class="d"></i>' : "");
-    return `<a class="day ${i ? "" : "hoje"}" href="#/revisar" title="${nr} revisão(ões)${diarias.has(d) ? " · nota do dia" : ""}">
-      <span>${dt.toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "")}</span><b>${dt.getDate()}</b><span class="m">${dots}</span></a>`;
+    const dots = [...Array(Math.min(nr, 3))].map(() => "<i></i>").join("") + (dailies.has(d) ? '<i class="d"></i>' : "");
+    return `<a class="day ${i ? "" : "today"}" href="#/review" title="${nr} review(s)${dailies.has(d) ? " · daily note" : ""}">
+      <span>${dt.toLocaleDateString(LOCALE, { weekday: "short" })}</span><b>${dt.getDate()}</b><span class="m">${dots}</span></a>`;
   }).join("");
-  const n = precisa(), rod = rodandoAgora(), vivos = S.agentes.length;
-  $("#week").innerHTML = `${semana}<span class="wk-sep"></span>
-    <a class="chipbox" href="#/revisar">${icon("alvo", 18)}<span><b>Precisa de você</b>${n} ${n === 1 ? "item" : "itens"}</span></a>
-    <a class="chipbox" href="#/agentes">${icon("bolt", 18)}<span><b>Agentes</b>${vivos} ativos${rod ? ` · ${rod} rotina` : ""}</span></a>`;
+  const n = needsYou(), run = runningNow(), live = S.agents.length;
+  $("#week").innerHTML = `${week}<span class="wk-sep"></span>
+    <a class="chipbox" href="#/review">${icon("target", 18)}<span><b>Needs you</b>${n} ${n === 1 ? "item" : "items"}</span></a>
+    <a class="chipbox" href="#/agents">${icon("bolt", 18)}<span><b>Agents</b>${live} active${run ? ` · ${run} routine` : ""}</span></a>`;
 
-  const { pg } = rota();
-  const { arg } = rota();
-  const item = (id, nome, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) ? "on" : ""}" data-tip="${nome}" aria-label="${nome}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
+  const { pg, arg } = route();
+  const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
-    item("notas", "Notas", "notas") + item("revisar", "Revisar", "revisar", vencidas().length) + item("grafo", "Grafo", "grafo") +
-    item("agentes", "Agentes", "agentes", rod) + item("servicos", "Serviços", "servicos", S.servicos.filter((s) => !s.ok).length) +
-    (S.servicos.some((s) => s.dock) ? '<span class="sep app"></span>' + S.servicos.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.nome, s.icone || "servicos").replace("<a ", '<a data-app ')).join("") : "") +
-    `<span class="sep"></span><button class="spark" data-act="capturar" data-tip="Capturar (C)" aria-label="Capturar">${icon("spark", 22)}</button>`;
+    item("notes", "Notes", "notes") + item("review", "Review", "review", due().length) + item("graph", "Graph", "graph") +
+    item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) +
+    (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
+    `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>`;
 }
 
-// ---------------------------------------------------------------- Home: carrossel de sugestões
-function sugestoes() {
+// ---------------------------------------------------------------- Home: suggestion carousel
+function suggestions() {
   const s = [];
   const ln = (txt) => txt.match(/\[\[([^\]|]+)/)?.[1];
-  for (const f of D.foco || []) { const a = ln(f); s.push({ cat: "Foco de hoje", ic: "alvo", titulo: semLinks(f), raw: f, sub: "Escolhido para hoje na nota do dia.", meta: [["Origem", "Nota do dia"]], href: a ? `#/w/${encodeURIComponent(a)}` : obs(`2 Diário/${D.hoje}`), acao: "Abrir" }); }
-  for (const n of vencidas()) s.push({ cat: "Revisão", ic: "revisar", titulo: n.titulo, sub: "Antes de abrir: você lembra do que se trata?", meta: [["Vencida", n.revisar_em === D.hoje ? "hoje" : `há ${dias(n.revisar_em, D.hoje)} d`], ["Intervalo", `${n.intervalo} d`]], href: "#/revisar", acao: "Revisar" });
-  for (const c of D.capturas || []) s.push({ cat: "Capturado hoje", ic: "spark", titulo: semLinks(c), raw: c, sub: "Captura crua. Vira nota quando couber numa frase, ou morre.", meta: [["Status", "Na nota do dia"]], href: obs(`2 Diário/${D.hoje}`), acao: "Abrir no Obsidian" });
-  for (const n of inbox()) s.push({ cat: "Inbox", ic: "inbox", titulo: n.titulo, sub: "Processar: vira nota permanente ou sai do vault.", meta: [["Chegou", quando(n.mtime)]], href: nota(n.path), acao: "Abrir" });
-  for (const v of D.vermelhos.slice(0, 3)) s.push({ cat: "Lacuna", ic: "lacuna", titulo: v.alvo, sub: `Citado ${v.n}× e ainda não existe. Escreva quando precisar, não por obrigação.`, meta: [["Citado", `${v.n}×`]], href: `#/w/${encodeURIComponent(v.alvo)}`, acao: "Ver quem cita" });
-  for (const n of D.notas.filter((n) => n.tipo === "projeto")) s.push({ cat: "Projeto", ic: "bolt", titulo: n.titulo, sub: limpo(n.resumo), meta: [["Área", n.area || "-"], ["Mexido", quando(n.mtime)]], href: nota(n.path), acao: "Abrir" });
-  const fora = D.notas.filter((n) => n.tipo === "conceito" && !n.revisar_em).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
-  for (const n of fora) s.push({ cat: "Redescobrir", ic: "folha", titulo: n.titulo, sub: limpo(n.resumo), meta: [["Fora do ciclo", "nunca revisada"], ["Área", n.area || "-"]], href: nota(n.path), acao: "Reler" });
-  return s.length ? s : [{ cat: "Tudo em dia", ic: "folha", titulo: "Nada pedindo atenção agora", sub: "Capture uma ideia ou abra uma nota antiga.", meta: [], href: "#/notas", acao: "Ver notas" }];
+  for (const f of D.focus || []) { const a = ln(f); s.push({ cat: "Today's focus", ic: "target", title: unlink(f), raw: f, sub: "Picked for today in the daily note.", meta: [["Source", "Daily note"]], href: a ? `#/w/${encodeURIComponent(a)}` : obs(dailyPath()), action: "Open" }); }
+  for (const n of due()) s.push({ cat: "Review", ic: "review", title: n.title, sub: "Before opening: do you remember what it is about?", meta: [["Due", n.review_on === D.today ? "today" : `${daysBetween(n.review_on, D.today)} d ago`], ["Interval", `${n.interval} d`]], href: "#/review", action: "Review" });
+  for (const c of D.captured || []) s.push({ cat: "Captured today", ic: "spark", title: unlink(c), raw: c, sub: "Raw capture. It becomes a note once it fits in one sentence, or it dies.", meta: [["Status", "In the daily note"]], href: obs(dailyPath()), action: "Open in Obsidian" });
+  for (const n of inbox()) s.push({ cat: "Inbox", ic: "inbox", title: n.title, sub: "Process: becomes a permanent note or leaves the vault.", meta: [["Arrived", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
+  for (const v of D.missing.slice(0, 3)) s.push({ cat: "Gap", ic: "gap", title: v.target, sub: `Linked ${v.n}× and doesn't exist yet. Write it when you need it, not out of duty.`, meta: [["Linked", `${v.n}×`]], href: `#/w/${encodeURIComponent(v.target)}`, action: "See who links it" });
+  for (const n of D.notes.filter((n) => n.type === "project")) s.push({ cat: "Project", ic: "bolt", title: n.title, sub: plain(n.summary), meta: [["Area", n.area || "-"], ["Touched", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
+  const outside = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
+  for (const n of outside) s.push({ cat: "Rediscover", ic: "leaf", title: n.title, sub: plain(n.summary), meta: [["Out of the cycle", "never reviewed"], ["Area", n.area || "-"]], href: noteHref(n.path), action: "Reread" });
+  return s.length ? s : [{ cat: "All caught up", ic: "leaf", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
 }
 
 let idx = 0, SG = [];
 function home() {
-  SG = sugestoes();
+  SG = suggestions();
   idx = Math.min(idx, SG.length - 1);
   const card = (s, i) => {
-    const p = pinObj(i);
-    return `<article class="card" data-i="${i}" style="background-image:url('${arte(i)}?amb')">
+    const p = pinFor(i);
+    return `<article class="card" data-i="${i}" style="background-image:url('${art(i)}?amb')">
       <div class="card-main">
         <div class="card-top"><span class="tag glass">${icon(s.ic, 16)} ${esc(s.cat)}</span><span class="card-idx">${i + 1} / ${SG.length}</span></div>
         <div class="body">
           <p class="sub">${esc(s.sub)}</p>
           ${s.meta.length ? `<div class="meta">${s.meta.map(([k, v]) => `<span>${esc(k)}<b>${esc(v)}</b></span>`).join("")}</div>` : ""}
-          <h2 class="${s.titulo.length > 44 ? "long" : ""}">${emLinks(s.raw || s.titulo)}</h2>
+          <h2 class="${s.title.length > 44 ? "long" : ""}">${emLinks(s.raw || s.title)}</h2>
         </div>
-        <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.acao)} ${icon("r", 16)}</a></div>
+        <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
       </div>
-      <div class="card-pin"><img src="${arte(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}</div>
+      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}</div>
     </article>`;
   };
   main.innerHTML = `<section class="car" id="car">${SG.map(card).join("")}
-      <button class="navb glass l" data-act="prev" aria-label="Anterior">${icon("l")}</button>
-      <button class="navb glass r" data-act="next" aria-label="Próxima">${icon("r")}</button>
-      <div class="dots">${SG.map((_, i) => `<i data-act="ir" data-i="${i}"></i>`).join("")}</div>
+      <button class="navb glass l" data-act="prev" aria-label="Previous">${icon("l")}</button>
+      <button class="navb glass r" data-act="next" aria-label="Next">${icon("r")}</button>
+      <div class="dots">${SG.map((_, i) => `<i data-act="go" data-i="${i}"></i>`).join("")}</div>
     </section><section class="tiles" id="tiles"></section>`;
-  posicionar(); tiles();
+  place(); tiles();
 }
-function posicionar() {
+function place() {
   document.querySelectorAll(".card").forEach((c) => {
     const n = SG.length, d = (Number(c.dataset.i) - idx + n) % n;
-    const o = n > 2 && d > n / 2 ? d - n : d, a = Math.abs(o); // circular: vizinho dos dois lados
+    const o = n > 2 && d > n / 2 ? d - n : d, a = Math.abs(o); // circular: neighbor on both sides
     c.style.transform = `translateX(${Math.sign(o) * Math.min(a, 1) * 92}%) scale(${o ? 0.84 : 1})`;
     c.style.opacity = a > 1 ? 0 : a ? 0.6 : 1;
     c.style.zIndex = 5 - a;
@@ -162,70 +163,70 @@ function posicionar() {
     c.style.pointerEvents = a > 1 ? "none" : "";
   });
   document.querySelectorAll(".dots i").forEach((d, i) => d.classList.toggle("on", i === idx));
-  if (SG[idx]) ambiente(arte(idx));
+  if (SG[idx]) ambient(art(idx));
 }
-const mover = (d) => { idx = (idx + d + SG.length) % SG.length; posicionar(); };
+const move = (d) => { idx = (idx + d + SG.length) % SG.length; place(); };
 
 function tiles() {
   const el = $("#tiles");
   if (!el) return;
-  const prox = D.notas.filter((n) => n.revisar_em > D.hoje).sort((a, b) => a.revisar_em.localeCompare(b.revisar_em))[0];
-  const on = S.servicos.filter((s) => s.ok).length;
-  const nomes = { claude: "Claude", agy: "AGY", codex: "Codex", gemini: "Gemini" };
+  const next = D.notes.filter((n) => n.review_on > D.today).sort((a, b) => a.review_on.localeCompare(b.review_on))[0];
+  const on = S.services.filter((s) => s.ok).length;
+  const names = { claude: "Claude", agy: "AGY", codex: "Codex", gemini: "Gemini" };
   el.innerHTML = `
-    <a class="tile glass" href="#/agentes"><span class="k">${icon("agentes", 16)} Agentes ativos</span><span class="v">${S.agentes.length}</span>
-      <span class="s">${esc(S.agentes.map((a) => `${nomes[a.nome] || a.nome} em ${a.cwd.split("/").pop() || "~"}`).join(" · ") || "nenhum rodando")}</span></a>
-    <a class="tile glass" href="#/servicos"><span class="k">${icon("servicos", 16)} Serviços</span><span class="v">${on}/${S.servicos.length}</span>
-      <span class="s">${esc(S.servicos.map((s) => `${s.ok ? "●" : "○"} ${s.nome}`).join("  ")) || "carregando"}</span></a>
-    <a class="tile glass" href="#/revisar"><span class="k">${icon("revisar", 16)} Revisão</span><span class="v">${vencidas().length}</span>
-      <span class="s">${prox ? `próxima: ${esc(prox.titulo)} ${rel.format(dias(D.hoje, prox.revisar_em), "day")}` : "nenhuma nota no ciclo"}</span></a>
-    <a class="tile glass" href="#/notas"><span class="k">${icon("notas", 16)} Vault</span><span class="v">${D.notas.length}</span>
-      <span class="s">${D.vermelhos.length} ${D.vermelhos.length === 1 ? "lacuna" : "lacunas"} · ${D.notas.filter((n) => Date.now() - n.mtime < 7 * 864e5).length} mexidas na semana</span></a>`;
+    <a class="tile glass" href="#/agents"><span class="k">${icon("agents", 16)} Active agents</span><span class="v">${S.agents.length}</span>
+      <span class="s">${esc(S.agents.map((a) => `${names[a.name] || a.name} in ${a.cwd.split("/").pop() || "~"}`).join(" · ") || "none running")}</span></a>
+    <a class="tile glass" href="#/services"><span class="k">${icon("services", 16)} Services</span><span class="v">${on}/${S.services.length}</span>
+      <span class="s">${esc(S.services.map((s) => `${s.ok ? "●" : "○"} ${s.name}`).join("  ")) || "none configured"}</span></a>
+    <a class="tile glass" href="#/review"><span class="k">${icon("review", 16)} Review</span><span class="v">${due().length}</span>
+      <span class="s">${next ? `next: ${esc(next.title)} ${rel.format(daysBetween(D.today, next.review_on), "day")}` : "no notes in the cycle"}</span></a>
+    <a class="tile glass" href="#/notes"><span class="k">${icon("notes", 16)} Vault</span><span class="v">${D.notes.length}</span>
+      <span class="s">${D.missing.length} ${D.missing.length === 1 ? "gap" : "gaps"} · ${D.notes.filter((n) => Date.now() - n.mtime < 7 * 864e5).length} touched this week</span></a>`;
 }
 
-// ---------------------------------------------------------------- Notas
-let filtro = "", busca = "";
-function notas() {
-  const cont = {};
-  for (const n of D.notas) cont[n.pasta[0]] = (cont[n.pasta[0]] || 0) + 1;
-  main.innerHTML = `<div class="ph"><h1>Notas</h1><p>${D.notas.length} notas no vault</p>
-      <div class="r"><input class="search glass" id="busca" placeholder="Buscar título ou resumo  /" value="${esc(busca)}" autocomplete="off"></div></div>
-    <div class="filters">${[["", "Todas", D.notas.length], ...Object.entries(PASTAS).filter(([k]) => cont[k]).map(([k, v]) => [k, v, cont[k]])]
-      .map(([k, v, c]) => `<button class="fchip ${filtro === k ? "on" : ""}" data-act="filtro" data-k="${k}">${v}<small>${c}</small></button>`).join("")}</div>
-    <div class="grid" id="ngrid"></div>`;
-  grade();
-  ambiente(arte("notas"));
+// ---------------------------------------------------------------- Notes
+let filter = "", query = "";
+function notes() {
+  const count = {};
+  for (const n of D.notes) count[n.folder] = (count[n.folder] || 0) + 1;
+  main.innerHTML = `<div class="ph"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p>
+      <div class="r"><input class="search glass" id="search" placeholder="Search title or summary  /" value="${esc(query)}" autocomplete="off"></div></div>
+    <div class="filters">${[["", "All", D.notes.length], ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])]
+      .map(([k, v, c]) => `<button class="fchip ${filter === k ? "on" : ""}" data-act="filter" data-k="${esc(k)}">${esc(v)}<small>${c}</small></button>`).join("")}</div>
+    <div class="grid" id="note-grid"></div>`;
+  grid();
+  ambient(art("notes"));
 }
-function grade() {
-  const q = fold(busca);
-  const peso = (n) => (!q ? 0 : fold(n.titulo).startsWith(q) ? 0 : fold(n.titulo).includes(q) ? 1 : 2);
-  const ns = D.notas.filter((n) => (!filtro || n.pasta[0] === filtro) && (!q || fold(n.titulo + " " + n.resumo + " " + n.tags.join(" ")).includes(q)))
-    .sort((a, b) => peso(a) - peso(b) || b.mtime - a.mtime);
-  $("#ngrid").innerHTML = ns.map((n, i) => `<a class="nc glass" href="${nota(n.path)}" style="animation-delay:${Math.min(i, 12) * 25}ms">
-      <h4>${esc(n.titulo)}</h4>
-      <p>${esc(n.tipo === "diario" ? "Nota do dia" : limpo(n.resumo) || "Sem resumo de uma frase.")}</p>
-      <span class="f">${n.tipo ? `<span class="pill">${esc(n.tipo)}</span>` : ""}${n.revisar_em ? '<span class="pill peach">no ciclo</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${quando(n.mtime)}</span></span></a>`).join("")
-    || `<p class="empty">Nada com "${esc(busca)}".</p>`;
+function grid() {
+  const q = fold(query);
+  const weight = (n) => (!q ? 0 : fold(n.title).startsWith(q) ? 0 : fold(n.title).includes(q) ? 1 : 2);
+  const ns = D.notes.filter((n) => (!filter || n.folder === filter) && (!q || fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(q)))
+    .sort((a, b) => weight(a) - weight(b) || b.mtime - a.mtime);
+  $("#note-grid").innerHTML = ns.map((n, i) => `<a class="nc glass" href="${noteHref(n.path)}" style="animation-delay:${Math.min(i, 12) * 25}ms">
+      <h4>${esc(n.title)}</h4>
+      <p>${esc(n.type === "daily" ? "Daily note" : plain(n.summary) || "No one-line summary.")}</p>
+      <span class="f">${n.type ? `<span class="pill">${esc(n.type)}</span>` : ""}${n.review_on ? '<span class="pill peach">in cycle</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${ago(n.mtime)}</span></span></a>`).join("")
+    || `<p class="empty">Nothing matches "${esc(query)}".</p>`;
 }
 
-// ---------------------------------------------------------------- Leitor
-async function leitor(path) {
-  const n = await api(`/api/nota?path=${encodeURIComponent(path)}`).catch(() => null);
-  if (!n) { main.innerHTML = `<p class="empty">Nota não encontrada.</p>`; return; }
+// ---------------------------------------------------------------- Reader
+async function reader(path) {
+  const n = await api(`/api/note?path=${encodeURIComponent(path)}`).catch(() => null);
+  if (!n) { main.innerHTML = `<p class="empty">Note not found.</p>`; return; }
   main.innerHTML = `<div class="reader">
     <article class="art glass">
-      <div class="in"><h1>${esc(n.titulo)}</h1>
-        <div class="chips">${[n.tipo, n.area, ...n.tags].filter(Boolean).map((t) => `<span class="pill">${esc(t)}</span>`).join("")}</div>
+      <div class="in"><h1>${esc(n.title)}</h1>
+        <div class="chips">${[n.type, n.area, ...n.tags].filter(Boolean).map((t) => `<span class="pill">${esc(t)}</span>`).join("")}</div>
         <div class="prose" id="prose">${n.html}</div></div></article>
     <aside class="rail">
       <div class="box glass">
-        <a class="btn peach" href="${obs(n.path)}">Abrir no Obsidian ${icon("ext", 16)}</a>
-        ${n.revisar_em ? `<p class="empty" style="padding:10px 0 0">No ciclo: revisa ${n.revisar_em <= D.hoje ? "hoje" : rel.format(dias(D.hoje, n.revisar_em), "day")}, intervalo ${n.intervalo} d.</p>`
-          : `<button class="btn glass" data-act="entrar" data-p="${esc(n.path)}">Colocar no ciclo de revisão</button>`}</div>
-      <div class="box glass"><h3>Citada por</h3>${n.backlinks.map((b) => `<a class="l" href="${nota(b.path)}">${esc(b.titulo)}</a>`).join("") || '<p class="empty" style="padding:0">Ninguém cita ainda.</p>'}</div>
-      <div class="box glass"><h3>Cita</h3>${[...new Set(n.links)].map((l) => `<a class="l" href="#/w/${encodeURIComponent(l)}" style="${resolver(l) ? "" : "opacity:.5"}">${esc(l)}</a>`).join("") || '<p class="empty" style="padding:0">Nenhum link.</p>'}</div>
+        <a class="btn peach" href="${obs(n.path)}">Open in Obsidian ${icon("ext", 16)}</a>
+        ${n.review_on ? `<p class="empty" style="padding:10px 0 0">In the cycle: review ${n.review_on <= D.today ? "today" : rel.format(daysBetween(D.today, n.review_on), "day")}, interval ${n.interval} d.</p>`
+          : `<button class="btn glass" data-act="enroll" data-p="${esc(n.path)}">Add to the review cycle</button>`}</div>
+      <div class="box glass"><h3>Linked from</h3>${n.backlinks.map((b) => `<a class="l" href="${noteHref(b.path)}">${esc(b.title)}</a>`).join("") || '<p class="empty" style="padding:0">Nothing links here yet.</p>'}</div>
+      <div class="box glass"><h3>Links to</h3>${[...new Set(n.links)].map((l) => `<a class="l" href="#/w/${encodeURIComponent(l)}" style="${resolveNote(l) ? "" : "opacity:.5"}">${esc(l)}</a>`).join("") || '<p class="empty" style="padding:0">No links.</p>'}</div>
     </aside></div>`;
-  // Callout do Obsidian: blockquote que começa com [!tipo] Título.
+  // Obsidian callout: a blockquote starting with [!type] Title.
   document.querySelectorAll("#prose blockquote").forEach((b) => {
     const p = b.querySelector("p");
     const m = p?.innerHTML.match(/^\[!(\w+)\]\s*([^\n<]*)(?:<br\s*\/?>|\n)?/);
@@ -233,77 +234,79 @@ async function leitor(path) {
     b.classList.add("co", m[1]);
     p.innerHTML = `<span class="ct">${m[2] || m[1]}</span>` + p.innerHTML.slice(m[0].length);
   });
-  ambiente(arte(n.titulo));
+  ambient(art(n.title));
   scrollTo({ top: 0 });
 }
-function wiki(nome) {
-  const n = resolver(nome);
-  if (n) return location.replace(nota(n.path));
-  const quem = D.notas.filter((x) => x.links.includes(nome));
-  main.innerHTML = `<div class="ph"><h1>${esc(nome)}</h1><p>Lacuna: ainda não existe. Link vermelho é backlog honesto, não erro.</p></div>
-    <h3>Citada por</h3><div class="list glass">${quem.map((x) => `<a class="row" href="${nota(x.path)}"><span class="t">${esc(x.titulo)}<small>${esc(x.resumo)}</small></span></a>`).join("") || '<p class="empty">Ninguém.</p>'}</div>
-    <p class="empty" style="padding:18px 0">Para escrever: peça ao agente "escreve a nota ${esc(nome)}" ou crie no Obsidian. Não clique no link vermelho só para criar arquivo vazio.</p>`;
-  ambiente(arte(nome));
+function wiki(name) {
+  const n = resolveNote(name);
+  if (n) return location.replace(noteHref(n.path));
+  const who = D.notes.filter((x) => x.links.includes(name));
+  main.innerHTML = `<div class="ph"><h1>${esc(name)}</h1><p>Gap: doesn't exist yet. A missing link is an honest backlog, not an error.</p></div>
+    <h3>Linked from</h3><div class="list glass">${who.map((x) => `<a class="row" href="${noteHref(x.path)}"><span class="t">${esc(x.title)}<small>${esc(x.summary)}</small></span></a>`).join("") || '<p class="empty">Nobody.</p>'}</div>
+    <p class="empty" style="padding:18px 0">To write it: ask your agent "write the note ${esc(name)}" or create it in Obsidian. Don't click the missing link just to create an empty file.</p>`;
+  ambient(art(name));
 }
 
-// ---------------------------------------------------------------- Revisar
-let fila = [], pos = 0, aberta = false, feitas = 0;
-function revisar() {
-  fila = vencidas(); pos = 0; aberta = false; feitas = 0;
-  cartao();
+// ---------------------------------------------------------------- Review
+let queue = [], pos = 0, revealed = false, done = 0;
+function review() {
+  queue = due(); pos = 0; revealed = false; done = 0;
+  flashcard();
 }
-function cartao() {
-  const n = fila[pos];
+function flashcard() {
+  const n = queue[pos];
   if (!n) {
-    const prox = D.notas.filter((x) => x.revisar_em > D.hoje).sort((a, b) => a.revisar_em.localeCompare(b.revisar_em));
-    const fora = D.notas.filter((x) => !x.revisar_em && x.resumo && x.tipo !== "diario").sort((a, b) => b.mtime - a.mtime).slice(0, 8);
-    main.innerHTML = `<div class="ph"><h1>${feitas ? `${feitas} revisada${feitas > 1 ? "s" : ""}. Feito.` : "Nada vencido hoje"}</h1>
-        <p>Lembrou dobra o intervalo; esqueceu volta para 1 dia.</p></div>
-      <h3>Próximas</h3><div class="list glass">${prox.slice(0, 8).map((x) => `<a class="row" href="${nota(x.path)}"><span class="t">${esc(x.titulo)}</span><span class="x">${x.revisar_em} · ${x.intervalo} d</span></a>`).join("") || '<p class="empty">Nenhuma nota no ciclo ainda.</p>'}</div>
-      <h3>Colocar no ciclo</h3><div class="list glass">${fora.map((x) => `<div class="row hov"><a class="t" href="${nota(x.path)}">${esc(x.titulo)}<small>${esc(limpo(x.resumo))}</small></a>
-        <button class="btn glass" data-act="entrar" data-p="${esc(x.path)}">Entrar</button></div>`).join("") || '<p class="empty">Todas já estão.</p>'}</div>`;
-    ambiente(arte("revisar"));
+    const next = D.notes.filter((x) => x.review_on > D.today).sort((a, b) => a.review_on.localeCompare(b.review_on));
+    const outside = D.notes.filter((x) => !x.review_on && x.summary && x.type !== "daily").sort((a, b) => b.mtime - a.mtime).slice(0, 8);
+    main.innerHTML = `<div class="ph"><h1>${done ? `${done} reviewed. Done.` : "Nothing due today"}</h1>
+        <p>Remembered doubles the interval; forgot resets it to 1 day.</p></div>
+      <h3>Coming up</h3><div class="list glass">${next.slice(0, 8).map((x) => `<a class="row" href="${noteHref(x.path)}"><span class="t">${esc(x.title)}</span><span class="x">${x.review_on} · ${x.interval} d</span></a>`).join("") || '<p class="empty">No notes in the cycle yet.</p>'}</div>
+      <h3>Add to the cycle</h3><div class="list glass">${outside.map((x) => `<div class="row hov"><a class="t" href="${noteHref(x.path)}">${esc(x.title)}<small>${esc(plain(x.summary))}</small></a>
+        <button class="btn glass" data-act="enroll" data-p="${esc(x.path)}">Add</button></div>`).join("") || '<p class="empty">All of them already are.</p>'}</div>`;
+    ambient(art("review"));
     return;
   }
   main.innerHTML = `<section class="flash glass">
-      <span class="n">${pos + 1} de ${fila.length} · ${esc(n.pasta)}</span>
-      <h2>${esc(n.titulo)}</h2>
-      ${aberta ? `<p class="ans glass">${esc(limpo(n.resumo) || "Sem resumo de uma frase. Abra a nota.")}</p>
-        <div class="acts"><button class="btn glass" data-act="nao">Não lembrei <kbd>1</kbd></button><button class="btn peach" data-act="sim">Lembrei <kbd>2</kbd></button>
-        <a class="btn glass r" href="${nota(n.path)}">Ler a nota</a></div>`
-      : `<div class="acts"><button class="btn peach" data-act="mostrar">Mostrar resposta <kbd>espaço</kbd></button></div>`}
+      <span class="n">${pos + 1} of ${queue.length} · ${esc(n.folder)}</span>
+      <h2>${esc(n.title)}</h2>
+      ${revealed ? `<p class="ans glass">${esc(plain(n.summary) || "No one-line summary. Open the note.")}</p>
+        <div class="acts"><button class="btn glass" data-act="no">Forgot <kbd>1</kbd></button><button class="btn peach" data-act="yes">Remembered <kbd>2</kbd></button>
+        <a class="btn glass r" href="${noteHref(n.path)}">Read the note</a></div>`
+      : `<div class="acts"><button class="btn peach" data-act="show">Show answer <kbd>space</kbd></button></div>`}
     </section>`;
-  ambiente(arte(n.titulo));
+  ambient(art(n.title));
 }
-async function responder(lembrou) {
-  const n = fila[pos];
-  const r = await api("/api/revisar", { path: n.path, lembrou });
-  toast(`${n.titulo}: volta em ${r.intervalo} d`);
-  pos++; aberta = false; feitas++;
-  D = await api("/api"); topo(); cartao();
+async function answer(remembered) {
+  const n = queue[pos];
+  const r = await api("/api/review", { path: n.path, remembered });
+  toast(`${n.title}: back in ${r.interval} d`);
+  pos++; revealed = false; done++;
+  D = await api("/api"); topBar(); flashcard();
 }
 
-// ---------------------------------------------------------------- Grafo
-let grafoStop = null;
-function grafo() {
-  main.innerHTML = `<div class="ph"><h1>Grafo</h1><p>Clique abre a nota. Arraste para mover.</p></div>
+// ---------------------------------------------------------------- Graph
+const PALETTE = ["#f4b88f", "#8fc7f4", "#c9a3ff", "#9be3b5", "#f2cf7a", "#ff8f80"];
+const areaColor = (a) => PALETTE[hash(a) % PALETTE.length];
+let graphStop = null;
+function graph() {
+  main.innerHTML = `<div class="ph"><h1>Graph</h1><p>Click opens the note. Drag to move.</p></div>
     <section class="graph glass"><canvas id="cv"></canvas><div class="legend" id="leg"></div></section>`;
   const cv = $("#cv"), ctx = cv.getContext("2d"), dpr = devicePixelRatio || 1;
-  const cores = { programacao: "#f4b88f", cc: "#8fc7f4", ia: "#c9a3ff", matematica: "#9be3b5" };
-  const nodes = D.notas.filter((n) => n.tipo !== "diario").map((n) => ({ id: nomeDe(n.path), t: n.titulo, p: n.path, c: cores[n.area] || "#d8d2ca" }));
+  const areas = [...new Set(D.notes.map((n) => n.area).filter(Boolean))].sort();
+  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, c: n.area ? areaColor(n.area) : "#d8d2ca" }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  for (const v of D.vermelhos) if (!byId.has(v.alvo)) { const g = { id: v.alvo, t: v.alvo, c: "rgba(255,255,255,.25)", ghost: true }; nodes.push(g); byId.set(v.alvo, g); }
+  for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: "rgba(255,255,255,.25)", ghost: true }; nodes.push(g); byId.set(v.target, g); }
   const edges = [];
-  for (const n of D.notas) for (const l of new Set(n.links)) { const a = byId.get(nomeDe(n.path)), b = byId.get(l); if (a && b && a !== b) edges.push([a, b]); }
+  for (const n of D.notes) for (const l of new Set(n.links)) { const a = byId.get(nameOf(n.path)), b = byId.get(l); if (a && b && a !== b) edges.push([a, b]); }
   const deg = new Map();
   for (const [a, b] of edges) { deg.set(a, (deg.get(a) || 0) + 1); deg.set(b, (deg.get(b) || 0) + 1); }
   let W, H;
   const size = () => { W = cv.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
   size();
   nodes.forEach((n, i) => { const a = i * 2.4; n.x = W / 2 + Math.cos(a) * (60 + i * 6); n.y = H / 2 + Math.sin(a) * (60 + i * 6); n.vx = n.vy = 0; n.r = 4 + Math.sqrt(deg.get(n) || 0) * 2.5; });
-  let hover = null, drag = null, calor = 1;
-  // ponytail: repulsão O(n²); ok até ~500 notas, quadtree se o vault crescer.
-  function passo() {
+  let hover = null, drag = null, heat = 1;
+  // ponytail: O(n²) repulsion; fine up to ~500 notes, quadtree if the vault grows.
+  function step() {
     for (const a of nodes) for (const b of nodes) {
       if (a === b) continue;
       const dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy + 0.01, f = 2400 / d2;
@@ -315,249 +318,248 @@ function grafo() {
     }
     for (const n of nodes) {
       n.vx += (W / 2 - n.x) * 0.002; n.vy += (H / 2 - n.y) * 0.002;
-      if (n !== drag) { n.x += n.vx * calor; n.y += n.vy * calor; }
+      if (n !== drag) { n.x += n.vx * heat; n.y += n.vy * heat; }
       n.vx *= 0.6; n.vy *= 0.6;
     }
-    calor = Math.max(0.05, calor * 0.99);
+    heat = Math.max(0.05, heat * 0.99);
   }
-  function desenhar() {
+  function draw() {
     ctx.clearRect(0, 0, W, H);
-    const viz = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
+    const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
     for (const [a, b] of edges) {
-      ctx.strokeStyle = viz && (a === hover || b === hover) ? "rgba(244,184,143,.7)" : "rgba(255,255,255,.1)";
+      ctx.strokeStyle = near && (a === hover || b === hover) ? "rgba(244,184,143,.7)" : "rgba(255,255,255,.1)";
       ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     for (const n of nodes) {
-      ctx.globalAlpha = viz && !viz.has(n) && n !== hover ? 0.25 : 1;
+      ctx.globalAlpha = near && !near.has(n) && n !== hover ? 0.25 : 1;
       ctx.fillStyle = n.c; ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
-      if (n === hover || (!hover && (deg.get(n) || 0) >= 5) || viz?.has(n)) {
+      if (n === hover || (!hover && (deg.get(n) || 0) >= 5) || near?.has(n)) {
         ctx.fillStyle = n.ghost ? "rgba(243,239,233,.45)" : "rgba(243,239,233,.85)";
         ctx.font = "500 12px Inter, sans-serif"; ctx.fillText(n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, n.x + n.r + 5, n.y + 4);
       }
     }
     ctx.globalAlpha = 1;
   }
-  let vivo = true;
-  // Para quando assenta: só volta a animar com o mouse em cima (economiza CPU parado na aba).
-  let parado = false;
-  const loop = () => { if (!vivo) return; passo(); desenhar(); if (calor > 0.06 || drag) requestAnimationFrame(loop); else parado = true; };
-  const acordar = () => { if (parado) { parado = false; requestAnimationFrame(loop); } };
+  let alive = true;
+  // Stops once it settles: only animates again with the mouse over it (saves CPU while the tab sits idle).
+  let idle = false;
+  const loop = () => { if (!alive) return; step(); draw(); if (heat > 0.06 || drag) requestAnimationFrame(loop); else idle = true; };
+  const wake = () => { if (idle) { idle = false; requestAnimationFrame(loop); } };
   loop();
-  grafoStop = () => { vivo = false; };
-  const achar = (e) => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; return nodes.find((n) => Math.hypot(n.x - x, n.y - y) < n.r + 4); };
-  let moveu = false;
-  cv.onpointermove = (e) => { acordar(); if (drag) { const r = cv.getBoundingClientRect(); drag.x = e.clientX - r.left; drag.y = e.clientY - r.top; moveu = true; calor = Math.max(calor, 0.3); } else { hover = achar(e); cv.style.cursor = hover ? "pointer" : "grab"; } };
-  cv.onpointerdown = (e) => { drag = achar(e); moveu = false; };
-  cv.onpointerup = () => { if (drag && !moveu) location.hash = drag.ghost ? `#/w/${encodeURIComponent(drag.id)}` : nota(drag.p); drag = null; };
-  $("#leg").innerHTML = Object.entries(cores).map(([k, c]) => `<span><i style="background:${c}"></i>${k}</span>`).join("") + '<span><i style="background:rgba(255,255,255,.25)"></i>lacuna</span>';
-  ambiente(arte("grafo"));
+  graphStop = () => { alive = false; };
+  const find = (e) => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; return nodes.find((n) => Math.hypot(n.x - x, n.y - y) < n.r + 4); };
+  let moved = false;
+  cv.onpointermove = (e) => { wake(); if (drag) { const r = cv.getBoundingClientRect(); drag.x = e.clientX - r.left; drag.y = e.clientY - r.top; moved = true; heat = Math.max(heat, 0.3); } else { hover = find(e); cv.style.cursor = hover ? "pointer" : "grab"; } };
+  cv.onpointerdown = (e) => { drag = find(e); moved = false; };
+  cv.onpointerup = () => { if (drag && !moved) location.hash = drag.ghost ? `#/w/${encodeURIComponent(drag.id)}` : noteHref(drag.p); drag = null; };
+  $("#leg").innerHTML = areas.map((k) => `<span><i style="background:${areaColor(k)}"></i>${esc(k)}</span>`).join("") + '<span><i style="background:rgba(255,255,255,.25)"></i>gap</span>';
+  ambient(art("graph"));
 }
 
-// ---------------------------------------------------------------- Agentes
-const ROT = {
-  "bom-dia": ["Bom dia", "Monta o Foco de hoje na nota do dia: revisões, prova próxima, inbox, lacunas."],
-  inbox: ["Inbox", "Processa 1 Inbox/: cada item vira nota no padrão ou fica, com o motivo."],
+// ---------------------------------------------------------------- Agents
+const ROUTINES = {
+  morning: ["Morning", "Builds today's focus in the daily note: reviews, inbox, gaps."],
+  inbox: ["Inbox", "Processes the inbox folder: each item becomes a proper note or stays, with the reason."],
 };
-const NOME_AG = { claude: ["Claude Code", "agentes"], agy: ["Antigravity", "bolt"], codex: ["Codex", "agentes"], gemini: ["Gemini", "spark"] };
-function agentes() {
-  main.innerHTML = `<div class="ph"><h1>Agentes</h1><p>Claude e AGY seguem o mesmo <code>AGENTS.md</code>. Rotina roda no AGY.</p></div>
-    <h3>Rodando agora</h3><div class="cards">${S.agentes.map((a) => {
-      const [nome, ic] = NOME_AG[a.nome] || [a.nome, "agentes"];
-      return `<a class="ag glass link" href="#/a/${a.chave}"><div class="hd"><span class="ic">${icon(ic)}</span><div><h4>${nome}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
-        <div class="ft"><span class="pill">pid ${a.pid}</span><span class="pill">há ${duracao(a.segundos)}</span><span class="ver">ver ao vivo ${icon("r", 14)}</span></div></a>`;
-    }).join("") || '<p class="empty">Nenhum agente rodando.</p>'}</div>
-    ${S.fundo?.length ? `<h3>Em segundo plano</h3><div class="cards">${S.fundo.map((f) => `<a class="ag glass link" href="#/a/${f.chave}">
-        <div class="hd"><span class="ic">${icon("agentes")}</span><div><h4>${esc(f.titulo)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
-        <span class="live ${f.estado === "blocked" ? "run" : f.estado === "done" ? "idle" : ""}" style="margin-left:auto"></span></div>
-        ${f.precisa ? `<p class="need">${esc(f.precisa)}</p>` : ""}
-        <div class="ft"><span class="pill ${f.estado === "blocked" ? "peach" : ""}">${ESTADO[f.estado] || f.estado}</span><span class="pill">${quando(f.desde)}</span><span class="ver">abrir ${icon("r", 14)}</span></div></a>`).join("")}</div>` : ""}
-    <h3>Rotinas</h3><div class="cards">${Object.entries(ROT).map(([k, [nome, desc]]) => {
-      const r = S.rotinas[k];
-      const st = !r ? "nunca rodou nesta sessão" : !r.fim ? `rodando desde ${r.inicio.slice(11)}` : `${r.ok ? "terminou" : "falhou"} às ${r.fim.slice(11)}`;
-      return `<div class="ag glass"><div class="hd"><span class="ic">${icon(k === "inbox" ? "inbox" : "alvo")}</span><div><h4>${nome}</h4><small>${desc}</small></div></div>
-        <div class="ft"><span class="live ${!r ? "idle" : !r.fim ? "run" : r.ok ? "" : "off"}"></span><small>${st}</small>${r && !r.fim && S.agentes.find((x) => x.pid === r.pid)?.chave ? `<a class="ver" href="#/a/${S.agentes.find((x) => x.pid === r.pid).chave}">ver ao vivo</a>` : ""}
-        <button class="btn peach" style="margin-left:auto" data-act="rotina" data-k="${k}" ${r && !r.fim ? "disabled" : ""}>${icon("play", 14)} Rodar no AGY</button></div></div>`;
+const AGENT_NAME = { claude: ["Claude Code", "agents"], agy: ["Antigravity", "bolt"], codex: ["Codex", "agents"], gemini: ["Gemini", "spark"] };
+function agents() {
+  main.innerHTML = `<div class="ph"><h1>Agents</h1><p>Claude and AGY follow the same <code>AGENTS.md</code>. Routines run in AGY.</p></div>
+    <h3>Running now</h3><div class="cards">${S.agents.map((a) => {
+      const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
+      return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${icon(ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
+        <div class="ft"><span class="pill">pid ${a.pid}</span><span class="pill">${duration(a.seconds)}</span><span class="watch">watch live ${icon("r", 14)}</span></div></a>`;
+    }).join("") || '<p class="empty">No agents running.</p>'}</div>
+    ${S.background?.length ? `<h3>In the background</h3><div class="cards">${S.background.map((f) => `<a class="ag glass link" href="#/a/${f.key}">
+        <div class="hd"><span class="ic">${icon("agents")}</span><div><h4>${esc(f.title)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
+        <span class="live ${f.state === "blocked" ? "run" : f.state === "done" ? "idle" : ""}" style="margin-left:auto"></span></div>
+        ${f.needs ? `<p class="need">${esc(f.needs)}</p>` : ""}
+        <div class="ft"><span class="pill ${f.state === "blocked" ? "peach" : ""}">${STATE[f.state] || f.state}</span><span class="pill">${ago(f.since)}</span><span class="watch">open ${icon("r", 14)}</span></div></a>`).join("")}</div>` : ""}
+    <h3>Routines</h3><div class="cards">${Object.entries(ROUTINES).map(([k, [name, desc]]) => {
+      const r = S.routines[k];
+      const st = !r ? "hasn't run this session" : !r.end ? `running since ${r.start.slice(11)}` : `${r.ok ? "finished" : "failed"} at ${r.end.slice(11)}`;
+      return `<div class="ag glass"><div class="hd"><span class="ic">${icon(k === "inbox" ? "inbox" : "target")}</span><div><h4>${name}</h4><small>${desc}</small></div></div>
+        <div class="ft"><span class="live ${!r ? "idle" : !r.end ? "run" : r.ok ? "" : "off"}"></span><small>${st}</small>${r && !r.end && S.agents.find((x) => x.pid === r.pid)?.key ? `<a class="watch" href="#/a/${S.agents.find((x) => x.pid === r.pid).key}">watch live</a>` : ""}
+        <button class="btn peach" style="margin-left:auto" data-act="routine" data-k="${k}" ${r && !r.end ? "disabled" : ""}>${icon("play", 14)} Run in AGY</button></div></div>`;
     }).join("")}</div>
     <h3>Log</h3><div class="list glass">${D.log.map((l) => {
-      const [q, quem, ...resto] = l.split(" · ");
-      return `<div class="row"><span class="who">${esc(quem)}</span><span class="txt">${comLinks(resto.join(" · "))}</span><span class="x">${esc(q.slice(5).replace("-", "/"))}</span></div>`;
-    }).join("") || '<p class="empty">Nenhuma execução registrada.</p>'}</div>
-    <h3>Achados</h3><div class="list glass">${D.achados.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`; }).join("")}</div>`;
-  ambiente(arte("agentes"));
+      const [when, who, ...rest] = l.split(" · ");
+      return `<div class="row"><span class="who">${esc(who)}</span><span class="txt">${withLinks(rest.join(" · "))}</span><span class="x">${esc(when.slice(5).replace("-", "/"))}</span></div>`;
+    }).join("") || '<p class="empty">No runs logged.</p>'}</div>
+    <h3>Findings</h3><div class="list glass">${D.findings.map((a) => { const [d, ...t] = a.split(" · "); return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`; }).join("")}</div>`;
+  ambient(art("agents"));
 }
 
-// ---------------------------------------------------------------- Agente ao vivo
-// Lê a conversa no disco (Claude: .jsonl da sessão; AGY: SQLite) a cada 3 s, só com a página aberta.
-// A caixa de mensagem é desenhada uma vez; só cabeçalho e feed se atualizam, para não apagar o que você digita.
-const QUEM = { voce: "você", resultado: "resultado" };
-// Markdown mínimo (negrito, código, título) aplicado DEPOIS de escapar: texto da conversa nunca vira HTML.
+// ---------------------------------------------------------------- Live agent
+// Reads the conversation from disk (Claude: the session .jsonl; AGY: SQLite) every 3 s, only while the page is open.
+// The message box is drawn once; only the header and feed update, so what you type isn't wiped.
+const WHO = { you: "you", result: "result" };
+// Minimal Markdown (bold, code, heading) applied AFTER escaping: conversation text never becomes HTML.
 const fmt = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/^#{1,4} (.+)$/gm, "<b>$1</b>");
-const ESTADO = { blocked: "esperando você", working: "trabalhando", running: "trabalhando", done: "terminou", idle: "parado" };
-let agTimer = null, agUltimo = "";
-async function agentePg(chave) {
-  clearInterval(agTimer); agUltimo = "";
-  main.innerHTML = `<div class="ph" id="aghead"></div><div id="agprecisa"></div><div class="feed list glass" id="feed"><p class="empty">Lendo a conversa…</p></div>
-    <form class="falar glass" id="falar"><textarea id="msg" rows="2" placeholder="Mandar mensagem… Enter envia, Shift+Enter quebra linha" aria-label="Mensagem para o agente"></textarea>
-      <button class="btn peach" type="submit">Enviar ${icon("r", 14)}</button><small id="falardica"></small></form>`;
-  const desenha = async () => {
-    if (rota().pg !== "a" || rota().arg !== chave) return clearInterval(agTimer);
-    const a = await api(`/api/agente?chave=${encodeURIComponent(chave)}`).catch(() => null);
-    if (!a) { main.innerHTML = `<div class="ph"><h1>Conversa não encontrada</h1></div><a class="btn glass" href="#/agentes">Voltar para Agentes</a>`; return clearInterval(agTimer); }
-    const assinatura = a.vivo + a.estado + a.eventos.length + (a.eventos.at(-1)?.txt || "");
-    if (assinatura === agUltimo) return;
-    agUltimo = assinatura;
-    const nome = a.titulo || NOME_AG[a.nome]?.[0] || a.nome;
-    const status = a.vivo ? "rodando" : ESTADO[a.estado] || "parado";
-    $("#aghead").innerHTML = `<h1>${esc(nome)}</h1><p>${esc(NOME_AG[a.nome]?.[0] || a.nome)} · ${esc(a.cwd)}${a.pid ? ` · pid ${a.pid}` : ""}${a.segundos ? ` · há ${duracao(a.segundos)}` : ""}</p>
-      <div class="r"><span class="live ${a.vivo ? "" : a.estado === "blocked" ? "run" : "idle"}"></span><small style="color:var(--muted)">${status} · atualiza a cada 3 s</small></div>`;
-    $("#agprecisa").innerHTML = a.precisa ? `<div class="precisa glass"><b>Precisa de você</b>${fmt(a.precisa)}</div>` : "";
-    $("#falardica").textContent = a.nome === "agy" ? "Continua esta conversa no AGY (agy -p --conversation)."
-      : a.vivo ? "Esta sessão está aberta num terminal: a resposta vem numa cópia em segundo plano, e o terminal fica intacto."
-      : "Continua esta sessão em segundo plano (claude --bg --resume).";
-    const feed = $("#feed"), noFim = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-    feed.innerHTML = a.eventos.map((e) => `<div class="row ev ${e.t}">
-        <span class="who">${esc(QUEM[e.t] ?? (e.t === "ferramenta" ? e.nome : a.nome))}</span>
-        <div class="txt">${e.t === "texto" || e.t === "voce" ? fmt(e.txt) : esc(e.txt)}</div>
-        <span class="x">${e.quando ? new Date(e.quando).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : ""}</span></div>`).join("")
-      || `<p class="empty">Nada para mostrar ainda.</p>`;
-    if (noFim) feed.scrollTop = feed.scrollHeight;
+const STATE = { blocked: "waiting for you", working: "working", running: "working", done: "finished", idle: "idle" };
+let agTimer = null, agLast = "";
+async function agentPage(key) {
+  clearInterval(agTimer); agLast = "";
+  main.innerHTML = `<div class="ph" id="agent-head"></div><div id="agent-needs"></div><div class="feed list glass" id="feed"><p class="empty">Reading the conversation…</p></div>
+    <form class="talk glass" id="talk"><textarea id="msg" rows="2" placeholder="Send a message… Enter sends, Shift+Enter adds a line" aria-label="Message to the agent"></textarea>
+      <button class="btn peach" type="submit">Send ${icon("r", 14)}</button><small id="talk-hint"></small></form>`;
+  const paint = async () => {
+    if (route().pg !== "a" || route().arg !== key) return clearInterval(agTimer);
+    const a = await api(`/api/agent?key=${encodeURIComponent(key)}`).catch(() => null);
+    if (!a) { main.innerHTML = `<div class="ph"><h1>Conversation not found</h1></div><a class="btn glass" href="#/agents">Back to Agents</a>`; return clearInterval(agTimer); }
+    const signature = a.live + a.state + a.events.length + (a.events.at(-1)?.txt || "");
+    if (signature === agLast) return;
+    agLast = signature;
+    const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
+    const status = a.live ? "running" : STATE[a.state] || "idle";
+    $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.pid ? ` · pid ${a.pid}` : ""}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
+      <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span><small style="color:var(--muted)">${status} · refreshes every 3 s</small></div>`;
+    $("#agent-needs").innerHTML = a.needs ? `<div class="needs glass"><b>Needs you</b>${fmt(a.needs)}</div>` : "";
+    $("#talk-hint").textContent = a.name === "agy" ? "Continues this conversation in AGY (agy -p --conversation)."
+      : a.live ? "This session is open in a terminal: the reply comes in a background copy, and the terminal stays intact."
+      : "Continues this session in the background (claude --bg --resume).";
+    const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+    feed.innerHTML = a.events.map((e) => `<div class="row ev ${e.t}">
+        <span class="who">${esc(WHO[e.t] ?? (e.t === "tool" ? e.name : a.name))}</span>
+        <div class="txt">${e.t === "text" || e.t === "you" ? fmt(e.txt) : esc(e.txt)}</div>
+        <span class="x">${e.at ? new Date(e.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" }) : ""}</span></div>`).join("")
+      || `<p class="empty">Nothing to show yet.</p>`;
+    if (atEnd) feed.scrollTop = feed.scrollHeight;
   };
-  const enviar = async () => {
-    const t = $("#msg"), texto = t.value.trim();
-    if (!texto || t.disabled) return;
+  const send = async () => {
+    const t = $("#msg"), text = t.value.trim();
+    if (!text || t.disabled) return;
     t.disabled = true;
     try {
-      const r = await api("/api/falar", { chave, texto });
-      t.value = ""; toast("Mensagem enviada");
-      if (r.chave !== chave) { location.hash = `#/a/${r.chave}`; return; } // Claude abriu uma cópia em segundo plano: segue nela
-      agUltimo = ""; setTimeout(desenha, 1500);
-    } catch (e) { toast(`Não enviou: ${e.message}`); } finally { t.disabled = false; t.focus(); }
+      const r = await api("/api/talk", { key, text });
+      t.value = ""; toast("Message sent");
+      if (r.key !== key) { location.hash = `#/a/${r.key}`; return; } // Claude opened a background copy: follow it
+      agLast = ""; setTimeout(paint, 1500);
+    } catch (e) { toast(`Not sent: ${e.message}`); } finally { t.disabled = false; t.focus(); }
   };
-  $("#falar").onsubmit = (e) => { e.preventDefault(); enviar(); };
-  $("#msg").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } };
-  await desenha();
-  agTimer = setInterval(desenha, 3000);
-  ambiente(arte(`agente ${chave}`));
+  $("#talk").onsubmit = (e) => { e.preventDefault(); send(); };
+  $("#msg").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  await paint();
+  agTimer = setInterval(paint, 3000);
+  ambient(art(`agent ${key}`));
 }
 
-// ---------------------------------------------------------------- Serviços
-function servicos() {
-  main.innerHTML = `<div class="ph"><h1>Serviços</h1><p>Os localhost da máquina e o Pinterest. Lista em <code>servicos.json</code>.</p></div>
-    <div class="cards">${S.servicos.map((s) => {
-      if (s.interno === "pinterest") {
+// ---------------------------------------------------------------- Services
+function services() {
+  main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps and Pinterest. Listed in <code>services.json</code>.</p></div>
+    <div class="cards">${S.services.map((s) => {
+      if (s.internal === "pinterest") {
         const p = s.pinterest || {};
-        const pasta = p.board ? `https://br.pinterest.com/${p.board.replace(/^\/|\/$/g, "")}/` : s.url;
-        return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icone || "livro")}</span>
-            <div><h4>${esc(s.nome)}</h4><small>${esc(p.status === "erro" ? p.erro : s.desc)}</small></div><span class="live ${s.ok ? "" : p.status === "erro" ? "off" : "idle"}" style="margin-left:auto"></span></div>
-          <div class="ft"><span class="pill">${esc(p.board || "pinterest")}</span><span class="pill">${p.total ?? 0} imagens</span>
-            <span style="margin-left:auto;display:flex;gap:6px"><button class="btn glass" data-act="pinsync" ${p.sincronizando ? "disabled" : ""}>${p.sincronizando ? "Sincronizando…" : "Sincronizar agora"}</button>
-            <a class="btn peach" href="${esc(pasta)}" target="_blank">Abrir ${icon("ext", 14)}</a></span></div></div>`;
+        const board = p.board ? `https://www.pinterest.com/${p.board.replace(/^\/|\/$/g, "")}/` : s.url;
+        return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icon || "book")}</span>
+            <div><h4>${esc(s.name)}</h4><small>${esc(p.status === "error" ? p.error : s.desc)}</small></div><span class="live ${s.ok ? "" : p.status === "error" ? "off" : "idle"}" style="margin-left:auto"></span></div>
+          <div class="ft"><span class="pill">${esc(p.board || "pinterest")}</span><span class="pill">${p.total ?? 0} images</span>
+            <span style="margin-left:auto;display:flex;gap:6px"><button class="btn glass" data-act="pinsync" ${p.syncing ? "disabled" : ""}>${p.syncing ? "Syncing…" : "Sync now"}</button>
+            <a class="btn peach" href="${esc(board)}" target="_blank">Open ${icon("ext", 14)}</a></span></div></div>`;
       }
-      return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icone || "servicos")}</span>
-          <div><h4>${esc(s.nome)}</h4><small>${esc(s.desc)}</small></div><span class="live ${s.ok ? "" : "off"}" style="margin-left:auto"></span></div>
-        <div class="ft"><span class="pill">${esc(new URL(endereco(s) || s.url).host)}</span><span class="pill">${s.ok ? `${s.ms} ms` : "fora do ar"}</span>
-          <span style="margin-left:auto;display:flex;gap:6px">${s.ok && endereco(s) && !s.interno ? `<a class="btn glass" href="#/s/${esc(s.id)}">Ver aqui</a>` : ""}
-          <a class="btn peach" href="${esc(remoto ? endereco(s) || "#/servicos" : s.url)}" target="_blank">Abrir ${icon("ext", 14)}</a></span></div></div>`;
-    }).join("")}</div>`;
-  ambiente(arte("servicos"));
+      return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icon || "services")}</span>
+          <div><h4>${esc(s.name)}</h4><small>${esc(s.desc)}</small></div><span class="live ${s.ok ? "" : "off"}" style="margin-left:auto"></span></div>
+        <div class="ft"><span class="pill">${esc(new URL(address(s) || s.url).host)}</span><span class="pill">${s.ok ? `${s.ms} ms` : "down"}</span>
+          <span style="margin-left:auto;display:flex;gap:6px">${s.ok && address(s) && !s.internal ? `<a class="btn glass" href="#/s/${esc(s.id)}">View here</a>` : ""}
+          <a class="btn peach" href="${esc(remote ? address(s) || "#/services" : s.url)}" target="_blank">Open ${icon("ext", 14)}</a></span></div></div>`;
+    }).join("") || '<p class="empty">No services yet. Copy <code>services.example.json</code> to <code>services.json</code>.</p>'}</div>`;
+  ambient(art("services"));
 }
 
-// ---------------------------------------------------------------- Serviço embutido
-function servico(id) {
-  const s = S.servicos.find((x) => x.id === id);
-  if (!s) { main.innerHTML = '<p class="empty">Serviço não encontrado em servicos.json.</p>'; return; }
-  const src = endereco(s), aba = remoto ? src : s.url;
-  $("#svcbar").innerHTML = `<span class="live ${s.ok ? "" : "off"}"></span><span class="pill">${esc(new URL(src || s.url).host)}${s.ok ? ` · ${s.ms} ms` : " · fora do ar"}</span>
-    <button class="btn glass" data-act="recarregar" aria-label="Recarregar" data-tip="Recarregar">${icon("reload", 15)}</button>
-    <a class="btn glass" href="${esc(aba)}" target="_blank" aria-label="Abrir em aba">${icon("ext", 15)}</a>`;
-  main.innerHTML = `<div class="frame ${s.largura ? "phone" : ""}" style="${s.largura ? `--w:${s.largura}px` : s.max ? `max-width:${s.max}px;margin:0 auto` : ""}">
-      ${!src ? `<p class="empty">${esc(s.nome)} não está publicado no Tailscale (campo "tailnet" em servicos.json).</p>`
-        : s.ok ? `<iframe id="svcf" src="${esc(src)}" title="${esc(s.nome)}"></iframe>` : `<p class="empty">${esc(s.nome)} está fora do ar.</p>`}</div>`;
-  ambiente(arte(s.nome));
+// ---------------------------------------------------------------- Embedded service
+function service(id) {
+  const s = S.services.find((x) => x.id === id);
+  if (!s) { main.innerHTML = '<p class="empty">Service not found in services.json.</p>'; return; }
+  const src = address(s), tab = remote ? src : s.url;
+  $("#svcbar").innerHTML = `<span class="live ${s.ok ? "" : "off"}"></span><span class="pill">${esc(new URL(src || s.url).host)}${s.ok ? ` · ${s.ms} ms` : " · down"}</span>
+    <button class="btn glass" data-act="reload" aria-label="Reload" data-tip="Reload">${icon("reload", 15)}</button>
+    <a class="btn glass" href="${esc(tab)}" target="_blank" aria-label="Open in a tab">${icon("ext", 15)}</a>`;
+  main.innerHTML = `<div class="frame ${s.width ? "phone" : ""}" style="${s.width ? `--w:${s.width}px` : s.max ? `max-width:${s.max}px;margin:0 auto` : ""}">
+      ${!src ? `<p class="empty">${esc(s.name)} isn't published on Tailscale ("tailnet" field in services.json).</p>`
+        : s.ok ? `<iframe id="svcf" src="${esc(src)}" title="${esc(s.name)}"></iframe>` : `<p class="empty">${esc(s.name)} is down.</p>`}</div>`;
+  ambient(art(s.name));
 }
 
-// ---------------------------------------------------------------- rotas e eventos
-const PAGINAS = { "": [home, "Home"], notas: [notas, "Notas"], n: [leitor, "Nota"], w: [wiki, "Nota"], revisar: [revisar, "Revisar"], grafo: [grafo, "Grafo"], agentes: [agentes, "Agentes"], servicos: [servicos, "Serviços"], s: [servico, "Serviço"], a: [agentePg, "Agente"] };
-function rota() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGINAS[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
+// ---------------------------------------------------------------- routes and events
+const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], s: [service, "Service"], a: [agentPage, "Agent"] };
+function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
 function render() {
   if (!D) return;
-  grafoStop?.(); grafoStop = null;
-  const { pg, arg } = rota();
-  $("#crumb").textContent = pg === "a" ? S.fundo?.find((x) => x.chave === arg)?.titulo || NOME_AG[S.agentes.find((x) => x.chave === arg)?.nome]?.[0] || "Agente" : pg === "s" ? S.servicos.find((s) => s.id === arg)?.nome || "Serviço" : PAGINAS[pg][1];
-  document.body.classList.toggle("app", pg === "s"); // app embutido ganha a altura da faixa da semana
+  graphStop?.(); graphStop = null;
+  const { pg, arg } = route();
+  $("#crumb").textContent = pg === "a" ? S.background?.find((x) => x.key === arg)?.title || AGENT_NAME[S.agents.find((x) => x.key === arg)?.name]?.[0] || "Agent" : pg === "s" ? S.services.find((s) => s.id === arg)?.name || "Service" : PAGES[pg][1];
+  document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
   if (pg !== "s") $("#svcbar").innerHTML = "";
   main.style.animation = "none"; main.offsetHeight; main.style.animation = "";
-  topo();
-  PAGINAS[pg][0](arg);
+  topBar();
+  PAGES[pg][0](arg);
 }
 
-const ACOES = {
-  prev: () => mover(-1), next: () => mover(1), ir: (el) => { idx = Number(el.dataset.i); posicionar(); },
-  filtro: (el) => { filtro = el.dataset.k; notas(); },
-  mostrar: () => { aberta = true; cartao(); }, sim: () => responder(true), nao: () => responder(false),
-  entrar: async (el) => { await api("/api/revisar", { path: el.dataset.p, lembrou: false }); toast("No ciclo: primeira revisão amanhã"); D = await api("/api"); render(); },
-  rotina: async (el) => {
-    try { await api("/api/rotina", { nome: el.dataset.k }); toast("Rotina disparada no AGY"); } catch (e) { toast(e.message); }
-    S = await api("/api/sistema"); agentes(); topo();
+const ACTIONS = {
+  prev: () => move(-1), next: () => move(1), go: (el) => { idx = Number(el.dataset.i); place(); },
+  filter: (el) => { filter = el.dataset.k; notes(); },
+  show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
+  enroll: async (el) => { await api("/api/review", { path: el.dataset.p, remembered: false }); toast("In the cycle: first review tomorrow"); D = await api("/api"); render(); },
+  routine: async (el) => {
+    try { await api("/api/routine", { name: el.dataset.k }); toast("Routine started in AGY"); } catch (e) { toast(e.message); }
+    S = await api("/api/system"); agents(); topBar();
   },
   pinsync: async (el) => {
-    el.disabled = true; el.textContent = "Sincronizando…";
+    el.disabled = true; el.textContent = "Syncing…";
     try {
       const p = await api("/api/pinterest/sync", {});
-      toast(p.status === "ok" ? `${p.imagens.length} imagens no cache` : p.erro || "Erro ao sincronizar");
+      toast(p.status === "ok" ? `${p.images.length} images in the cache` : p.error || "Sync failed");
     } catch (e) { toast(e.message); }
-    [D, S] = await Promise.all([api("/api"), api("/api/sistema")]); servicos(); topo();
+    [D, S] = await Promise.all([api("/api"), api("/api/system")]); services(); topBar();
   },
-  recarregar: () => { const f = $("#svcf"); f.src = f.src; },
-  pinamb: (el) => { ambiente(`/pin/${el.dataset.id}`); toast("Fundo ambiente atualizado"); },
-  capturar: () => { $("#capdia").textContent = D.hoje; $("#cap").showModal(); $("#capt").focus(); },
+  reload: () => { const f = $("#svcf"); f.src = f.src; },
+  capture: () => { $("#capture-day").textContent = D.today; $("#capture").showModal(); $("#capture-text").focus(); },
 };
 document.addEventListener("click", (e) => {
   if (e.target.closest("a[target]")) return;
   const el = e.target.closest("[data-act]");
-  if (el) { e.preventDefault(); ACOES[el.dataset.act]?.(el); return; }
+  if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const side = e.target.closest(".card.side");
-  if (side) { e.preventDefault(); idx = Number(side.dataset.i); posicionar(); }
+  if (side) { e.preventDefault(); idx = Number(side.dataset.i); place(); }
 });
-document.addEventListener("input", (e) => { if (e.target.id === "busca") { busca = e.target.value; grade(); } });
-$("#capt").addEventListener("keydown", async (e) => {
+document.addEventListener("input", (e) => { if (e.target.id === "search") { query = e.target.value; grid(); } });
+$("#capture-text").addEventListener("keydown", async (e) => {
   if (e.key !== "Enter" || e.shiftKey) return;
   e.preventDefault();
-  const texto = e.target.value.trim();
-  if (!texto) return;
-  await api("/api/capturar", { texto });
-  e.target.value = ""; $("#cap").close(); toast("Capturado na nota do dia");
-  D = await api("/api"); if (!rota().pg) home(); topo();
+  const text = e.target.value.trim();
+  if (!text) return;
+  await api("/api/capture", { text });
+  e.target.value = ""; $("#capture").close(); toast("Captured in the daily note");
+  D = await api("/api"); if (!route().pg) home(); topBar();
 });
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input, textarea") || document.querySelector("dialog[open]")) return;
-  const { pg } = rota();
-  if (e.key === "c") { e.preventDefault(); ACOES.capturar(); }
-  if (e.key === "/" && pg === "notas") { e.preventDefault(); $("#busca").focus(); }
-  if (!pg && e.key === "ArrowLeft") mover(-1);
-  if (!pg && e.key === "ArrowRight") mover(1);
-  if (pg === "revisar" && fila[pos]) {
-    if (e.key === " " && !aberta) { e.preventDefault(); ACOES.mostrar(); }
-    if (aberta && e.key === "1") responder(false);
-    if (aberta && e.key === "2") responder(true);
+  const { pg } = route();
+  if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }
+  if (e.key === "/" && pg === "notes") { e.preventDefault(); $("#search").focus(); }
+  if (!pg && e.key === "ArrowLeft") move(-1);
+  if (!pg && e.key === "ArrowRight") move(1);
+  if (pg === "review" && queue[pos]) {
+    if (e.key === " " && !revealed) { e.preventDefault(); ACTIONS.show(); }
+    if (revealed && e.key === "1") answer(false);
+    if (revealed && e.key === "2") answer(true);
   }
 });
-// Swipe no carrossel.
+// Swipe on the carousel.
 let x0 = null;
 document.addEventListener("pointerdown", (e) => { x0 = e.target.closest("#car") ? e.clientX : null; });
-document.addEventListener("pointerup", (e) => { if (x0 !== null && Math.abs(e.clientX - x0) > 60) mover(e.clientX < x0 ? 1 : -1); x0 = null; });
+document.addEventListener("pointerup", (e) => { if (x0 !== null && Math.abs(e.clientX - x0) > 60) move(e.clientX < x0 ? 1 : -1); x0 = null; });
 
 addEventListener("hashchange", render);
 async function vault() { D = await api("/api"); }
-async function sistema() { S = await api("/api/sistema"); }
-// Fluido: sistema a cada 10 s (agentes, serviços), vault ao voltar para a aba e a cada minuto.
+async function system() { S = await api("/api/system"); }
+// Live: system every 10 s (agents, services), vault when you come back to the tab and every minute.
 setInterval(async () => {
-  await sistema(); topo();
-  const { pg } = rota();
-  if (!pg) tiles(); else if (pg === "agentes" || pg === "servicos") PAGINAS[pg][0]();
+  await system(); topBar();
+  const { pg } = route();
+  if (!pg) tiles(); else if (pg === "agents" || pg === "services") PAGES[pg][0]();
 }, 10000);
-setInterval(async () => { await vault(); topo(); if (!rota().pg) tiles(); }, 60000);
-addEventListener("focus", async () => { await vault(); topo(); const { pg } = rota(); if (!pg) home(); else if (pg === "notas") grade(); });
-setInterval(relogio, 1000);
-relogio();
-Promise.all([vault(), sistema()]).then(render);
+setInterval(async () => { await vault(); topBar(); if (!route().pg) tiles(); }, 60000);
+addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg) home(); else if (pg === "notes") grid(); });
+setInterval(clock, 1000);
+clock();
+Promise.all([vault(), system()]).then(render);

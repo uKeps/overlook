@@ -2,5 +2,6 @@
 cache/
 node_modules/
 .DS_Store
-servicos.json
+services.json
 pinterest.json
+ROADMAP.md
