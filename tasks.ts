@@ -54,6 +54,7 @@ export const ready = (a: Agent) => (a.run ? !!bin(a.run[0]) : a.api === "anthrop
 const tasks = new Map<string, Task>();
 const now = () => new Date().toISOString();
 const clip = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "…" : s);
+const MESSAGE = 20_000; // a whole message reads in full; the cap only guards against a runaway one
 const log = (task: Task, e: Omit<Event, "at">) => { task.events.push({ ...e, at: now() }); if (task.events.length > 300) task.events.shift(); };
 
 export const taskList = () => [...tasks.values()].reverse().map(({ events, stop, ...t }) => ({ ...t, prompt: clip(t.prompt, 160) }));
@@ -106,7 +107,7 @@ async function cli(a: Agent, root: string, task: Task, ctrl: AbortController) {
   const p = Bun.spawn([bin(cmd)!, ...args], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   task.stop = () => { ctrl.abort(); p.kill(); };
   await Promise.all([
-    lines(p.stdout, (l) => log(task, { t: "text", txt: clip(l, 1500) })),
+    lines(p.stdout, (l) => log(task, { t: "text", txt: clip(l, MESSAGE) })),
     lines(p.stderr, (l) => log(task, { t: "result", txt: clip(l, 400) })),
   ]);
   const code = await p.exited;
@@ -293,7 +294,7 @@ async function anthropic(a: Agent, root: string, task: Task, signal: AbortSignal
       thinking: { type: "adaptive" }, output_config: { effort: task.effort as any }, cache_control: { type: "ephemeral" }, ...fallback,
     }, { signal });
     messages.push({ role: "assistant", content: r.content }); // whole content, thinking blocks included
-    for (const b of r.content) if (b.type === "text" && b.text.trim()) log(task, { t: "text", txt: clip(b.text.trim(), 1500) });
+    for (const b of r.content) if (b.type === "text" && b.text.trim()) log(task, { t: "text", txt: clip(b.text.trim(), MESSAGE) });
     if (r.stop_reason === "refusal") { log(task, { t: "error", txt: `declined${r.stop_details?.category ? ` (${r.stop_details.category})` : ""}` }); return false; }
     if (r.stop_reason === "pause_turn") continue;
     const uses = r.content.filter((b) => b.type === "tool_use") as { id: string; name: string; input: unknown }[];
@@ -326,7 +327,7 @@ async function openai(a: Agent, root: string, task: Task, signal: AbortSignal) {
     const m = (await r.json() as any).choices?.[0]?.message;
     if (!m) throw new Error(`${a.name} sent no message`);
     messages.push(m);
-    if (m.content?.trim()) log(task, { t: "text", txt: clip(m.content.trim(), 1500) });
+    if (m.content?.trim()) log(task, { t: "text", txt: clip(m.content.trim(), MESSAGE) });
     if (!m.tool_calls?.length) return true;
     for (const c of m.tool_calls) {
       let input: unknown = null;

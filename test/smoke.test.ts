@@ -146,6 +146,9 @@ test("a CLI agent runs in the vault with the chosen model and effort", async () 
   // A model with its own effort levels: the agent-wide default doesn't apply, and other levels are refused.
   expect((await finished(await run("mixed", "x", { model: "small" }))).events.map((e: any) => e.txt)).toContain("small-medium");
   expect((await post("/api/run", { agent: "mixed", prompt: "x", model: "small", effort: "high" })).status).toBe(400);
+  // A long message comes through whole (it used to stop at 1500 characters).
+  const long = "x".repeat(3000);
+  expect((await finished(await run("bare", long))).events.map((e: any) => e.txt)).toContain(`got ${long}`);
   // No model listed: the {model} token and its flag are dropped.
   expect((await finished(await run("bare", "hi"))).events.map((e: any) => e.txt)).toContain("got hi");
 });
