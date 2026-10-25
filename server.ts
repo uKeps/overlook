@@ -4,10 +4,11 @@
 //   bun server.ts map     -> one line per note, so agents can find their way
 //   bun server.ts today   -> what the Home shows, as short text for an agent
 import { resolve, basename, dirname } from "node:path";
-import { readdirSync, readlinkSync, mkdirSync, readFileSync } from "node:fs";
+import { readdirSync, readlinkSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback } from "./pinterest";
+import { loadAgents, ready, runTask, getTask, stopTask, taskList, routineRunning } from "./tasks";
 
 const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -43,7 +44,6 @@ type Note = {
 };
 
 const today = (days = 0) => new Date(Date.now() + days * 864e5).toLocaleDateString("sv");
-const now = () => new Date().toLocaleString("sv").slice(0, 16);
 
 function frontmatter(txt: string) {
   const m = txt.match(/^---\n([\s\S]*?)\n---\n?/);
@@ -181,17 +181,16 @@ function art() {
   try { return readdirSync(ART).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort(); } catch { return []; }
 }
 
-// Live agents: claude/agy/codex/gemini processes, with the folder they run in.
+// Live agents: processes named in agents.json (claude/agy/codex/gemini by default), with the folder they run in.
 // "key" identifies the conversation (c:<session> for Claude, g:<conversation> for AGY): the agent page outlives the process.
-const NAMES = /^(claude|agy|codex|gemini)$/;
 const CLAUDE = Bun.which("claude") ?? `${homedir()}/.local/bin/claude`, AGY = Bun.which("agy") ?? `${homedir()}/.local/bin/agy`;
 const AGY_BASE = `${homedir()}/.gemini/antigravity-cli`;
-const running = new Map<string, { start: string; pid: number; end?: string; ok?: boolean }>();
 const readJson = (f: string) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } };
 function agents() {
   const out = Bun.spawnSync(["ps", "-eo", "pid=,etimes=,comm="]).stdout.toString();
   const agyConversations = readJson(`${AGY_BASE}/cache/last_conversations.json`) ?? {};
-  return out.trim().split("\n").map((l) => l.trim().split(/\s+/)).filter(([, , c]) => NAMES.test(c)).map(([pid, et, comm]) => {
+  const names = new Set(loadAgents(import.meta.dir).map((a) => a.process).filter(Boolean));
+  return out.trim().split("\n").map((l) => l.trim().split(/\s+/)).filter(([, , c]) => names.has(c)).map(([pid, et, comm]) => {
     let cwd = ""; try { cwd = readlinkSync(`/proc/${pid}/cwd`); } catch {}
     const sid = comm === "claude" ? readJson(`${homedir()}/.claude/sessions/${pid}.json`)?.sessionId : comm === "agy" ? agyConversations[cwd] : null;
     return { pid: Number(pid), name: comm, seconds: Number(et), cwd: cwd.replace(homedir(), "~"), key: sid ? `${comm === "agy" ? "g" : "c"}:${sid}` : "" };
@@ -329,18 +328,10 @@ async function services() {
   }));
 }
 
-// Routines run in AGY print mode: the grunt work doesn't spend Claude tokens.
-function runRoutine(name: string) {
-  const before = running.get(name);
-  if (!ROUTINES[name] || (before && !before.end)) return false;
-  const p = Bun.spawn([AGY, "-p", ROUTINES[name], "--mode", "auto", "--print-timeout", "10m"], {
-    cwd: ROOT, stdout: Bun.file(`/tmp/overlook-${name}.log`), stderr: "inherit",
-  });
-  const r = { start: now(), pid: p.pid } as { start: string; pid: number; end?: string; ok?: boolean };
-  running.set(name, r);
-  p.exited.then((c) => { r.end = now(); r.ok = c === 0; });
-  return true;
-}
+// Agents you can put to work from the Agents page, from agents.json (or the built-in CLIs).
+const runners = () => loadAgents(import.meta.dir).filter((a) => a.run || a.api)
+  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a) }));
+const started = (t: ReturnType<typeof runTask>) => (typeof t === "string" ? new Response(t, { status: 400 }) : json({ id: t.id }));
 
 const cmd = process.argv[2];
 if (cmd === "map") {
@@ -389,14 +380,17 @@ async function handle(req: Request, port: number) {
     if (p === "/api/capture" && typeof b.text === "string" && b.text.trim()) { await capture(b.text.slice(0, 2000)); return json({ ok: true }); }
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
     if (p === "/api/pinterest/sync") return json(await sync(true));
-    if (p === "/api/routine") return runRoutine(b.name) ? json({ ok: true }) : new Response("already running or unknown", { status: 409 });
+    if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000))) : new Response("missing prompt", { status: 400 });
+    if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], b.name));
+    if (p === "/api/task/stop") return json(stopTask(String(b.id)) && { ok: true });
     return new Response("404", { status: 404 });
   }
   if (p === "/api") return json(await state());
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
-  if (p === "/api/system") return json({ agents: agents(), background: await background(), services: await services(), routines: Object.fromEntries(running) });
+  if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
+  if (p === "/api/system") return json({ agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   if (p.startsWith("/art/")) {
     const a = art(), i = Number(p.slice(5));
     return Number.isInteger(i) && a.length

@@ -152,11 +152,13 @@ a.row:hover .t b { text-decoration: underline; text-decoration-color: var(--line
 .ev.tool .msg { font: 12.5px var(--mono); color: var(--text-2); }
 .ev.result .msg { font: 12px var(--mono); color: var(--muted); -webkit-line-clamp: 3; }
 .ev.tool .who, .ev.result .who { color: var(--muted); }
+.ev.error .who, .ev.error .msg { color: var(--bad); }
 .talk { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 28px; }
 .talk textarea { flex: 1; min-width: 0; background: none; border: 0; border-bottom: 1px solid var(--line-2); color: var(--text); font: 15px/1.5 var(--sans); padding: 10px 0; resize: none; outline: none; }
 .talk textarea:focus { border-bottom-color: var(--label); }
 .talk textarea::placeholder { color: var(--muted); }
 .talk small { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.talk select { background: var(--bg); border: 0; border-bottom: 1px solid var(--line-2); color: var(--text); font: 14px var(--sans); padding: 10px 0; }
 .needs { border-left: 1px solid var(--accent); padding: 2px 0 2px 16px; margin: -12px 0 28px; }
 .needs code { font: 13px var(--mono); color: var(--text-2); }
 
