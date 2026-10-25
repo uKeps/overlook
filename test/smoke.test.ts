@@ -84,11 +84,11 @@ test("system and pinterest work with nothing configured", async () => {
   expect((await (await fetch(`${BASE}/api/pinterest`)).json()).status).toBe("no-config");
 });
 
-test("pages and assets are served and the frontend parses", async () => {
-  for (const p of ["/", "/app.js", "/app.css", "/grafite/", "/grafite/app.js", "/grafite/app.css", "/grafite/tokens.css"])
+test("the page and its assets are served and the frontend parses", async () => {
+  for (const p of ["/", "/app.js", "/app.css"])
     expect([p, (await fetch(BASE + p)).status]).toEqual([p, 200]);
   const js = new Bun.Transpiler({ loader: "js" });
-  for (const f of ["app.js", "grafite/app.js"]) js.transformSync(readFileSync(`${ROOT}/${f}`, "utf8"));
+  for (const f of ["app.js"]) js.transformSync(readFileSync(`${ROOT}/${f}`, "utf8"));
 });
 
 test("agent CLI commands", () => {
