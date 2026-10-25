@@ -320,6 +320,35 @@ test("the Settings page reads and updates vault, images, agents and services", a
 });
 
 
+// ---------------------------------------------------------------- avatars
+test("an agent gets a picture from Settings", async () => {
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const runner = async () => (await (await fetch(`${BASE}/api/system`)).json()).runners.find((r: any) => r.id === "echo");
+  expect((await runner()).avatar).toBeNull();
+  expect((await post("/api/avatar", { agent: "echo", data: png })).status).toBe(200);
+  const v = (await runner()).avatar;
+  expect(typeof v).toBe("number");
+  const img = await fetch(`${BASE}/avatar/echo?v=${v}`);
+  expect([img.status, img.headers.get("content-type")]).toEqual([200, "image/png"]);
+  expect((await post("/api/avatar", { agent: "nope", data: png })).status).toBe(400);
+  expect((await post("/api/avatar", { agent: "echo", data: "data:text/html;base64,PGgxPg==" })).status).toBe(400);
+  expect((await fetch(`${BASE}/avatar/..%2Fserver.ts`)).status).toBe(404);
+  // One of the card images can be the icon too.
+  expect((await post("/api/avatar", { agent: "echo", image: "aa11" })).status).toBe(200);
+  expect((await fetch(`${BASE}/avatar/echo?v=${(await runner()).avatar}`)).status).toBe(200);
+  expect((await post("/api/avatar", { agent: "echo", image: "zz99" })).status).toBe(400);
+  expect((await post("/api/avatar", { agent: "echo", remove: true })).status).toBe(200);
+  expect((await runner()).avatar).toBeNull();
+});
+
+test("ascii.rest is served from node_modules, and only its scripts", async () => {
+  const r = await fetch(`${BASE}/vendor/ascii/ascii.js`);
+  expect([r.status, r.headers.get("content-type")]).toEqual([200, "text/javascript; charset=utf-8"]);
+  expect((await fetch(`${BASE}/vendor/ascii/pieces/night-coast.js`)).status).toBe(200);
+  expect((await fetch(`${BASE}/vendor/ascii/..%2F..%2F..%2Fpackage.json`)).status).toBe(404);
+  expect((await fetch(`${BASE}/vendor/ascii/package.json`)).status).toBe(404);
+});
+
 test("a Pinterest image whose id starts with f is still a pin, not a folder photo", async () => {
   writeFileSync(`${ROOT}/cache/pinterest/fa55.jpg`, "x");
   expect((await fetch(`${BASE}/pin/fa55`)).status).toBe(200);

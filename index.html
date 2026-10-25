@@ -7,6 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='5' fill='%23f4b88f'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("overlook.theme") || "overlook"; } catch {}</script>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -33,6 +34,7 @@
 <dialog id="picker" class="glass" aria-label="Choose an image"></dialog>
 <div class="toast glass" id="toast" role="status"></div>
 
+<script type="module" src="/vendor/ascii/ascii.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

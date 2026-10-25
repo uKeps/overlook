@@ -52,6 +52,12 @@ Vault in Portuguese? Set `VAULT_LANG=pt` in `.env` and Overlook reads `2 Diário
 
 A one-line summary comes from a `> [!abstract]` callout right after the title.
 
+## Themes
+
+Settings → *Theme*: Overlook (the default), Tokyo Night, Dracula, Catppuccin Mocha, Rosé Pine, Gruvbox and Nord.
+Each is a handful of base colours at the end of `app.css`; everything else is mixed from them, so a new theme is
+one more block there.
+
 ## Calendar
 
 The strip under the top bar is a week (or month) calendar. Click a day to see what's on it and to add:
@@ -82,6 +88,10 @@ The Home cards show images from two sources, both set up in **Images** (Services
   reads the public board page, not an official API, so it may break if Pinterest changes it, and that page
   only shows a sample of a big board each time: the collection grows with every sync. The official API
   (below) lists the whole board.
+
+No images at all? The cards show animated ascii scenes instead, from [ascii.rest](https://ascii.rest) (MIT, served
+from `node_modules` after `bun install`, so nothing loads from their site). Settings → *Card art* picks Auto,
+Images or ASCII.
 
 In the same page, hide images you don't want, star the ones you do, and pick *Random* (the cards rotate
 through the visible images every day) or *Starred only* (the starred ones, in the order you starred them).
@@ -132,6 +142,9 @@ terminal (`xdg-terminal-exec`, or `$TERMINAL -e`). The built-in ones resume a Cl
 `claude --resume`, an AGY conversation with `agy --conversation`, and open the folder in the Antigravity
 app. Claude Code tasks get a fresh `--session-id`, so a finished task can be picked up in the terminal.
 Any other app works the same way, as long as it can be launched with a command.
+
+Each agent can have its own picture: Settings → *Agent icons* (PNG, JPEG, WebP or GIF under 2 MB, squared to
+256 px when ImageMagick is installed, kept in `avatars/`).
 
 Tasks are kept in memory (the last 50) and can be stopped from their page.
 The Morning and Inbox routines show up when the vault has an `AGENTS.md` with a Routines section.

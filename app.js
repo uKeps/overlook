@@ -263,16 +263,27 @@ function suggestions() {
   for (const n of D.notes.filter((n) => n.type === "project")) s.push({ cat: "Project", ic: "bolt", title: n.title, sub: plain(n.summary), meta: [["Area", n.area || "-"], ["Touched", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
   const outside = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
   for (const n of outside) s.push({ cat: "Rediscover", ic: "leaf", title: n.title, sub: plain(n.summary), meta: [["Out of the cycle", "never reviewed"], ["Area", n.area || "-"]], href: noteHref(n.path), action: "Reread" });
-  return s.length ? s : [{ cat: "All caught up", ic: "leaf", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
+  return s.length ? s : [{ cat: "All caught up", ic: "leaf", piece: "bonsai", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
 }
 
 let idx = 0, SG = [];
+// Themes (the colours live in app.css); the choice is per browser and applied before the first paint (index.html).
+const THEMES = [["overlook", "Overlook"], ["tokyo-night", "Tokyo Night"], ["dracula", "Dracula"], ["catppuccin-mocha", "Catppuccin Mocha"],
+  ["rose-pine", "Rosé Pine"], ["gruvbox", "Gruvbox"], ["nord", "Nord"]];
+// Card art: the user's images, or animated ascii scenes (ascii.rest) — "auto" uses images when there are any.
+const ART_KEY = "overlook.cardArt";
+let cardArt = (() => { try { return localStorage.getItem(ART_KEY) || "auto"; } catch { return "auto"; } })();
+const SCENES = ["night-coast", "kyoto-dusk", "aurora-fjord", "lantern-lake", "misty-forest", "ocean-sunset", "desert-night", "tokyo-rain",
+  "alpine-dawn", "deep-reef", "earthrise", "storm-plains", "marine-drive", "taj-dawn", "varanasi-ghats"];
+const asciiCards = () => cardArt === "ascii" || (cardArt === "auto" && !D.pins?.length);
+const scene = (s, i) => s.piece || SCENES[(hash(D.today) + i) % SCENES.length];
+
 function home() {
   SG = suggestions();
   idx = Math.min(idx, SG.length - 1);
   const card = (s, i) => {
-    const p = pinFor(i);
-    return `<article class="card" data-i="${i}" style="background-image:url('${art(i)}?amb')">
+    const p = pinFor(i), ascii = asciiCards();
+    return `<article class="card ${ascii ? "ascii" : ""}" data-i="${i}" ${ascii ? "" : `style="background-image:url('${art(i)}?amb')"`}>
       <div class="card-main">
         <div class="card-top"><span class="tag glass">${icon(s.ic, 16)} ${esc(s.cat)}</span><span class="card-idx">${i + 1} / ${SG.length}</span></div>
         <div class="body">
@@ -282,8 +293,8 @@ function home() {
         </div>
         <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
       </div>
-      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
-        ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>
+      ${ascii ? `<div class="card-pin card-ascii"><ascii-art piece="${scene(s, i)}"></ascii-art></div>` : `<div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
+        ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>`}
     </article>`;
   };
   main.innerHTML = `<section class="car" id="car">${SG.map(card).join("")}
@@ -304,7 +315,7 @@ function place() {
     c.style.pointerEvents = a > 1 ? "none" : "";
   });
   document.querySelectorAll(".dots i").forEach((d, i) => d.classList.toggle("on", i === idx));
-  if (SG[idx]) ambient(art(idx));
+  if (SG[idx] && !asciiCards()) ambient(art(idx));
 }
 const move = (d) => { idx = (idx + d + SG.length) % SG.length; place(); };
 
@@ -353,7 +364,7 @@ function grid() {
 // ---------------------------------------------------------------- Reader
 async function reader(path) {
   const n = await api(`/api/note?path=${encodeURIComponent(path)}`).catch(() => null);
-  if (!n) { main.innerHTML = `<p class="empty">Note not found.</p>`; return; }
+  if (!n) { main.innerHTML = `<div class="lost"><ascii-art piece="not-found" mono label="Not found"></ascii-art><p class="empty">Note not found.</p></div>`; return; }
   main.innerHTML = `<div class="reader">
     <article class="art glass">
       <div class="in"><h1>${esc(n.title)}</h1>
@@ -426,7 +437,10 @@ async function answer(remembered) {
 }
 
 // ---------------------------------------------------------------- Graph
-const PALETTE = ["#f4b88f", "#8fc7f4", "#c9a3ff", "#9be3b5", "#f2cf7a", "#ff8f80"];
+// The canvas can't read CSS variables, so the graph takes the theme's colours when it draws.
+const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const alpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
+let PALETTE = [];
 const areaColor = (a) => PALETTE[hash(a) % PALETTE.length];
 let graphStop = null;
 function graph() {
@@ -434,9 +448,11 @@ function graph() {
     <section class="graph glass"><canvas id="cv"></canvas><div class="legend" id="leg"></div></section>`;
   const cv = $("#cv"), ctx = cv.getContext("2d"), dpr = devicePixelRatio || 1;
   const areas = [...new Set(D.notes.map((n) => n.area).filter(Boolean))].sort();
-  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, c: n.area ? areaColor(n.area) : "#d8d2ca" }));
+  PALETTE = ["--p1", "--p2", "--p3", "--p4", "--p5", "--p6"].map(tok);
+  const ink = tok("--ink"), accent = tok("--accent");
+  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, c: n.area ? areaColor(n.area) : alpha(ink, .8) }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: "rgba(255,255,255,.25)", ghost: true }; nodes.push(g); byId.set(v.target, g); }
+  for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: alpha(ink, .25), ghost: true }; nodes.push(g); byId.set(v.target, g); }
   const edges = [];
   for (const n of D.notes) for (const l of new Set(n.links)) { const a = byId.get(nameOf(n.path)), b = byId.get(l); if (a && b && a !== b) edges.push([a, b]); }
   const deg = new Map();
@@ -468,14 +484,14 @@ function graph() {
     ctx.clearRect(0, 0, W, H);
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
     for (const [a, b] of edges) {
-      ctx.strokeStyle = near && (a === hover || b === hover) ? "rgba(244,184,143,.7)" : "rgba(255,255,255,.1)";
+      ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .7) : alpha(ink, .1);
       ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     for (const n of nodes) {
       ctx.globalAlpha = near && !near.has(n) && n !== hover ? 0.25 : 1;
       ctx.fillStyle = n.c; ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
       if (n === hover || (!hover && (deg.get(n) || 0) >= 5) || near?.has(n)) {
-        ctx.fillStyle = n.ghost ? "rgba(243,239,233,.45)" : "rgba(243,239,233,.85)";
+        ctx.fillStyle = alpha(ink, n.ghost ? .45 : .85);
         ctx.font = "500 12px Inter, sans-serif"; ctx.fillText(n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, n.x + n.r + 5, n.y + 4);
       }
     }
@@ -504,6 +520,11 @@ const ROUTINES = {
 };
 const AGENT_NAME = { claude: ["Claude Code", "agents"], agy: ["Antigravity", "bolt"], codex: ["Codex", "agents"], gemini: ["Gemini", "spark"] };
 const runnerName = (id) => S.runners?.find((r) => r.id === id)?.name || id;
+// An agent's picture when the user set one in Settings, else its icon. Takes a runner id or a process name.
+const avatar = (key, ic = "agents", size = 20) => {
+  const r = S.runners?.find((x) => x.id === key || x.process === key);
+  return r?.avatar ? `<img class="av" src="/avatar/${esc(r.id)}?v=${r.avatar}" alt="" width="${size}" height="${size}">` : icon(ic, size);
+};
 const taskStatus = (t) => (!t.end ? "running" : t.ok ? "finished" : "failed");
 const liveClass = (t) => (!t.end ? "run" : t.ok ? "" : "off");
 // The task form is drawn once; the 10 s refresh redraws only #agents-body, so what you type survives.
@@ -530,15 +551,15 @@ function agents() {
 function agentsBody() {
   const el = $("#agents-body");
   if (!el) return;
-  el.innerHTML = `${S.tasks?.length ? `<h3>Tasks</h3><div class="list glass">${S.tasks.map((t) => `<a class="row" href="#/t/${t.id}"><span class="live ${liveClass(t)}"></span>
+  el.innerHTML = `${S.tasks?.length ? `<h3>Tasks</h3><div class="list glass">${S.tasks.map((t) => `<a class="row" href="#/t/${t.id}"><span class="live ${liveClass(t)}"></span><span class="row-av">${avatar(t.agent, "agents", 18)}</span>
         <span class="t">${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : t.prompt)}<small>${esc(taskMeta(t))} · ${taskStatus(t)}</small></span><span class="x">${ago(Date.parse(t.start))}</span></a>`).join("")}</div>` : ""}
     <h3>Running now</h3><div class="cards">${S.agents.map((a) => {
       const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
-      return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${icon(ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
+      return `<a class="ag glass link" href="#/a/${a.key}"><div class="hd"><span class="ic">${avatar(a.name, ic)}</span><div><h4>${name}</h4><small>${esc(a.cwd)}</small></div><span class="live" style="margin-left:auto"></span></div>
         <div class="ft"><span class="pill">${duration(a.seconds)}</span><span class="watch">watch live ${icon("r", 14)}</span></div></a>`;
     }).join("") || '<p class="empty">No agents running.</p>'}</div>
     ${S.background?.length ? `<h3>In the background</h3><div class="cards">${S.background.map((f) => `<a class="ag glass link" href="#/a/${f.key}">
-        <div class="hd"><span class="ic">${icon("agents")}</span><div><h4>${esc(f.title)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
+        <div class="hd"><span class="ic">${avatar("claude")}</span><div><h4>${esc(f.title)}</h4><small>Claude Code · ${esc(f.cwd)}</small></div>
         <span class="live ${f.state === "blocked" ? "run" : f.state === "done" ? "idle" : ""}" style="margin-left:auto"></span></div>
         ${f.needs ? `<p class="need">${esc(f.needs)}</p>` : ""}
         <div class="ft"><span class="pill ${f.state === "blocked" ? "peach" : ""}">${STATE[f.state] || f.state}</span><span class="pill">${ago(f.since)}</span><span class="watch">open ${icon("r", 14)}</span></div></a>`).join("")}</div>` : ""}
@@ -592,7 +613,7 @@ async function taskPage(id) {
     const signature = t.end + t.events.length;
     if (signature === taskLast) return;
     taskLast = signature;
-    $("#task-head").innerHTML = `<h1>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))}</p>
+    $("#task-head").innerHTML = `<h1><span class="h-av">${avatar(t.agent, "agents", 30)}</span>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc(taskMeta(t))} · started ${ago(Date.parse(t.start))}</p>
       <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}
         ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}</div>`;
     const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
@@ -629,7 +650,7 @@ async function agentPage(key) {
     if (signature === agLast) return;
     agLast = signature;
     const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
-    $("#agent-head").innerHTML = `<h1>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
+    $("#agent-head").innerHTML = `<h1><span class="h-av">${avatar(a.name, "agents", 30)}</span>${esc(name)}</h1><p>${esc(AGENT_NAME[a.name]?.[0] || a.name)} · ${esc(a.cwd)}${a.seconds ? ` · ${duration(a.seconds)}` : ""}</p>
       <div class="r"><span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span>
         ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(key)}"`, true)}</div>`;
     $("#agent-needs").innerHTML = a.needs ? `<div class="needs glass"><b>Needs you</b>${fmt(a.needs)}</div>` : "";
@@ -720,29 +741,43 @@ async function savePrefs(change) {
   imagesPage();
   return ok;
 }
-// The picker: every visible image of the board, plus Automatic to hand the card back to the rotation.
-let pickKey = "";
+// The picker: every visible image, to give a Home card its image (Automatic hands it back) or an agent its icon.
+let pickKey = "", pickAgent = "";
 const IMG_ACTIONS = {
   "pick-open": async (el) => {
-    const s = SG[Number(el.dataset.i)], p = await api("/api/images").catch(() => null);
-    if (!s || !p) return;
-    pickKey = cardKey(s);
-    const cur = D.pinCards?.[pickKey]?.id, imgs = p.images.filter((i) => !p.hidden.includes(i.id));
-    $("#picker").innerHTML = `<div class="pk-head"><h3>Image for “${esc(s.title)}”</h3><button type="button" class="btn glass" data-act="pick" data-id="">Automatic</button>
-        <button type="button" class="btn glass" data-act="pick-close" aria-label="Close">Close <kbd>Esc</kbd></button></div>
-      <div class="pk-grid">${imgs.map((im) => `<button type="button" class="${im.id === cur ? "on" : ""}" data-act="pick" data-id="${im.id}" aria-label="${esc(im.title || "Image")}"><img src="/pin/${im.id}?thumb" loading="lazy" alt=""></button>`).join("")}</div>`;
-    $("#picker").showModal();
+    const s = SG[Number(el.dataset.i)];
+    if (!s) return;
+    pickKey = cardKey(s); pickAgent = "";
+    openPicker(`Image for “${esc(s.title)}”`, D.pinCards?.[pickKey]?.id, '<button type="button" class="btn glass" data-act="pick" data-id="">Automatic</button>');
   },
+  // The same picker sets an agent's icon from the card images.
+  "avatar-pick": (el) => { pickAgent = el.dataset.id; openPicker(`Icon for ${esc(runnerName(pickAgent))}`, "", ""); },
   "pick-close": () => $("#picker").close(),
   pick: async (el) => {
+    if (pickAgent) {
+      try { await api("/api/avatar", { agent: pickAgent, image: el.dataset.id }); } catch (e) { return toast(e.message); }
+      $("#picker").close(); S = await api("/api/system"); settingsPage(); return toast("Icon saved");
+    }
     try { await api("/api/images/prefs", { cards: { [pickKey]: el.dataset.id || null } }); } catch (e) { return toast(e.message); }
     $("#picker").close(); D = await api("/api"); home(); toast(el.dataset.id ? "Image chosen for this card" : "Back to automatic");
   },
+};
+async function openPicker(title, cur, extra) {
+  const p = await api("/api/images").catch(() => null);
+  if (!p) return toast("Images are not available");
+  const imgs = p.images.filter((i) => !p.hidden.includes(i.id));
+  $("#picker").innerHTML = `<div class="pk-head"><h3>${title}</h3>${extra}
+        <button type="button" class="btn glass" data-act="pick-close" aria-label="Close">Close <kbd>Esc</kbd></button></div>
+      <div class="pk-grid">${imgs.map((im) => `<button type="button" class="${im.id === cur ? "on" : ""}" data-act="pick" data-id="${im.id}" aria-label="${esc(im.title || "Image")}"><img src="/pin/${im.id}?thumb" loading="lazy" alt=""></button>`).join("")
+        || '<p class="empty">No images yet: add a photo folder or a Pinterest board in Images.</p>'}</div>`;
+  $("#picker").showModal();
+}
+Object.assign(IMG_ACTIONS, {
   "img-mode": (el) => savePrefs({ mode: el.dataset.k }),
   "img-source": (el) => { imgSource = el.dataset.k; imagesPage(); },
   "img-hide": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ hidden: p.hidden.includes(id) ? p.hidden.filter((x) => x !== id) : [...p.hidden, id] }); },
   "img-star": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ starred: p.starred.includes(id) ? p.starred.filter((x) => x !== id) : [...p.starred, id] }); },
-};
+});
 
 // ---------------------------------------------------------------- Services
 function services() {
@@ -793,7 +828,13 @@ async function settingsPage() {
     <div class="img-sources">
       <div class="img-set glass"><b>Calendar</b><small>Week strip under the top bar, or a pill that opens on hover.</small>${seg("set-cal", calMode)}</div>
       <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill.</small>${seg("set-dock", dockMode)}</div>
+      <div class="img-set glass"><b>Card art</b><small>Your images, animated ascii scenes, or images when you have them.</small>
+        <div class="seg" role="radiogroup">${[["auto", "Auto"], ["images", "Images"], ["ascii", "ASCII"]].map(([k, l]) =>
+          `<button type="button" role="radio" aria-checked="${cardArt === k}" class="${cardArt === k ? "on" : ""}" data-act="set-art" data-v="${k}">${l}</button>`).join("")}</div></div>
     </div>
+    <h3>Theme</h3>
+    <div class="themes">${THEMES.map(([k, l]) => `<button type="button" class="theme-sw ${(document.documentElement.dataset.theme || "overlook") === k ? "on" : ""}" data-act="set-theme" data-v="${k}">
+      <span class="sw" data-theme="${k}"><i style="background:var(--surface-2)"></i><i style="background:var(--accent)"></i><i style="background:var(--accent-2)"></i><i style="background:var(--ink)"></i></span>${l}</button>`).join("")}</div>
     <h3>Vault &amp; server</h3>
     <form class="task glass" id="set-vault">
       <div class="set-row">
@@ -820,12 +861,29 @@ async function settingsPage() {
       <div class="task-bar"><small>Each agent has <code>id</code>, <code>name</code>, and <code>run</code> (CLI command with <code>{prompt}</code>, <code>{model}</code>, <code>{effort}</code>, <code>{session}</code>) or <code>api</code> (<code>anthropic</code> / <code>openai</code>), plus optional <code>models</code>, <code>efforts</code> and <code>open</code> commands.</small>
         <button class="btn peach" type="submit">Save</button></div>
     </form>
+    <h3>Agent icons</h3>
+    <div class="av-grid">${(S.runners || []).map((r) => `<div class="av-item glass">
+        <span class="av-pic">${avatar(r.id, "agents", 56)}</span><b>${esc(r.name)}</b>
+        <button type="button" class="btn glass" data-act="avatar-pick" data-id="${esc(r.id)}">From your images</button>
+        <label class="btn glass">From a file…<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-avatar="${esc(r.id)}" hidden></label>
+        ${r.avatar ? `<button type="button" class="btn glass" data-act="avatar-remove" data-id="${esc(r.id)}">Remove</button>` : ""}</div>`).join("") || '<p class="empty">No agents yet.</p>'}</div>
     <h3>Services (<code>services.json</code>)</h3>
     <form class="task glass" id="set-services-form">
       <textarea class="code" id="set-services" rows="8" spellcheck="false" aria-label="Services JSON">${esc(JSON.stringify(cfg.services, null, 2))}</textarea>
       <div class="task-bar"><small>Each service has <code>id</code>, <code>name</code>, <code>url</code> and <code>desc</code> (plus optional <code>icon</code>, <code>dock</code>, <code>width</code>, <code>max</code>, <code>proxy</code>, <code>tailnet</code>).</small>
         <button class="btn peach" type="submit">Save</button></div>
     </form>`;
+  // A picked file goes up as a data URL; the server squares it to 256 px.
+  main.querySelectorAll("[data-avatar]").forEach((inp) => inp.onchange = () => {
+    const f = inp.files[0];
+    if (!f) return;
+    if (f.size > 2_000_000) return toast("Pick an image under 2 MB");
+    const rd = new FileReader();
+    rd.onload = async () => {
+      try { await api("/api/avatar", { agent: inp.dataset.avatar, data: rd.result }); S = await api("/api/system"); settingsPage(); toast("Icon saved"); } catch (err) { toast(err.message); }
+    };
+    rd.readAsDataURL(f);
+  });
   $("#set-vault").onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -889,6 +947,9 @@ const ACTIONS = {
     try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
   },
   effort: (el) => el.parentElement.querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-checked", b === el); }),
+  "avatar-remove": async (el) => { await api("/api/avatar", { agent: el.dataset.id, remove: true }).catch((e) => toast(e.message)); S = await api("/api/system"); settingsPage(); },
+  "set-theme": (el) => { document.documentElement.dataset.theme = el.dataset.v; try { localStorage.setItem("overlook.theme", el.dataset.v); } catch {} settingsPage(); },
+  "set-art": (el) => { cardArt = el.dataset.v; try { localStorage.setItem(ART_KEY, cardArt); } catch {} settingsPage(); toast(`Card art: ${el.textContent}`); },
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";
