@@ -359,14 +359,23 @@ const AVATARS = `${import.meta.dir}/avatars`;
 const AVATAR_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
 const avatarPath = (id: string) => Object.values(AVATAR_TYPES).map((e) => `${AVATARS}/${id}.${e}`).find(existsSync) ?? null;
 function avatarVersion(id: string) { const f = avatarPath(id); return f ? Math.round(statSync(f).mtimeMs) : null; }
-function saveAvatar(b: any) {
+// The picture comes as a data URL (a file from the computer) or as the id of one of the card images.
+async function saveAvatar(b: any) {
   const id = String(b?.agent ?? "");
   if (!/^[\w-]+$/.test(id) || !loadAgents(import.meta.dir).some((a) => a.id === id)) return "unknown agent";
+  let m: string[] | null = null;
+  if (typeof b.image === "string") {
+    const f = await imageFile(b.image, "thumb");
+    if (!f) return "no such image";
+    const type = AVATAR_TYPES[f.type.split(";")[0]] ? f.type.split(";")[0] : "image/jpeg";
+    m = ["", type, Buffer.from(await f.arrayBuffer()).toString("base64")];
+  } else if (!b.remove) {
+    m = String(b.data ?? "").match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+    if (!m) return "send a PNG, JPEG, WebP or GIF image";
+  }
   for (const e of Object.values(AVATAR_TYPES)) rmSync(`${AVATARS}/${id}.${e}`, { force: true });
   if (b.remove) return { ok: true };
-  const m = String(b.data ?? "").match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
-  if (!m) return "send a PNG, JPEG, WebP or GIF image";
-  const bytes = Buffer.from(m[2], "base64");
+  const bytes = Buffer.from(m![2], "base64");
   if (!bytes.length || bytes.length > 2_000_000) return "the image must be under 2 MB";
   mkdirSync(AVATARS, { recursive: true });
   const raw = `${AVATARS}/${id}.${AVATAR_TYPES[m[1]]}`;
@@ -485,7 +494,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
     if (p === "/api/pinterest/sync") return json(await sync(true));
     if (p === "/api/images/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
-    if (p === "/api/avatar") { const r = saveAvatar(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/avatar") { const r = await saveAvatar(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/settings") { const r = saveSettings(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));

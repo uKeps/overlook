@@ -333,6 +333,10 @@ test("an agent gets a picture from Settings", async () => {
   expect((await post("/api/avatar", { agent: "nope", data: png })).status).toBe(400);
   expect((await post("/api/avatar", { agent: "echo", data: "data:text/html;base64,PGgxPg==" })).status).toBe(400);
   expect((await fetch(`${BASE}/avatar/..%2Fserver.ts`)).status).toBe(404);
+  // One of the card images can be the icon too.
+  expect((await post("/api/avatar", { agent: "echo", image: "aa11" })).status).toBe(200);
+  expect((await fetch(`${BASE}/avatar/echo?v=${(await runner()).avatar}`)).status).toBe(200);
+  expect((await post("/api/avatar", { agent: "echo", image: "zz99" })).status).toBe(400);
   expect((await post("/api/avatar", { agent: "echo", remove: true })).status).toBe(200);
   expect((await runner()).avatar).toBeNull();
 });

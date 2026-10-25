@@ -725,29 +725,43 @@ async function savePrefs(change) {
   imagesPage();
   return ok;
 }
-// The picker: every visible image of the board, plus Automatic to hand the card back to the rotation.
-let pickKey = "";
+// The picker: every visible image, to give a Home card its image (Automatic hands it back) or an agent its icon.
+let pickKey = "", pickAgent = "";
 const IMG_ACTIONS = {
   "pick-open": async (el) => {
-    const s = SG[Number(el.dataset.i)], p = await api("/api/images").catch(() => null);
-    if (!s || !p) return;
-    pickKey = cardKey(s);
-    const cur = D.pinCards?.[pickKey]?.id, imgs = p.images.filter((i) => !p.hidden.includes(i.id));
-    $("#picker").innerHTML = `<div class="pk-head"><h3>Image for “${esc(s.title)}”</h3><button type="button" class="btn glass" data-act="pick" data-id="">Automatic</button>
-        <button type="button" class="btn glass" data-act="pick-close" aria-label="Close">Close <kbd>Esc</kbd></button></div>
-      <div class="pk-grid">${imgs.map((im) => `<button type="button" class="${im.id === cur ? "on" : ""}" data-act="pick" data-id="${im.id}" aria-label="${esc(im.title || "Image")}"><img src="/pin/${im.id}?thumb" loading="lazy" alt=""></button>`).join("")}</div>`;
-    $("#picker").showModal();
+    const s = SG[Number(el.dataset.i)];
+    if (!s) return;
+    pickKey = cardKey(s); pickAgent = "";
+    openPicker(`Image for “${esc(s.title)}”`, D.pinCards?.[pickKey]?.id, '<button type="button" class="btn glass" data-act="pick" data-id="">Automatic</button>');
   },
+  // The same picker sets an agent's icon from the card images.
+  "avatar-pick": (el) => { pickAgent = el.dataset.id; openPicker(`Icon for ${esc(runnerName(pickAgent))}`, "", ""); },
   "pick-close": () => $("#picker").close(),
   pick: async (el) => {
+    if (pickAgent) {
+      try { await api("/api/avatar", { agent: pickAgent, image: el.dataset.id }); } catch (e) { return toast(e.message); }
+      $("#picker").close(); S = await api("/api/system"); settingsPage(); return toast("Icon saved");
+    }
     try { await api("/api/images/prefs", { cards: { [pickKey]: el.dataset.id || null } }); } catch (e) { return toast(e.message); }
     $("#picker").close(); D = await api("/api"); home(); toast(el.dataset.id ? "Image chosen for this card" : "Back to automatic");
   },
+};
+async function openPicker(title, cur, extra) {
+  const p = await api("/api/images").catch(() => null);
+  if (!p) return toast("Images are not available");
+  const imgs = p.images.filter((i) => !p.hidden.includes(i.id));
+  $("#picker").innerHTML = `<div class="pk-head"><h3>${title}</h3>${extra}
+        <button type="button" class="btn glass" data-act="pick-close" aria-label="Close">Close <kbd>Esc</kbd></button></div>
+      <div class="pk-grid">${imgs.map((im) => `<button type="button" class="${im.id === cur ? "on" : ""}" data-act="pick" data-id="${im.id}" aria-label="${esc(im.title || "Image")}"><img src="/pin/${im.id}?thumb" loading="lazy" alt=""></button>`).join("")
+        || '<p class="empty">No images yet: add a photo folder or a Pinterest board in Images.</p>'}</div>`;
+  $("#picker").showModal();
+}
+Object.assign(IMG_ACTIONS, {
   "img-mode": (el) => savePrefs({ mode: el.dataset.k }),
   "img-source": (el) => { imgSource = el.dataset.k; imagesPage(); },
   "img-hide": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ hidden: p.hidden.includes(id) ? p.hidden.filter((x) => x !== id) : [...p.hidden, id] }); },
   "img-star": async (el) => { const p = await api("/api/images"), id = el.dataset.id; savePrefs({ starred: p.starred.includes(id) ? p.starred.filter((x) => x !== id) : [...p.starred, id] }); },
-};
+});
 
 // ---------------------------------------------------------------- Services
 function services() {
@@ -828,7 +842,8 @@ async function settingsPage() {
     <h3>Agent icons</h3>
     <div class="av-grid">${(S.runners || []).map((r) => `<div class="av-item glass">
         <span class="av-pic">${avatar(r.id, "agents", 56)}</span><b>${esc(r.name)}</b>
-        <label class="btn glass">Choose…<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-avatar="${esc(r.id)}" hidden></label>
+        <button type="button" class="btn glass" data-act="avatar-pick" data-id="${esc(r.id)}">From your images</button>
+        <label class="btn glass">From a file…<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-avatar="${esc(r.id)}" hidden></label>
         ${r.avatar ? `<button type="button" class="btn glass" data-act="avatar-remove" data-id="${esc(r.id)}">Remove</button>` : ""}</div>`).join("") || '<p class="empty">No agents yet.</p>'}</div>
     <h3>Services (<code>services.json</code>)</h3>
     <form class="task glass" id="set-services-form">
