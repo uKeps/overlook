@@ -181,54 +181,12 @@ export function startPinterest(callbackUrl: string) {
   setInterval(() => sync(), SIX_HOURS);
 }
 
-// What the user picked in the Images page, kept in pinterest.json next to the board: hidden images never show;
-// "fixed" uses only the starred ones, in their order, instead of a daily rotation.
-type Prefs = { board: string; mode: "random" | "fixed"; hidden: string[]; starred: string[]; cards: Record<string, string> };
-const CONFIG = `${DIR}/pinterest.json`;
-const readConfig = (): Record<string, any> => { try { return JSON.parse(readFileSync(CONFIG, "utf8")); } catch { return {}; } };
-const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i) => typeof i === "string" && /^[0-9a-f]+$/.test(i)) : []);
-function prefs(): Prefs {
-  const c = readConfig();
-  const cards = Object.fromEntries(Object.entries(c.cards ?? {}).filter(([, v]) => typeof v === "string" && /^[0-9a-f]+$/.test(v))) as Record<string, string>;
-  return { board: String(c.board ?? ""), mode: c.mode === "fixed" ? "fixed" : "random", hidden: ids(c.hidden), starred: ids(c.starred), cards };
-}
-export function setPrefs(b: any) {
-  const c = readConfig(), next: Record<string, unknown> = {};
-  if (b.mode !== undefined) { if (b.mode !== "random" && b.mode !== "fixed") return "mode must be random or fixed"; next.mode = b.mode; }
-  for (const k of ["hidden", "starred"]) if (b[k] !== undefined) {
-    if (!Array.isArray(b[k]) || b[k].length > 5000 || ids(b[k]).length !== b[k].length) return `${k} must be a list of image ids`;
-    next[k] = [...new Set(b[k] as string[])];
-  }
-  // cards: { "<card key>": "<image id>" } picks the image of one Home card; null puts the card back on automatic.
-  if (b.cards !== undefined) {
-    if (typeof b.cards !== "object" || b.cards === null || Array.isArray(b.cards)) return "cards must map a card to an image id";
-    const cards = { ...prefs().cards };
-    for (const [k, v] of Object.entries(b.cards)) {
-      if (!k || k.length > 300) return "card key too long";
-      if (v === null) delete cards[k];
-      else if (typeof v === "string" && /^[0-9a-f]+$/.test(v)) { delete cards[k]; cards[k] = v; }
-      else return "cards must map a card to an image id";
-    }
-    next.cards = Object.fromEntries(Object.entries(cards).slice(-200)); // the most recent 200 choices
-  }
-  if (b.board !== undefined) {
-    const board = String(b.board).trim().replace(/^https?:\/\/[^/]+\//, "").replace(/\/$/, "");
-    if (board && !/^[\w%. -]{1,100}(\/[\w%. -]{1,100})?$/.test(board)) return "board must be user/board (public) or a board name";
-    next.board = board;
-  }
-  writeFileSync(CONFIG, JSON.stringify({ ...c, ...next }, null, 1));
-  if (next.board !== undefined && next.board !== c.board) { paused = false; sync(true); } // a new board: fetch it now
-  return pinterestState();
-}
-// The images the cards use, in order.
-export function shownPins() {
-  const p = prefs(), visible = state.images.filter((i) => !p.hidden.includes(i.id));
-  const starred = p.mode === "fixed" ? p.starred.map((id) => visible.find((i) => i.id === id)).filter((i): i is Pin => !!i) : [];
-  const cards = Object.fromEntries(Object.entries(p.cards).flatMap(([k, id]) => { const i = state.images.find((x) => x.id === id); return i ? [[k, i]] : []; }));
-  return { mode: starred.length ? "fixed" : "random", pins: starred.length ? starred : visible, cards };
-}
+// The board's images for images.ts, which merges them with the user's folder and applies their picks.
+export const pinImages = () => state.images;
+export function resync() { paused = false; return sync(true); }
+const boardName = () => { try { return String(JSON.parse(readFileSync(`${DIR}/pinterest.json`, "utf8")).board ?? ""); } catch { return ""; } };
 
-export const pinterestState = () => ({ ...state, ...prefs(), total: state.images.length, redirect });
+export const pinterestState = () => ({ ...state, board: boardName(), total: state.images.length, redirect });
 
 // The cached image, or a smaller copy made on first request: "amb" (blurred, for the ambient background) or "thumb" (for the grid).
 export async function pinFile(id: string, variant: "" | "amb" | "thumb" = "") {

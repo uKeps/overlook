@@ -4,10 +4,11 @@
 //   bun server.ts map     -> one line per note, so agents can find their way
 //   bun server.ts today   -> what the Home shows, as short text for an agent
 import { resolve, basename, dirname } from "node:path";
-import { readdirSync, readlinkSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { readlinkSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
-import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback, setPrefs, shownPins, magick } from "./pinterest";
+import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback } from "./pinterest";
+import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
 
 const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
@@ -20,7 +21,6 @@ const TAILNET = (() => {
 const hostOk = (h: string, port: number) =>
   h === `127.0.0.1:${port}` || h === `localhost:${port}` || (!!TAILNET && (h === TAILNET || h.startsWith(`${TAILNET}:`)));
 const VAULT = basename(ROOT);
-const ART = resolve(process.env.ART_DIR || `${homedir()}/Pictures/Wallpapers`); // card art when there is no Pinterest
 
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
@@ -146,8 +146,8 @@ async function state() {
     notes: ns, missing: (await missing(ns)).slice(0, 10),
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
-    art: art().length, calendar: await calendar(),
-    ...(({ pins, mode, cards }) => ({ pins, pinMode: mode, pinCards: cards }))(shownPins()),
+    calendar: await calendar(),
+    ...(({ pins, mode, cards }) => ({ pins, pinMode: mode, pinCards: cards }))(shownImages()),
   };
 }
 
@@ -196,24 +196,6 @@ async function capture(text: string) {
   while (j > i + 1 && !ls[j - 1].trim()) j--; // goes after the last item, before the blank line
   ls.splice(j, 0, `- ${text.replace(/\s+/g, " ").trim()}`);
   await Bun.write(f, ls.join("\n"));
-}
-
-// 4K wallpapers are heavy in the browser and over Tailscale: serve a 1600px copy, generated once.
-// ponytail: generated on first request, blocking the server ~0.3 s per image; pre-generate if it bothers.
-const CACHE = `${homedir()}/.cache/hq-arte`;
-// "amb" is the ambient background: tiny, already blurred and darkened, so the CSS needs no filter (it cost ~10 fps).
-async function thumbnail(name: string, amb: boolean) {
-  const out = `${CACHE}/${name.replace(/\.\w+$/, "")}${amb ? "-amb" : ""}.jpg`;
-  if (!(await Bun.file(out).exists())) {
-    mkdirSync(CACHE, { recursive: true });
-    const args = amb ? ["-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135"] : ["-resize", "1600x1600>"];
-    if (!magick([`${ART}/${name}`, ...args, "-quality", "78", out])) return Bun.file(`${ART}/${name}`);
-  }
-  return Bun.file(out);
-}
-
-function art() {
-  try { return readdirSync(ART).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort(); } catch { return []; }
 }
 
 // Live agents: processes named in agents.json (claude/agy/codex/gemini by default), with the folder they run in.
@@ -427,7 +409,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/capture" && typeof b.text === "string" && b.text.trim()) { await capture(b.text.slice(0, 2000)); return json({ ok: true }); }
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
     if (p === "/api/pinterest/sync") return json(await sync(true));
-    if (p === "/api/pinterest/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/images/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
@@ -443,18 +425,13 @@ async function handle(req: Request, port: number) {
   }
   if (p === "/api") return json(await state());
   if (p === "/api/pinterest") return json(pinterestState());
+  if (p === "/api/images") return json(imagesState());
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
-  if (p.startsWith("/art/")) {
-    const a = art(), i = Number(p.slice(5));
-    return Number.isInteger(i) && a.length
-      ? new Response(await thumbnail(a[i % a.length], url.searchParams.has("amb")), { headers: { "cache-control": "max-age=86400" } })
-      : new Response("404", { status: 404 });
-  }
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
-  if (p.startsWith("/pin/")) { const f = await pinFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
+  if (p.startsWith("/pin/")) { const f = await imageFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }
   if (p === "/auth/pinterest/callback") { const error = await authorizeCallback(url); return page(error ? "Not connected" : "Pinterest connected", error || `${pinterestState().total} images in the cache.`); }
   if (p === "/") return new Response(Bun.file(`${import.meta.dir}/index.html`));

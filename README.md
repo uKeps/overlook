@@ -71,26 +71,21 @@ drops the calendar back in place on hover; *Pin* keeps it open.
 
 Everything below is off until you set it up. Skip what you don't need.
 
-### Pinterest (card images)
+### Card images: your photos and Pinterest
 
-Without Pinterest, cards use images from `ART_DIR` (default `~/Pictures/Wallpapers`), or none.
+The Home cards show images from two sources, both set up in **Images** (Services → *Manage images*):
 
-**Public board, no account setup:**
+- **Your photos**: any folder on this computer, e.g. one you downloaded (`~/Pictures/my-photos`). JPG, PNG,
+  WebP and AVIF at the top level of the folder; new files show up on their own.
+- **Pinterest**: a public board as `user/board`, synced every 6 hours into `cache/` (or *Sync* now). This
+  reads the public board page, not an official API, so it may break if Pinterest changes it, and that page
+  only shows a sample of a big board each time: the collection grows with every sync. The official API
+  (below) lists the whole board.
 
-```sh
-cp pinterest.example.json pinterest.json   # set "board": "your-user/your-board"
-cp services.example.json services.json     # shows its status under Services
-```
-
-Restart. Images sync every 6 hours into `cache/`, or on demand from Services → *Sync*.
-
-Services → *Manage images* shows the whole board: change the board, hide images you don't want, star
-the ones you do, and pick *Random* (the cards rotate through the visible images every day) or *Starred only*
-(the starred ones, in the order you starred them). On the Home, *Choose image* on a card gives that card a
-specific image (*Automatic* hands it back). The choices are saved in `pinterest.json`.
-This reads the public board page, not an official API, so it may break if Pinterest changes it. That page
-only shows a sample of a big board each time, so the collection grows with every sync instead of arriving
-all at once; the official API (below) lists the whole board.
+In the same page, hide images you don't want, star the ones you do, and pick *Random* (the cards rotate
+through the visible images every day) or *Starred only* (the starred ones, in the order you starred them).
+On the Home, *Choose image* on a card gives that card a specific image (*Automatic* hands it back). The
+choices are saved in `pinterest.json` (`cp pinterest.example.json pinterest.json` to start from a file).
 
 **Private board (official API):** create an app at
 [developers.pinterest.com](https://developers.pinterest.com/apps/) with redirect URI
