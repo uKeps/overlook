@@ -36,6 +36,10 @@ beforeAll(async () => {
     { id: "fake-claude", name: "Fake Claude", api: "anthropic", url: FAKE, model: "claude-opus-5-5", key: "FAKE_KEY" },
   ]));
   fake = Bun.serve({ hostname: "127.0.0.1", port: 4798, fetch: fakeProvider });
+  // A board already in the cache: no Pinterest config, so nothing syncs over it.
+  mkdirSync(`${ROOT}/cache/pinterest`, { recursive: true });
+  for (const id of ["aa11", "bb22", "cc33"]) writeFileSync(`${ROOT}/cache/pinterest/${id}.jpg`, "not really a jpeg");
+  writeFileSync(`${ROOT}/cache/pinterest/index.json`, JSON.stringify({ last: "", pins: ["aa11", "bb22", "cc33"].map((id) => ({ id, link: "", title: id, color: "" })) }));
   server = Bun.spawn(["bun", "server.ts"], { cwd: ROOT, env: ENV, stdout: "ignore", stderr: "inherit" });
   for (let i = 0; i < 100; i++) { try { await fetch(BASE); return; } catch { await Bun.sleep(100); } }
   throw new Error("server did not start");
@@ -212,4 +216,29 @@ test("scheduled tasks run when due and repeat", async () => {
   expect((await post("/api/schedule", { at, repeat: "hourly", agent: "echo", prompt: "x" })).status).toBe(400);
   expect((await post("/api/schedule", { at, repeat: "daily", agent: "missing", prompt: "x" })).status).toBe(400);
   expect((await post("/api/schedule/delete", { id: daily.id })).status).toBe(200);
+});
+
+// ---------------------------------------------------------------- images
+test("the Images page hides, stars and fixes the card images", async () => {
+  const pins = async () => { const d = await (await fetch(`${BASE}/api`)).json(); return [d.pinMode, d.pins.map((p: any) => p.id)]; };
+  expect(await pins()).toEqual(["random", ["aa11", "bb22", "cc33"]]);
+  expect((await post("/api/pinterest/prefs", { hidden: ["bb22"] })).status).toBe(200);
+  expect(await pins()).toEqual(["random", ["aa11", "cc33"]]);
+  expect((await post("/api/pinterest/prefs", { mode: "fixed" })).status).toBe(200);
+  expect(await pins()).toEqual(["random", ["aa11", "cc33"]]); // nothing starred yet: still rotates
+  expect((await post("/api/pinterest/prefs", { starred: ["cc33", "bb22", "aa11"] })).status).toBe(200);
+  expect(await pins()).toEqual(["fixed", ["cc33", "aa11"]]); // starred order, hidden one left out
+  const p = await (await fetch(`${BASE}/api/pinterest`)).json();
+  expect([p.mode, p.hidden, p.starred, p.total]).toEqual(["fixed", ["bb22"], ["cc33", "bb22", "aa11"], 3]);
+  expect(JSON.parse(readFileSync(`${ROOT}/pinterest.json`, "utf8")).mode).toBe("fixed");
+  expect((await post("/api/pinterest/prefs", { hidden: ["../x"] })).status).toBe(400);
+  expect((await post("/api/pinterest/prefs", { mode: "shuffle" })).status).toBe(400);
+  expect((await post("/api/pinterest/prefs", { board: "a/b/c/d" })).status).toBe(400);
+  expect((await fetch(`${BASE}/pin/aa11?thumb`)).status).toBe(200);
+  // One Home card can be given its own image, and handed back to automatic.
+  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": "bb22" } })).status).toBe(200);
+  expect((await (await fetch(`${BASE}/api`)).json()).pinCards["Review|HTTP"].id).toBe("bb22");
+  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": null } })).status).toBe(200);
+  expect((await (await fetch(`${BASE}/api`)).json()).pinCards).toEqual({});
+  expect((await post("/api/pinterest/prefs", { cards: { "Review|HTTP": "../x" } })).status).toBe(400);
 });

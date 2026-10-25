@@ -7,7 +7,7 @@ import { resolve, basename, dirname } from "node:path";
 import { readdirSync, readlinkSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
-import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback } from "./pinterest";
+import { startPinterest, sync, pinterestState, pinFile, authorizeUrl, authorizeCallback, setPrefs, shownPins, magick } from "./pinterest";
 import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
 
 const ROOT = resolve(process.env.VAULT_DIR || `${homedir()}/dev/obsidian-study-vault`);
@@ -147,7 +147,7 @@ async function state() {
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
     art: art().length, calendar: await calendar(),
-    pins: pinterestState().images,
+    ...(({ pins, mode, cards }) => ({ pins, pinMode: mode, pinCards: cards }))(shownPins()),
   };
 }
 
@@ -207,7 +207,7 @@ async function thumbnail(name: string, amb: boolean) {
   if (!(await Bun.file(out).exists())) {
     mkdirSync(CACHE, { recursive: true });
     const args = amb ? ["-resize", "160x160>", "-blur", "0x5", "-modulate", "50,135"] : ["-resize", "1600x1600>"];
-    if (Bun.spawnSync(["magick", `${ART}/${name}`, ...args, "-quality", "78", out]).exitCode !== 0) return Bun.file(`${ART}/${name}`);
+    if (!magick([`${ART}/${name}`, ...args, "-quality", "78", out])) return Bun.file(`${ART}/${name}`);
   }
   return Bun.file(out);
 }
@@ -427,6 +427,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/capture" && typeof b.text === "string" && b.text.trim()) { await capture(b.text.slice(0, 2000)); return json({ ok: true }); }
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
     if (p === "/api/pinterest/sync") return json(await sync(true));
+    if (p === "/api/pinterest/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
@@ -453,7 +454,7 @@ async function handle(req: Request, port: number) {
       : new Response("404", { status: 404 });
   }
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
-  if (p.startsWith("/pin/")) { const f = await pinFile(p.slice(5), url.searchParams.has("amb")); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
+  if (p.startsWith("/pin/")) { const f = await pinFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }
   if (p === "/auth/pinterest/callback") { const error = await authorizeCallback(url); return page(error ? "Not connected" : "Pinterest connected", error || `${pinterestState().total} images in the cache.`); }
   if (p === "/") return new Response(Bun.file(`${import.meta.dir}/index.html`));

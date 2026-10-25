@@ -29,6 +29,7 @@ const I = {
   reload: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', play: '<path d="m7 4 13 8-13 8z"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   gap: '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 4 8M8 12h4"/><path d="m3 3 18 18"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
   leaf: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.4 5-6"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
@@ -46,7 +47,11 @@ function toast(msg) {
 // Opened over Tailscale (phone): embedded apps use the tailnet links, built from the current host.
 const remote = location.hostname.endsWith(".ts.net");
 const address = (s) => (remote ? (s.tailnet ? `https://${location.hostname}:${s.tailnet}` : "") : s.proxy ? `http://127.0.0.1:${s.proxy}` : s.url);
-const pinFor = (s) => (D?.pins?.length ? D.pins[(typeof s === "number" ? hash(D.today) + s : hash(String(s))) % D.pins.length] : null);
+// Card i gets image i: shifted by the date in random mode, the same every day when the user fixed their starred images.
+// A Home card the user gave an image keeps it (keyed by what the card is about, so it follows the card around).
+const cardKey = (s) => `${s.cat}|${s.title}`;
+const pinFor = (s) => (typeof s === "number" && SG[s] && D?.pinCards?.[cardKey(SG[s])]) ||
+  (D?.pins?.length ? D.pins[(typeof s === "number" ? (D.pinMode === "fixed" ? 0 : hash(D.today)) + s : hash(String(s))) % D.pins.length] : null);
 const art = (s) => (pinFor(s) ? `/pin/${pinFor(s).id}` : D?.art ? `/art/${hash(String(s)) % D.art}` : "");
 const obs = (p) => `obsidian://open?vault=${encodeURIComponent(D.vault)}&file=${encodeURIComponent(p.replace(/\.md$/, ""))}`;
 const noteHref = (p) => `#/n/${encodeURIComponent(p)}`;
@@ -89,7 +94,7 @@ function topBar() {
   calRender();
   const run = runningNow();
   const { pg, arg } = route();
-  const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
+  const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) || (pg === "images" && id === "services") ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
     item("notes", "Notes", "notes") + item("review", "Review", "review", due().length) + item("graph", "Graph", "graph") +
     item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) +
@@ -263,7 +268,8 @@ function home() {
         </div>
         <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
       </div>
-      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}</div>
+      <div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
+        ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>
     </article>`;
   };
   main.innerHTML = `<section class="car" id="car">${SG.map(card).join("")}
@@ -643,6 +649,68 @@ async function agentPage(key) {
   ambient(art(`agent ${key}`));
 }
 
+// ---------------------------------------------------------------- Images (the Pinterest board behind the cards)
+// Hide an image and it never shows; star some and switch to "Starred only" to fix which images the cards use, in that order.
+let imgTimer = null;
+async function imagesPage() {
+  clearTimeout(imgTimer);
+  const p = await api("/api/pinterest").catch(() => null);
+  if (route().pg !== "images") return;
+  if (!p) { main.innerHTML = '<p class="empty">Pinterest is not available.</p>'; return; }
+  const shown = p.images.filter((i) => !p.hidden.includes(i.id)), starred = p.starred.filter((id) => shown.some((i) => i.id === id));
+  const inUse = p.mode === "fixed" && starred.length ? starred.length : shown.length;
+  const boardUrl = p.board ? `https://www.pinterest.com/${p.board.replace(/^\/|\/$/g, "")}/` : "";
+  main.innerHTML = `<div class="ph"><h1>Images</h1><p>${p.total} from ${p.board ? `<a href="${esc(boardUrl)}" target="_blank">${esc(p.board)} ↗</a>` : "no board yet"} · ${inUse} in use${p.status === "error" ? ` · <em class="bad">${esc(p.error)}</em>` : ""}</p>
+      <div class="r"><button class="btn glass" data-act="pinsync" ${p.syncing || !p.board ? "disabled" : ""}>${p.syncing ? "Syncing…" : "Sync now"}</button></div></div>
+    <form class="img-set glass" id="img-set">
+      <label>Board <input id="img-board" value="${esc(p.board)}" placeholder="user/board" autocomplete="off" aria-label="Pinterest board"></label>
+      <button class="btn glass" type="submit">Save</button>
+      <span class="sp"></span>
+      <div class="seg" role="radiogroup" aria-label="Which images the cards use">${[["random", "Random, changes daily"], ["fixed", `Starred only${starred.length ? ` (${starred.length})` : ""}`]].map(([k, l]) =>
+        `<button type="button" role="radio" aria-checked="${p.mode === k}" class="${p.mode === k ? "on" : ""}" data-act="img-mode" data-k="${k}">${l}</button>`).join("")}</div>
+    </form>
+    ${p.mode === "fixed" && !starred.length ? '<p class="empty">No starred images yet, so the cards still rotate. Star the ones you want.</p>' : ""}
+    <div class="img-grid">${p.images.map((im) => {
+      const off = p.hidden.includes(im.id), n = p.starred.indexOf(im.id) + 1;
+      return `<figure class="img ${off ? "off" : ""} ${n ? "star" : ""}">
+        <img src="/pin/${im.id}?thumb" loading="lazy" alt="${esc(im.title || "Pinterest image")}">
+        ${n ? `<span class="n">${n}</span>` : ""}
+        <figcaption><button type="button" data-act="img-star" data-id="${im.id}" aria-pressed="${!!n}" title="${n ? "Unstar" : "Star: use it when the cards show starred images only"}">${n ? "★ Starred" : "☆ Star"}</button>
+          <button type="button" data-act="img-hide" data-id="${im.id}" aria-pressed="${off}">${off ? "Show" : "Hide"}</button>
+          ${im.link ? `<a href="${esc(im.link)}" target="_blank" aria-label="Open on Pinterest">↗</a>` : ""}</figcaption></figure>`;
+    }).join("") || `<p class="empty">${p.board ? "No images yet. Sync the board." : "Set a board above: a public one as user/board, or a board name with the Pinterest API set up (README)."}</p>`}</div>`;
+  $("#img-set").onsubmit = async (e) => { e.preventDefault(); await savePrefs({ board: $("#img-board").value }); toast("Board saved, syncing it now"); };
+  if (p.syncing) imgTimer = setTimeout(imagesPage, 2500); // follow a sync in progress
+  ambient(art("images"));
+}
+async function savePrefs(change) {
+  try { await api("/api/pinterest/prefs", change); } catch (e) { toast(e.message); }
+  D = await api("/api");
+  imagesPage();
+}
+// The picker: every visible image of the board, plus Automatic to hand the card back to the rotation.
+let pickKey = "";
+const IMG_ACTIONS = {
+  "pick-open": async (el) => {
+    const s = SG[Number(el.dataset.i)], p = await api("/api/pinterest").catch(() => null);
+    if (!s || !p) return;
+    pickKey = cardKey(s);
+    const cur = D.pinCards?.[pickKey]?.id, imgs = p.images.filter((i) => !p.hidden.includes(i.id));
+    $("#picker").innerHTML = `<div class="pk-head"><h3>Image for “${esc(s.title)}”</h3><button type="button" class="btn glass" data-act="pick" data-id="">Automatic</button>
+        <button type="button" class="btn glass" data-act="pick-close" aria-label="Close">Close <kbd>Esc</kbd></button></div>
+      <div class="pk-grid">${imgs.map((im) => `<button type="button" class="${im.id === cur ? "on" : ""}" data-act="pick" data-id="${im.id}" aria-label="${esc(im.title || "Image")}"><img src="/pin/${im.id}?thumb" loading="lazy" alt=""></button>`).join("")}</div>`;
+    $("#picker").showModal();
+  },
+  "pick-close": () => $("#picker").close(),
+  pick: async (el) => {
+    try { await api("/api/pinterest/prefs", { cards: { [pickKey]: el.dataset.id || null } }); } catch (e) { return toast(e.message); }
+    $("#picker").close(); D = await api("/api"); home(); toast(el.dataset.id ? "Image chosen for this card" : "Back to automatic");
+  },
+  "img-mode": (el) => savePrefs({ mode: el.dataset.k }),
+  "img-hide": async (el) => { const p = await api("/api/pinterest"), id = el.dataset.id; savePrefs({ hidden: p.hidden.includes(id) ? p.hidden.filter((x) => x !== id) : [...p.hidden, id] }); },
+  "img-star": async (el) => { const p = await api("/api/pinterest"), id = el.dataset.id; savePrefs({ starred: p.starred.includes(id) ? p.starred.filter((x) => x !== id) : [...p.starred, id] }); },
+};
+
 // ---------------------------------------------------------------- Services
 function services() {
   main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps and Pinterest. Listed in <code>services.json</code>.</p></div>
@@ -653,8 +721,9 @@ function services() {
         return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icon || "book")}</span>
             <div><h4>${esc(s.name)}</h4><small>${esc(p.status === "error" ? p.error : s.desc)}</small></div><span class="live ${s.ok ? "" : p.status === "error" ? "off" : "idle"}" style="margin-left:auto"></span></div>
           <div class="ft"><span class="pill">${esc(p.board || "pinterest")}</span><span class="pill">${p.total ?? 0} images</span>
-            <span style="margin-left:auto;display:flex;gap:6px"><button class="btn glass" data-act="pinsync" ${p.syncing ? "disabled" : ""}>${p.syncing ? "Syncing…" : "Sync now"}</button>
-            <a class="btn peach" href="${esc(board)}" target="_blank">Open ${icon("ext", 14)}</a></span></div></div>`;
+            <span style="margin-left:auto;display:flex;gap:6px"><button class="btn glass" data-act="pinsync" ${p.syncing ? "disabled" : ""}>${p.syncing ? "Syncing…" : "Sync"}</button>
+            <a class="btn glass" href="${esc(board)}" target="_blank" aria-label="Open the board on Pinterest" data-tip="Open on Pinterest">${icon("ext", 14)}</a>
+            <a class="btn peach" href="#/images">Manage images</a></span></div></div>`;
       }
       return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icon || "services")}</span>
           <div><h4>${esc(s.name)}</h4><small>${esc(s.desc)}</small></div><span class="live ${s.ok ? "" : "off"}" style="margin-left:auto"></span></div>
@@ -680,7 +749,7 @@ function service(id) {
 }
 
 // ---------------------------------------------------------------- routes and events
-const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
+const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], images: [imagesPage, "Images"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
 function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
 function render() {
   if (!D) return;
@@ -695,7 +764,7 @@ function render() {
 }
 
 const ACTIONS = {
-  ...CAL_ACTIONS,
+  ...CAL_ACTIONS, ...IMG_ACTIONS,
   prev: () => move(-1), next: () => move(1), go: (el) => { idx = Number(el.dataset.i); place(); },
   filter: (el) => { filter = el.dataset.k; notes(); },
   show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
@@ -714,7 +783,7 @@ const ACTIONS = {
       const p = await api("/api/pinterest/sync", {});
       toast(p.status === "ok" ? `${p.images.length} images in the cache` : p.error || "Sync failed");
     } catch (e) { toast(e.message); }
-    [D, S] = await Promise.all([api("/api"), api("/api/system")]); services(); topBar();
+    [D, S] = await Promise.all([api("/api"), api("/api/system")]); render();
   },
   reload: () => { const f = $("#svcf"); f.src = f.src; },
   capture: () => { $("#capture-day").textContent = D.today; $("#capture").showModal(); $("#capture-text").focus(); },
