@@ -149,6 +149,21 @@ Each agent can have its own picture: Settings → *Agent icons* (PNG, JPEG, WebP
 Tasks are kept in memory (the last 50) and can be stopped from their page.
 The Morning and Inbox routines show up when the vault has an `AGENTS.md` with a Routines section.
 
+### Voice memos
+
+Share a recording from the phone and it becomes a note in `1 Inbox/` (`Voice memo - <name>.md`), which is then
+the prompt for an agent: it files the memo following your `AGENTS.md`. Transcription is yours to pick: set
+`TRANSCRIBE` in `.env` to a command that reads audio on stdin and prints the text (run through `sh`; a non-zero
+exit is a failure and its last stderr line the reason), e.g. a small script that saves stdin to a temp file and
+runs whisper on it. Nothing leaves the machine unless that command sends it.
+
+`POST /api/voice` with JSON `{"audio": "<base64>", "name": "Walk.m4a"}` (plus `agent`, `model`, `effort`;
+the agent defaults to `agy`) answers at once; the run shows up in Tasks. A failed transcription lands as a
+capture in today's note; a failed agent leaves the note in the inbox. On iOS, a Shortcut shown in the share sheet
+does it in two actions: *Encode with Base64* the input (line breaks: none), then *Get Contents of URL* with method
+POST, header `Content-Type: application/json` and a JSON body with `audio` and `name`, at the Tailscale address
+below.
+
 ### Phone access (Tailscale)
 
 The server only listens on 127.0.0.1. With [Tailscale](https://tailscale.com) installed, it also

@@ -30,11 +30,19 @@ const LAYOUTS = {
     daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md",
     keys: { type: "type", review: "review_on", interval: "interval" }, types: {} as Record<string, string>,
     routines: { morning: "Follow the morning routine in the Routines section of AGENTS.md.", inbox: "Follow the inbox routine in the Routines section of AGENTS.md." },
+    memoTitle: "Voice memo",
+    memo: (title: string, file: string, text: string) => `---\ntags: [voice-memo]\n---\n\n# ${title}\n\n> [!abstract]\n> Automatic transcript of "${file}", not processed yet.\n\n${text}\n`,
+    voice: (path: string) => `Process ${path}: the automatic transcript of a voice memo. File it following AGENTS.md, as anything I hand you to note: fix obvious recognition errors, never add what wasn't said.`,
+    voiceFailed: (name: string, err: string) => `Voice memo "${name}" was not noted: ${err}`,
   },
   pt: {
     daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
     keys: { type: "tipo", review: "revisar_em", interval: "intervalo" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
+    memoTitle: "Memo de voz",
+    memo: (title: string, file: string, text: string) => `---\ntags: [memo-de-voz]\n---\n\n# ${title}\n\n> [!abstract] Em uma frase\n> Transcrição automática de "${file}", ainda não processada.\n\n${text}\n`,
+    voice: (path: string) => `Processe ${path}: é a transcrição automática de um memo de voz. Siga a rotina inbox do AGENTS.md só para este arquivo: corrija erros óbvios de reconhecimento, nunca acrescente o que não foi dito.`,
+    voiceFailed: (name: string, err: string) => `Memo de voz "${name}" não foi anotado: ${err}`,
   },
 };
 let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
@@ -399,7 +407,23 @@ async function open(b: any) {
   return openIn(a, String(b.via), existsSync(cwd) ? cwd : ROOT, b.key.slice(2));
 }
 const str = (x: unknown) => (typeof x === "string" ? x : undefined);
-const started = (t: ReturnType<typeof runTask>) => (typeof t === "string" ? new Response(t, { status: 400 }) : json({ id: t.id }));
+
+// Voice memos: the phone posts the audio as base64 JSON (so the POST guard holds). TRANSCRIBE, a command that reads
+// audio on stdin and prints the text, turns it into a note in the inbox, and that note is an agent's prompt.
+// Runs in the background: the note outlives a failed agent, a failed transcription lands as a capture in today's note.
+async function voice(b: any, cmd: string) {
+  const file = basename(str(b.name) || "memo.m4a"), title = `${L.memoTitle} - ${file.replace(/\.[^.]*$/, "").replace(/[\\/:*?"<>|#^[\]]/g, "")}`;
+  try {
+    const p = Bun.spawn(["sh", "-c", cmd], { cwd: import.meta.dir, stdin: Buffer.from(b.audio, "base64"), stdout: "pipe", stderr: "pipe", timeout: 30 * 60_000 });
+    const [text, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    if ((await p.exited) !== 0 || !text.trim()) throw new Error(clip(err.trim().split("\n").at(-1) || "empty transcript", 200));
+    const path = `1 Inbox/${title}.md`; // the same memo shared twice lands on the same note
+    await Bun.write(`${ROOT}/${path}`, L.memo(title, file, text.trim()));
+    const t = runTask(ROOT, import.meta.dir, str(b.agent) || "agy", L.voice(path), { model: str(b.model), effort: str(b.effort) });
+    if (typeof t === "string") throw new Error(`${t} [[${title}]]`);
+  } catch (e: any) { await capture(L.voiceFailed(file, String(e?.message ?? e))); }
+}
+const started =(t: ReturnType<typeof runTask>) => (typeof t === "string" ? new Response(t, { status: 400 }) : json({ id: t.id }));
 
 const validUrl = (u: unknown) => { try { const p = new URL(String(u)); return p.protocol === "http:" || p.protocol === "https:"; } catch { return false; } };
 const validAgent = (a: any) =>
@@ -497,6 +521,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/avatar") { const r = await saveAvatar(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/settings") { const r = saveSettings(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
+    if (p === "/api/voice") return !process.env.TRANSCRIBE ? new Response("set TRANSCRIBE in .env", { status: 400 }) : typeof b.audio === "string" && b.audio ? (voice(b, process.env.TRANSCRIBE), json({ ok: true })) : new Response("missing audio", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     if (p === "/api/calendar" || p === "/api/calendar/delete") {

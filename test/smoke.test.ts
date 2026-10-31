@@ -10,7 +10,7 @@ const ROOT = mkdtempSync(`${tmpdir()}/overlook-`);
 const VAULT = `${ROOT}/example-vault`;
 const PORT = 4799;
 const BASE = `http://127.0.0.1:${PORT}`;
-const ENV = { ...process.env, VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key" };
+const ENV = { ...process.env, VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
 const FAKE = "http://127.0.0.1:4798";
 const TODAY = new Date().toLocaleDateString("sv");
 let server: ReturnType<typeof Bun.spawn>;
@@ -138,6 +138,21 @@ async function finished(id: string) {
   throw new Error(`task ${id} did not finish`);
 }
 const run = async (agent: string, prompt = "go", extra = {}) => (await (await post("/api/run", { agent, prompt, ...extra })).json()).id;
+
+test("a voice memo becomes an inbox note that an agent is told to file; a failure lands in today's note", async () => {
+  expect((await post("/api/voice", { name: "x.m4a" })).status).toBe(400);
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  expect((await post("/api/voice", { audio: b64("the phone"), name: "Walk: 3.m4a", agent: "echo" })).status).toBe(200);
+  await post("/api/voice", { audio: b64("bad"), name: "Bad.m4a", agent: "echo" });
+  let t: any;
+  for (let i = 0; i < 50 && !t; i++) { await Bun.sleep(100); t = (await (await fetch(`${BASE}/api/system`)).json()).tasks.find((x: any) => x.prompt.startsWith("Process 1 Inbox/Voice memo - Walk 3.md")); }
+  expect(t?.agent).toBe("echo");
+  const note = readFileSync(`${VAULT}/1 Inbox/Voice memo - Walk 3.md`, "utf8");
+  expect(note).toContain("# Voice memo - Walk 3");
+  expect(note).toContain("hello from the phone");
+  await finished(t.id);
+  expect(readFileSync(`${VAULT}/2 Daily/${TODAY}.md`, "utf8")).toContain('Voice memo "Bad.m4a" was not noted: out of memory');
+});
 
 test("agents.json drives the runner list", async () => {
   const s = await (await fetch(`${BASE}/api/system`)).json();
