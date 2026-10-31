@@ -444,7 +444,7 @@ let PALETTE = [];
 const areaColor = (a) => PALETTE[hash(a) % PALETTE.length];
 let graphStop = null;
 function graph() {
-  main.innerHTML = `<div class="ph"><h1>Graph</h1><p>Click opens the note. Drag to move.</p></div>
+  main.innerHTML = `<div class="ph"><h1>Graph</h1><p>Click opens the note. Drag to move, scroll to zoom.</p></div>
     <section class="graph glass"><canvas id="cv"></canvas><div class="legend" id="leg"></div></section>`;
   const cv = $("#cv"), ctx = cv.getContext("2d"), dpr = devicePixelRatio || 1;
   const areas = [...new Set(D.notes.map((n) => n.area).filter(Boolean))].sort();
@@ -457,11 +457,11 @@ function graph() {
   for (const n of D.notes) for (const l of new Set(n.links)) { const a = byId.get(nameOf(n.path)), b = byId.get(l); if (a && b && a !== b) edges.push([a, b]); }
   const deg = new Map();
   for (const [a, b] of edges) { deg.set(a, (deg.get(a) || 0) + 1); deg.set(b, (deg.get(b) || 0) + 1); }
-  let W, H;
-  const size = () => { W = cv.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
+  let W, H, panX = 0, panY = 0, zoom = 1;
+  const size = () => { W = cv.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; };
   size();
   nodes.forEach((n, i) => { const a = i * 2.4; n.x = W / 2 + Math.cos(a) * (60 + i * 6); n.y = H / 2 + Math.sin(a) * (60 + i * 6); n.vx = n.vy = 0; n.r = 4 + Math.sqrt(deg.get(n) || 0) * 2.5; });
-  let hover = null, drag = null, heat = 1;
+  let hover = null, drag = null, pan = null, down = null, heat = 1;
   // ponytail: O(n²) repulsion; fine up to ~500 notes, quadtree if the vault grows.
   function step() {
     for (const a of nodes) for (const b of nodes) {
@@ -481,11 +481,13 @@ function graph() {
     heat = Math.max(0.05, heat * 0.99);
   }
   function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * panX, dpr * panY);
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
     for (const [a, b] of edges) {
       ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .7) : alpha(ink, .1);
-      ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.lineWidth = 1 / zoom; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     for (const n of nodes) {
       ctx.globalAlpha = near && !near.has(n) && n !== hover ? 0.25 : 1;
@@ -504,11 +506,30 @@ function graph() {
   const wake = () => { if (idle) { idle = false; requestAnimationFrame(loop); } };
   loop();
   graphStop = () => { alive = false; };
-  const find = (e) => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; return nodes.find((n) => Math.hypot(n.x - x, n.y - y) < n.r + 4); };
+  const world = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left - panX) / zoom, (e.clientY - r.top - panY) / zoom]; };
+  const find = (e) => { const [x, y] = world(e); return nodes.find((n) => Math.hypot(n.x - x, n.y - y) < n.r + 4 / zoom); };
   let moved = false;
-  cv.onpointermove = (e) => { wake(); if (drag) { const r = cv.getBoundingClientRect(); drag.x = e.clientX - r.left; drag.y = e.clientY - r.top; moved = true; heat = Math.max(heat, 0.3); } else { hover = find(e); cv.style.cursor = hover ? "pointer" : "grab"; } };
-  cv.onpointerdown = (e) => { drag = find(e); moved = false; };
-  cv.onpointerup = () => { if (drag && !moved) location.hash = drag.ghost ? `#/w/${encodeURIComponent(drag.id)}` : noteHref(drag.p); drag = null; };
+  cv.onpointermove = (e) => {
+    if (drag) { [drag.x, drag.y] = world(e); if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 3) moved = true; heat = Math.max(heat, 0.3); wake(); }
+    else if (pan) { panX = e.clientX - pan[0]; panY = e.clientY - pan[1]; draw(); }
+    else { wake(); hover = find(e); cv.style.cursor = hover ? "pointer" : "grab"; }
+  };
+  cv.onpointerdown = (e) => {
+    cv.setPointerCapture(e.pointerId);
+    down = [e.clientX, e.clientY]; drag = find(e); moved = false;
+    if (!drag) { pan = [e.clientX - panX, e.clientY - panY]; cv.style.cursor = "grabbing"; }
+  };
+  cv.onpointerup = cv.onpointercancel = () => {
+    if (drag && !moved) location.hash = drag.ghost ? `#/w/${encodeURIComponent(drag.id)}` : noteHref(drag.p);
+    drag = pan = null; cv.style.cursor = hover ? "pointer" : "grab";
+  };
+  cv.onwheel = (e) => {
+    e.preventDefault();
+    const r = cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+    const k = Math.min(4, Math.max(0.25, zoom * Math.exp(-e.deltaY * 0.0015)));
+    panX = sx - (sx - panX) * (k / zoom); panY = sy - (sy - panY) * (k / zoom); zoom = k;
+    draw();
+  };
   $("#leg").innerHTML = areas.map((k) => `<span><i style="background:${areaColor(k)}"></i>${esc(k)}</span>`).join("") + '<span><i style="background:rgba(255,255,255,.25)"></i>gap</span>';
   ambient(art("graph"));
 }

@@ -97,6 +97,7 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appJs).not.toContain("refreshes every 3 s");
   expect(appJs).not.toContain("pid ${a.pid}");
   expect(appJs).toContain("e.ctrlKey || e.metaKey || e.altKey");
+  expect(appJs).toContain("cv.onwheel =");
   expect(appJs).toContain('document.body.classList.toggle("dock-float", dockMode === "float")');
   expect(appJs).toContain('document.body.classList.toggle("home", !pg)');
   const appCss = readFileSync(`${ROOT}/app.css`, "utf8");
