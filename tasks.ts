@@ -1,9 +1,9 @@
 // Agents Overlook can put to work on the vault. CLI agents (claude, agy, codex...) are spawned in the vault folder;
 // API agents (Anthropic, or any OpenAI-compatible endpoint) work through four tools jailed to the vault's notes.
 // Tasks live in memory. ponytail: lost on restart; persist them if the history starts to matter.
-import { resolve, dirname, relative, isAbsolute, sep } from "node:path";
-import { realpathSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { resolve, dirname, relative, isAbsolute, sep, join } from "node:path";
+import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
 
 // models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults).
 // A model is an id or { id, label, efforts } when it has a display name or its own effort levels;
@@ -15,7 +15,7 @@ export type Agent = {
 };
 type Model = { id: string; label?: string; efforts?: string[] };
 type Event = { t: "you" | "text" | "tool" | "result" | "error"; txt: string; name?: string; at: string };
-type Task = { id: string; agent: string; model: string; effort: string; session?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
+type Task = { id: string; agent: string; model: string; effort: string; session?: string; cwd: string; role?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
 
 // Without agents.json: the CLIs Overlook always knew about. A CLI shows up as runnable only when it is on the PATH.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -25,7 +25,7 @@ const DEFAULTS: Agent[] = [
     run: ["claude", "-p", "{prompt}", "--session-id", "{session}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
     open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] } },
   { id: "agy", name: "Antigravity", process: "agy", efforts: EFFORTS, effort: "high",
-    run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "auto", "--print-timeout", "10m"],
+    run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "accept-edits", "--output-format", "stream-json", "--print-timeout", "10m"],
     open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] } },
   { id: "codex", name: "Codex", process: "codex", run: ["codex", "exec", "{prompt}"] },
   { id: "gemini", name: "Gemini", process: "gemini", run: ["gemini", "-p", "{prompt}"] },
@@ -62,9 +62,46 @@ export const getTask = (id: string) => { const t = tasks.get(id); if (!t) return
 export const stopTask = (id: string) => { const t = tasks.get(id); if (!t?.stop || t.end) return false; t.stop(); return true; };
 export const routineRunning = (name: string) => [...tasks.values()].some((t) => t.routine === name && !t.end);
 
-type RunOpts = { model?: string; effort?: string; routine?: string };
+export type RunOpts = { model?: string; effort?: string; routine?: string; cwd?: string; session?: string; role?: string };
+const SESSION_ID = /^[0-9a-f-]{8,64}$/i;
+const SYS_DIRS = ["/etc", "/proc", "/sys", "/boot", "/dev", "/root", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/var"];
+const shortDir = (p: string) => { const h = homedir(); return p === h ? "~" : p.startsWith(h + sep) ? "~/" + p.slice(h.length + 1) : p; };
+export function validCwd(root: string, raw?: string) {
+  if (!raw?.trim()) return root;
+  const abs = resolve(root, raw.trim().replace(/^~(?=$|\/)/, homedir()));
+  try {
+    if (!existsSync(abs) || !statSync(abs).isDirectory()) return null;
+    const real = realpathSync(abs), rRoot = realpathSync(root), rHome = realpathSync(homedir());
+    if (real === rRoot || real.startsWith(rRoot + sep) || real === rHome || real.startsWith(rHome + sep)) return abs;
+    if (SYS_DIRS.some((s) => real === s || real.startsWith(s + sep))) return null;
+    return abs;
+  } catch { return null; }
+}
+export function listDirs(root: string, raw?: string, hidden = false) {
+  const h = homedir();
+  const dir = raw?.trim() ? validCwd(root, raw) : (validCwd(root, `${h}/dev`) ?? root);
+  if (!dir) return null;
+  let dirs: { name: string; path: string; short: string; git: boolean }[] = [];
+  try {
+    dirs = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && (hidden || !d.name.startsWith(".")) && !SYS_DIRS.includes(join(dir, d.name)))
+      .map((d) => {
+        const p = join(dir, d.name);
+        return { name: d.name, path: p, short: shortDir(p), git: existsSync(join(p, ".git")) };
+      })
+      .sort((a, b) => Number(b.git) - Number(a.git) || a.name.localeCompare(b.name))
+      .slice(0, 250);
+  } catch {}
+  const par = dirname(dir), parent = par !== dir && validCwd(root, par) ? par : null;
+  const roots = [
+    ["Vault", root], ["~", h], ["~/dev", `${h}/dev`], ["~/Documents", `${h}/Documents`],
+    ["~/Downloads", `${h}/Downloads`], ["~/Desktop", `${h}/Desktop`],
+    ["/mnt", "/mnt"], [`/run/media/${userInfo().username}`, `/run/media/${userInfo().username}`], ["/", "/"],
+  ].filter(([, p]) => validCwd(root, p)).map(([label, p]) => ({ label, path: p, short: shortDir(p) }));
+  return { path: dir, short: shortDir(dir), parent, roots, dirs };
+}
 // The agent and the model/effort it will run with, or why it can't run.
-function resolveRun(dir: string, agentId: string, opts: RunOpts) {
+function resolveRun(root: string, dir: string, agentId: string, opts: RunOpts) {
   const a = loadAgents(dir).find((x) => x.id === agentId);
   if (!a) return "unknown agent";
   if (!ready(a)) return a.run ? `${a.run[0]} is not on the PATH` : `${a.name} needs ${a.api === "openai" && !models(a).length ? "a model in agents.json" : `${a.key ?? "a key"} set in .env`}`;
@@ -73,41 +110,94 @@ function resolveRun(dir: string, agentId: string, opts: RunOpts) {
   if (opts.model && !m) return `${a.name} has no model "${opts.model}"`;
   const es = m?.efforts ?? efforts(a);
   if (opts.effort && !es.includes(opts.effort)) return `${a.name} has no effort "${opts.effort}"${m ? ` for ${m.label}` : ""}`;
-  return { a, model: m?.id ?? "", effort: opts.effort || (es.includes(defaultEffort(a)) ? defaultEffort(a) : es[0] ?? "") };
+  const cwd = validCwd(root, opts.cwd);
+  if (!cwd) return `invalid cwd: ${opts.cwd}`;
+  if (opts.session && !SESSION_ID.test(opts.session)) return "invalid session";
+  const role = opts.role?.trim().slice(0, 2000) || undefined;
+  return { a, model: m?.id ?? "", effort: opts.effort || (es.includes(defaultEffort(a)) ? defaultEffort(a) : es[0] ?? ""), cwd, role };
 }
 
-export function runTask(root: string, dir: string, agentId: string, prompt: string, opts: RunOpts = {}) {
-  const r = resolveRun(dir, agentId, opts);
-  if (typeof r === "string") return r;
-  const { a, model, effort } = r;
-  const session = a.run?.some((x) => x.includes("{session}")) ? crypto.randomUUID() : undefined;
-  const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, prompt, routine: opts.routine, start: now(), events: [] };
-  tasks.set(task.id, task);
-  if (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
+function execTask(a: Agent, task: Task, prompt: string, resumed: boolean) {
   log(task, { t: "you", txt: prompt });
+  task.end = undefined; task.ok = undefined; task.stop = undefined;
   const ctrl = new AbortController();
   const timer = setTimeout(() => { log(task, { t: "error", txt: "timed out after 30 min" }); task.stop?.(); }, TIMEOUT);
-  const work = a.run ? cli(a, root, task, ctrl) : a.api === "anthropic" ? anthropic(a, root, task, ctrl.signal) : openai(a, root, task, ctrl.signal);
+  const work = a.run ? cli(a, task.cwd, task, prompt, resumed, ctrl) : a.api === "anthropic" ? anthropic(a, task.cwd, task, prompt, ctrl.signal) : openai(a, task.cwd, task, prompt, ctrl.signal);
   task.stop ??= () => ctrl.abort();
   work.then((ok) => (task.ok = ok), (e) => { task.ok = false; log(task, { t: "error", txt: ctrl.signal.aborted ? "stopped" : String(e?.message ?? e) }); })
     .finally(() => { task.end = now(); clearTimeout(timer); });
+}
+
+export function runTask(root: string, dir: string, agentId: string, prompt: string, opts: RunOpts = {}) {
+  const r = resolveRun(root, dir, agentId, opts);
+  if (typeof r === "string") return r;
+  const { a, model, effort, cwd, role } = r;
+  const session = opts.session || (a.run?.some((x) => x.includes("{session}")) ? crypto.randomUUID() : undefined);
+  const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, cwd, role, prompt, routine: opts.routine, start: now(), events: [] };
+  tasks.set(task.id, task);
+  if (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
+  execTask(a, task, prompt, !!opts.session);
+  return task;
+}
+
+export function continueTask(root: string, dir: string, id: string, prompt: string) {
+  const task = tasks.get(id);
+  if (!task) return "task not found";
+  if (!task.end) return "task is still running";
+  const r = resolveRun(root, dir, task.agent, { model: task.model || undefined, effort: task.effort || undefined, cwd: task.cwd });
+  if (typeof r === "string") return r;
+  execTask(r.a, task, prompt, !!task.session);
   return task;
 }
 
 // ---------------------------------------------------------------- CLI agents
-async function cli(a: Agent, root: string, task: Task, ctrl: AbortController) {
+function onCliLine(task: Task, l: string) {
+  if (l.startsWith("{")) {
+    try {
+      const j = JSON.parse(l);
+      if (typeof j?.event === "string") {
+        if (j.event === "init" && typeof j.conversation_id === "string") task.session = j.conversation_id;
+        else if (j.event === "step_update" && j.step_update) {
+          const s = j.step_update;
+          if (s.step_type === "tool" && s.state === "ACTIVE") {
+            const name = String(s.tool_name || s.tool_info?.name || "tool");
+            const p = s.tool_info?.parameters ?? {};
+            const det = p.path ?? p.file_path ?? p.CommandLine ?? p.command ?? p.query ?? p.pattern ?? p.url ?? (Object.keys(p).length ? JSON.stringify(p) : "");
+            log(task, { t: "tool", name, txt: clip(String(det), 300) });
+          } else if (s.step_type === "tool" && s.state === "DONE" && s.tool_info?.output != null && String(s.tool_info.output).trim()) {
+            log(task, { t: "result", txt: clip(String(s.tool_info.output).trim(), 400) });
+          } else if (s.step_type === "agent_response" && typeof s.text_delta === "string" && s.text_delta) {
+            const last = task.events.at(-1);
+            if (last?.t === "text") last.txt = clip(last.txt + s.text_delta, MESSAGE);
+            else log(task, { t: "text", txt: clip(s.text_delta, MESSAGE) });
+          }
+        } else if (j.event === "error" && j.error) {
+          log(task, { t: "error", txt: clip(String(j.error?.message ?? j.error), 400) });
+        }
+        return;
+      }
+    } catch {}
+  }
+  log(task, { t: "text", txt: clip(l, MESSAGE) });
+}
+
+async function cli(a: Agent, cwd: string, task: Task, prompt: string, resumed: boolean, ctrl: AbortController) {
   const [cmd, ...rest] = a.run!;
+  const fullPrompt = task.role && !resumed ? `[Role: ${task.role}]\n\n${prompt}` : prompt;
   // An empty {model}/{effort} drops the token and the flag before it, so the CLI falls back to its own default.
   const args: string[] = [];
   for (const x of rest) {
-    const v = x.replaceAll("{prompt}", task.prompt).replaceAll("{model}", task.model).replaceAll("{effort}", task.effort).replaceAll("{session}", task.session ?? "");
+    if (resumed && x === "--session-id") { args.push("--resume"); continue; }
+    const v = x.replaceAll("{prompt}", fullPrompt).replaceAll("{model}", task.model).replaceAll("{effort}", task.effort).replaceAll("{session}", task.session ?? "").replaceAll("{cwd}", cwd);
     if (/\{(model|effort)\}/.test(x) && !(x.includes("{model}") ? task.model : task.effort)) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
+    if (x.includes("{session}") && !task.session) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
     args.push(v);
   }
-  const p = Bun.spawn([bin(cmd)!, ...args], { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  if (resumed && task.session && (a.process === "agy" || cmd === "agy") && !args.includes("--conversation")) args.push("--conversation", task.session);
+  const p = Bun.spawn([bin(cmd)!, ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   task.stop = () => { ctrl.abort(); p.kill(); };
   await Promise.all([
-    lines(p.stdout, (l) => log(task, { t: "text", txt: clip(l, MESSAGE) })),
+    lines(p.stdout, (l) => onCliLine(task, l)),
     lines(p.stderr, (l) => log(task, { t: "result", txt: clip(l, 400) })),
   ]);
   const code = await p.exited;
@@ -137,7 +227,7 @@ export function addScheduled(root: string, dir: string, e: Partial<Scheduled>) {
   if (!REPEATS.has(String(e.repeat))) return "repeat must be once, daily, weekdays or weekly";
   const prompt = String(e.prompt ?? "").trim().slice(0, 8000);
   if (!prompt) return "missing prompt";
-  const r = resolveRun(dir, String(e.agent), { model: e.model || undefined, effort: e.effort || undefined });
+  const r = resolveRun(root, dir, String(e.agent), { model: e.model || undefined, effort: e.effort || undefined });
   if (typeof r === "string") return r;
   const entry: Scheduled = { id: crypto.randomUUID().slice(0, 8), at: e.at, repeat: e.repeat as Repeat, agent: r.a.id, model: r.model, effort: r.effort, prompt };
   saveSchedule(dir, [...loadSchedule(dir), entry]);
@@ -271,26 +361,26 @@ async function tool(root: string, task: Task, name: string, input: any) {
   }
 }
 
-function system(root: string) {
+function system(root: string, role?: string) {
   const f = `${root}/AGENTS.md`;
   const rules = existsSync(f) ? `\n\nThe vault's own instructions (AGENTS.md):\n\n${readFileSync(f, "utf8")}` : "";
-  return "You are an agent working inside the user's Obsidian vault through four tools: list_notes, search_notes, read_note and write_note. "
+  return (role ? `Role: ${role}\n\n` : "") + "You are an agent working inside the user's Obsidian vault through four tools: list_notes, search_notes, read_note and write_note. "
     + "Paths are relative to the vault root, and you can only touch Markdown notes. Read a note before you replace it and keep the vault's "
     + "conventions (folders, frontmatter, links). When you are done, reply with a short summary of what you changed." + rules;
 }
 
 // ---------------------------------------------------------------- Anthropic (Claude)
-async function anthropic(a: Agent, root: string, task: Task, signal: AbortSignal) {
+async function anthropic(a: Agent, root: string, task: Task, prompt: string, signal: AbortSignal) {
   // Loaded on first use: the rest of Overlook runs without `bun install`.
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
   const client = new Anthropic({ apiKey: process.env[a.key!], ...(a.url ? { baseURL: a.url } : {}) });
   const model = task.model;
   const fallback = FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {};
   const tools = TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as any, strict: true }));
-  const messages: any[] = [{ role: "user", content: task.prompt }];
+  const messages: any[] = [{ role: "user", content: prompt }];
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const r = await client.beta.messages.create({
-      model, max_tokens: 16000, system: system(root), tools, messages,
+      model, max_tokens: 16000, system: system(root, task.role), tools, messages,
       thinking: { type: "adaptive" }, output_config: { effort: task.effort as any }, cache_control: { type: "ephemeral" }, ...fallback,
     }, { signal });
     messages.push({ role: "assistant", content: r.content }); // whole content, thinking blocks included
@@ -314,9 +404,9 @@ async function anthropic(a: Agent, root: string, task: Task, signal: AbortSignal
 }
 
 // ---------------------------------------------------------------- OpenAI-compatible (OpenAI, OpenRouter, Groq, Ollama...)
-async function openai(a: Agent, root: string, task: Task, signal: AbortSignal) {
+async function openai(a: Agent, root: string, task: Task, prompt: string, signal: AbortSignal) {
   const tools = TOOLS.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.schema } }));
-  const messages: any[] = [{ role: "system", content: system(root) }, { role: "user", content: task.prompt }];
+  const messages: any[] = [{ role: "system", content: system(root, task.role) }, { role: "user", content: prompt }];
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const r = await fetch(`${(a.url || "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`, {
       method: "POST", signal,

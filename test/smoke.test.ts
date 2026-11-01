@@ -81,6 +81,18 @@ test("review doubles the interval and writes the frontmatter", async () => {
   expect(readFileSync(`${VAULT}/3 Concepts/HTTP.md`, "utf8")).toContain(`review_on: ${r.review_on}`);
 });
 
+test("delete moves a note to .trash, never a path outside the notes", async () => {
+  writeFileSync(`${VAULT}/1 Inbox/Throwaway.md`, "# one");
+  expect((await post("/api/trash", { path: "1 Inbox/Throwaway.md" })).status).toBe(200);
+  writeFileSync(`${VAULT}/1 Inbox/Throwaway.md`, "# two");
+  await post("/api/trash", { path: "1 Inbox/Throwaway.md" });
+  expect(existsSync(`${VAULT}/1 Inbox/Throwaway.md`)).toBe(false);
+  expect(readFileSync(`${VAULT}/.trash/Throwaway.md`, "utf8")).toBe("# one");
+  expect(readFileSync(`${VAULT}/.trash/Throwaway 1.md`, "utf8")).toBe("# two");
+  expect((await post("/api/trash", { path: "../README.md" })).status).toBe(404);
+  expect((await post("/api/trash", { path: "AGENTS.md" })).status).toBe(404);
+});
+
 test("system and pinterest work with nothing configured", async () => {
   const s = await (await fetch(`${BASE}/api/system`)).json();
   expect(s.services).toEqual([]);
@@ -107,6 +119,10 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appCss).toContain("body.home main { margin-top: auto; margin-bottom: auto; padding-top: 16px; padding-bottom: 16px; }");
   expect(appCss).toContain("body.cal-float main { padding-top: 84px; }");
   expect(appCss).not.toContain("body.cal-float:has(");
+  expect(appJs).toContain('const CAL_KEY = "overlook.calendar", DOCK_KEY = "overlook.dock", UI_KEY = "overlook.ui";');
+  expect(appJs).toContain('"ui-toggle"');
+  expect(appCss).toContain('html[data-ui="minimal"] .min-home');
+  expect(readFileSync(`${ROOT}/index.html`, "utf8")).toContain('id="ui-btn"');
 });
 
 test("agent CLI commands", () => {
@@ -370,3 +386,49 @@ test("a Pinterest image whose id starts with f is still a pin, not a folder phot
   expect((await fetch(`${BASE}/pin/fa55`)).status).toBe(200);
   expect((await fetch(`${BASE}/pin/fa55?amb`)).status).toBe(200);
 });
+
+test("stream-json events, cwd jailing, role presets, task continuation, and multi-agent dispatch", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  const streamCmd = [
+    "printf '%s\\n'",
+    '\'{"event":"init","conversation_id":"11111111-2222-3333-4444-555555555555"}\'',
+    '\'{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"path":"3 Concepts/HTTP.md"}}}}\'',
+    '\'{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"tool","tool_name":"read_file","tool_info":{"output":"stateless protocol"}}}\'',
+    '\'{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"Hello "}}\'',
+    '\'{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"stream!"}}\'',
+  ].join(" ");
+  await post("/api/settings", { agents: [...init.agents, { id: "streamer", name: "Streamer", process: "agy", run: ["sh", "-c", `${streamCmd}; echo "args:$*"`, "--", "{prompt}"] }] });
+
+  const st = await finished(await run("streamer", "go"));
+  expect(st.session).toBe("11111111-2222-3333-4444-555555555555");
+  expect(st.events.map((e: any) => [e.t, e.name ?? "", e.txt])).toEqual([
+    ["you", "", "go"],
+    ["tool", "read_file", "3 Concepts/HTTP.md"],
+    ["result", "", "stateless protocol"],
+    ["text", "", "Hello stream!"],
+    ["text", "", "args:go"],
+  ]);
+
+  expect((await post("/api/task/talk", { id: st.id, text: "follow up" })).status).toBe(200);
+  const cont = await finished(st.id);
+  expect(cont.events.at(-1).txt).toBe("args:follow up --conversation 11111111-2222-3333-4444-555555555555");
+
+  expect((await post("/api/run", { agent: "echo", prompt: "hi", cwd: "/etc" })).status).toBe(400);
+  expect((await fetch(`${BASE}/api/dirs?path=%2Fetc`)).status).toBe(400);
+  const dirs = await (await fetch(`${BASE}/api/dirs?path=${encodeURIComponent(VAULT)}`)).json();
+  expect(dirs.path).toBe(VAULT);
+  expect(Array.isArray(dirs.roots) && dirs.roots.length > 0).toBe(true);
+  expect(dirs.dirs.some((d: any) => d.name === "3 Concepts")).toBe(true);
+
+  const sub = await finished(await run("echo", "check", { cwd: `${VAULT}/3 Concepts`, role: "Reviewer" }));
+  expect(sub.cwd).toBe(`${VAULT}/3 Concepts`);
+  expect(sub.role).toBe("Reviewer");
+  expect(sub.events.some((e: any) => e.txt.includes("[Role: Reviewer]"))).toBe(true);
+
+  const batch = await (await post("/api/run", { agents: ["echo", { agent: "bare", role: "Architect" }], prompt: "batch run" })).json();
+  expect(batch.ids.length).toBe(2);
+  for (const id of batch.ids) expect((await finished(id)).ok).toBe(true);
+
+  await post("/api/settings", { agents: init.agents });
+});
+
