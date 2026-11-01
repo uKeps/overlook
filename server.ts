@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -178,6 +178,17 @@ async function review(path: string, remembered: boolean) {
   return { review_on, interval };
 }
 
+// Delete = move to the vault's .trash/ (Obsidian's "local" trash), so it can be restored from there.
+async function trash(path: string) {
+  if (!(await notes()).some((n) => n.path === path)) return false; // known paths only: no ../
+  mkdirSync(`${ROOT}/.trash`, { recursive: true });
+  const name = basename(path, ".md");
+  let to = `${ROOT}/.trash/${name}.md`;
+  for (let i = 1; existsSync(to); i++) to = `${ROOT}/.trash/${name} ${i}.md`;
+  renameSync(`${ROOT}/${path}`, to);
+  return true;
+}
+
 // Note rendered for the reader. Wikilinks become internal routes; embeds become a hint.
 async function note(path: string) {
   const ns = await notes();
@@ -333,7 +344,7 @@ async function talk(key: string, text: string) {
   if (!a) return null;
   const cwd = a.cwd.replace(/^~/, homedir()) || homedir();
   if (a.name === "agy") {
-    Bun.spawn([AGY, "-p", text, "--conversation", key.slice(2), "--mode", "auto", "--print-timeout", "10m"], { cwd, stdout: "ignore", stderr: "ignore" });
+    Bun.spawn([AGY, "-p", text, "--conversation", key.slice(2), "--mode", "accept-edits", "--print-timeout", "10m"], { cwd, stdout: "ignore", stderr: "ignore" });
     return { key };
   }
   const p = Bun.spawn([CLAUDE, "--bg", "--resume", key.slice(2), text], { cwd, stdout: "pipe", stderr: "pipe" });
@@ -399,7 +410,7 @@ async function open(b: any) {
   const all = loadAgents(import.meta.dir);
   if (typeof b.task === "string") {
     const t = getTask(b.task), a = t && all.find((x) => x.id === t.agent);
-    return a ? openIn(a, String(b.via), ROOT, t!.session) : "task not found";
+    return a ? openIn(a, String(b.via), t!.cwd || ROOT, t!.session) : "task not found";
   }
   const s = typeof b.key === "string" ? await agent(b.key) : null, a = s && all.find((x) => x.process === s.name);
   if (!s || !a) return "session not found";
@@ -513,6 +524,7 @@ async function handle(req: Request, port: number) {
     if (req.headers.get("content-type") !== "application/json" || !hostOk(req.headers.get("host") ?? "", port))
       return new Response("forbidden", { status: 403 });
     const b = await req.json();
+    if (p === "/api/trash") return json(typeof b.path === "string" && (await trash(b.path)) && { ok: true });
     if (p === "/api/review") return json(typeof b.path === "string" && (await review(b.path, !!b.remembered)));
     if (p === "/api/capture" && typeof b.text === "string" && b.text.trim()) { await capture(b.text.slice(0, 2000)); return json({ ok: true }); }
     if (p === "/api/talk") return typeof b.key === "string" && typeof b.text === "string" && b.text.trim() ? json(await talk(b.key, b.text.trim().slice(0, 4000))) : new Response("missing text", { status: 400 });
@@ -520,7 +532,31 @@ async function handle(req: Request, port: number) {
     if (p === "/api/images/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/avatar") { const r = await saveAvatar(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/settings") { const r = saveSettings(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
-    if (p === "/api/run") return typeof b.agent === "string" && typeof b.prompt === "string" && b.prompt.trim() ? started(runTask(ROOT, import.meta.dir, b.agent, b.prompt.trim().slice(0, 8000), { model: str(b.model), effort: str(b.effort) })) : new Response("missing prompt", { status: 400 });
+    if (p === "/api/run") {
+      const prompt = typeof b.prompt === "string" ? b.prompt.trim().slice(0, 8000) : "";
+      if (!prompt) return new Response("missing prompt", { status: 400 });
+      if (typeof b.task === "string") return started(continueTask(ROOT, import.meta.dir, b.task, prompt));
+      if (Array.isArray(b.agents) && b.agents.length > 0 && b.agents.length <= 8) {
+        const ids: string[] = [];
+        for (const x of b.agents) {
+          const id = typeof x === "string" ? x : str(x?.agent);
+          const r = id ? runTask(ROOT, import.meta.dir, id, (str(x?.prompt)?.trim().slice(0, 8000)) || prompt, {
+            model: str(x?.model) ?? str(b.model), effort: str(x?.effort) ?? str(b.effort),
+            cwd: str(x?.cwd) ?? str(b.cwd), role: str(x?.role) ?? str(b.role),
+          }) : "missing agent";
+          if (typeof r === "string") return new Response(r, { status: 400 });
+          ids.push(r.id);
+        }
+        return json({ id: ids[0], ids });
+      }
+      return typeof b.agent === "string"
+        ? started(runTask(ROOT, import.meta.dir, b.agent, prompt, { model: str(b.model), effort: str(b.effort), cwd: str(b.cwd), session: str(b.session), role: str(b.role) }))
+        : new Response("missing prompt", { status: 400 });
+    }
+    if (p === "/api/task/talk") {
+      const txt = (str(b.prompt) ?? str(b.text) ?? "").trim().slice(0, 8000);
+      return typeof b.id === "string" && txt ? started(continueTask(ROOT, import.meta.dir, b.id, txt)) : new Response("missing text", { status: 400 });
+    }
     if (p === "/api/voice") return !process.env.TRANSCRIBE ? new Response("set TRANSCRIBE in .env", { status: 400 }) : typeof b.audio === "string" && b.audio ? (voice(b, process.env.TRANSCRIBE), json({ ok: true })) : new Response("missing audio", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
@@ -541,6 +577,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
+  if (p === "/api/dirs") { const d = listDirs(ROOT, url.searchParams.get("path") ?? undefined, url.searchParams.get("hidden") === "1"); return d ? json(d) : new Response("invalid cwd", { status: 400 }); }
   if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
   // ascii.rest (MIT), served from node_modules so the art loads from this machine, not from ascii.rest.
