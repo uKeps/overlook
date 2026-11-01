@@ -102,6 +102,8 @@ function topBar() {
     agents: ["agents", "Agents"], a: ["agents", "Agents"], t: ["agents", "Agents"], services: ["services", "Services"], images: ["services", "Images"], s: ["services", "Service"], settings: ["settings", "Settings"] }[pg] || ["home", "Home"];
   $("#dockwrap").classList.toggle("float", dockMode === "float");
   document.body.classList.toggle("dock-float", dockMode === "float");
+  const ub = $("#ui-btn");
+  if (ub) ub.innerHTML = `${uiMode === "minimal" ? "Classic" : "Minimal"} <kbd>V</kbd>`;
   $("#dock-pill").innerHTML = `${icon(here[0], 16)}<span>${here[1]}</span>${badges ? `<span class="badge">${badges}</span>` : ""}`;
   const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) || (pg === "images" && id === "services") ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
@@ -110,6 +112,17 @@ function topBar() {
     (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
     `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>` +
     `<button data-act="dock-mode" data-tip="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}" aria-label="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}">${icon(dockMode === "float" ? "pin" : "fold", 18)}</button>`;
+}
+
+const UI_KEY = "overlook.ui";
+let uiMode = (() => { try { return localStorage.getItem(UI_KEY) === "minimal" ? "minimal" : "classic"; } catch { return "classic"; } })();
+function setUi(v) {
+  uiMode = v === "minimal" ? "minimal" : "classic";
+  document.documentElement.dataset.ui = uiMode;
+  try { localStorage.setItem(UI_KEY, uiMode); } catch {}
+  topBar();
+  const { pg } = route();
+  if (!pg) home();
 }
 
 // ---------------------------------------------------------------- Calendar: the week strip at the top, or a floating pill
@@ -281,6 +294,25 @@ const scene = (s, i) => s.piece || SCENES[(hash(D.today) + i) % SCENES.length];
 function home() {
   SG = suggestions();
   idx = Math.min(idx, SG.length - 1);
+  if (uiMode === "minimal") {
+    main.innerHTML = `<section class="min-home">
+        <div class="min-queue">
+          <div class="min-qhead"><span>Today's workbench</span><small>${SG.length} ${SG.length === 1 ? "item" : "items"} · ↑↓ or click to preview</small></div>
+          <div class="min-rows">${SG.map((s, i) => `<div class="min-row ${i === idx ? "on" : ""}" data-i="${i}">
+            <button type="button" class="min-sel" data-act="go" data-i="${i}">
+              <span class="min-idx">${String(i + 1).padStart(2, "0")}</span>
+              <span class="min-txt"><b>${emLinks(s.raw || s.title)}</b><small>${esc(s.sub)}</small></span>
+              <span class="min-cat">${icon(s.ic, 13)} ${esc(s.cat)}</span>
+            </button>
+            <a class="min-go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 13)}</a>
+          </div>`).join("")}</div>
+        </div>
+        <aside class="min-stage glass" id="min-stage"></aside>
+      </section>
+      <section class="tiles" id="tiles"></section>`;
+    place(); tiles();
+    return;
+  }
   const card = (s, i) => {
     const p = pinFor(i), ascii = asciiCards();
     return `<article class="card ${ascii ? "ascii" : ""}" data-i="${i}" ${ascii ? "" : `style="background-image:url('${art(i)}?amb')"`}>
@@ -305,6 +337,33 @@ function home() {
   place(); tiles();
 }
 function place() {
+  if (uiMode === "minimal") {
+    document.querySelectorAll(".min-row").forEach((r, i) => r.classList.toggle("on", i === idx));
+    const st = $("#min-stage");
+    if (st && SG[idx]) {
+      const i = idx, s = SG[i], p = pinFor(i), ascii = asciiCards() || !D.pins?.length;
+      st.innerHTML = `<div class="min-art ${ascii ? "card-ascii" : ""}">
+          ${ascii ? `<ascii-art piece="${scene(s, i)}"></ascii-art>` : `<img src="${art(i)}" alt="">`}
+          <div class="min-art-bar">
+            ${!ascii && D.pins?.length ? `<button type="button" class="min-pick" data-act="pick-open" data-i="${i}">${icon("image", 13)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}
+            <button type="button" class="min-pick" data-act="cycle-art" title="Switch card art (${cardArt})">${ascii ? "Use photo" : "Use ASCII"}</button>
+            ${!ascii && p?.link ? `<a class="min-pinlink" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
+          </div>
+        </div>
+        <div class="min-focus">
+          <div class="min-focus-top"><span class="tag">${icon(s.ic, 13)} ${esc(s.cat)}</span>
+            <span class="card-idx">${String(i + 1).padStart(2, "0")} / ${String(SG.length).padStart(2, "0")}</span></div>
+          <h2>${emLinks(s.raw || s.title)}</h2>
+          <p>${esc(s.sub)}</p>
+          ${s.meta.length ? `<div class="min-meta-list">${s.meta.map(([k, v]) => `<span class="min-meta">${esc(k)}: <b>${esc(v)}</b></span>`).join("")}</div>` : ""}
+          <div class="min-focus-foot">
+            <a class="btn peach" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 14)}</a>
+            <span class="min-nav"><button type="button" data-act="prev" aria-label="Previous">${icon("l", 14)}</button><button type="button" data-act="next" aria-label="Next">${icon("r", 14)}</button></span>
+          </div>
+        </div>`;
+    }
+    return;
+  }
   document.querySelectorAll(".card").forEach((c) => {
     const n = SG.length, d = (Number(c.dataset.i) - idx + n) % n;
     const o = n > 2 && d > n / 2 ? d - n : d, a = Math.abs(o); // circular: neighbor on both sides
@@ -847,6 +906,9 @@ async function settingsPage() {
   main.innerHTML = `<div class="ph"><h1>Settings</h1><p>One place for layout, vault, card images, agents and services.</p></div>
     <h3>Appearance</h3>
     <div class="img-sources">
+      <div class="img-set glass"><b>Interface</b><small>Classic editorial layout or Minimal matte dashboard (V).</small>
+        <div class="seg" role="radiogroup">${[["classic", "Classic"], ["minimal", "Minimal"]].map(([k, l]) =>
+          `<button type="button" role="radio" aria-checked="${uiMode === k}" class="${uiMode === k ? "on" : ""}" data-act="set-ui" data-v="${k}">${l}</button>`).join("")}</div></div>
       <div class="img-set glass"><b>Calendar</b><small>Week strip under the top bar, or a pill that opens on hover.</small>${seg("set-cal", calMode)}</div>
       <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill.</small>${seg("set-dock", dockMode)}</div>
       <div class="img-set glass"><b>Card art</b><small>Your images, animated ascii scenes, or images when you have them.</small>
@@ -971,6 +1033,9 @@ const ACTIONS = {
   "avatar-remove": async (el) => { await api("/api/avatar", { agent: el.dataset.id, remove: true }).catch((e) => toast(e.message)); S = await api("/api/system"); settingsPage(); },
   "set-theme": (el) => { document.documentElement.dataset.theme = el.dataset.v; try { localStorage.setItem("overlook.theme", el.dataset.v); } catch {} settingsPage(); },
   "set-art": (el) => { cardArt = el.dataset.v; try { localStorage.setItem(ART_KEY, cardArt); } catch {} settingsPage(); toast(`Card art: ${el.textContent}`); },
+  "set-ui": (el) => { setUi(el.dataset.v); toast(`Interface: ${el.textContent}`); },
+  "ui-toggle": () => { setUi(uiMode === "minimal" ? "classic" : "minimal"); toast(`Interface: ${uiMode === "minimal" ? "Minimal" : "Classic"}`); },
+  "cycle-art": () => { cardArt = asciiCards() ? "images" : "ascii"; try { localStorage.setItem(ART_KEY, cardArt); } catch {} place(); toast(`Card art: ${cardArt === "ascii" ? "ASCII" : "Images"}`); },
   stop: async (el) => { await api("/api/task/stop", { id: el.dataset.id }).catch(() => {}); toast("Stopping…"); },
   pinsync: async (el) => {
     el.disabled = true; el.textContent = "Syncing…";
@@ -1007,9 +1072,10 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
   if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }
+  if (e.key === "v") { e.preventDefault(); ACTIONS["ui-toggle"](); }
   if (e.key === "/" && pg === "notes") { e.preventDefault(); $("#search").focus(); }
-  if (!pg && e.key === "ArrowLeft") move(-1);
-  if (!pg && e.key === "ArrowRight") move(1);
+  if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
+  if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }
   if (pg === "review" && queue[pos]) {
     if (e.key === " " && !revealed) { e.preventDefault(); ACTIONS.show(); }
     if (revealed && e.key === "1") answer(false);
