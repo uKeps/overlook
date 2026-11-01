@@ -1,0 +1,69 @@
+name: Auto Rebase PRs
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-rebase-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Rebase open pull requests against main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          prs=$(gh pr list --state open --base main --json number,headRefName,headRepositoryOwner,isDraft \
+            --jq '.[] | select(.isDraft == false and .headRepositoryOwner.login == "'"$owner"'") | "\(.number) \(.headRefName)"')
+
+          if [ -z "$prs" ]; then
+            echo "No open PRs to rebase."
+            exit 0
+          fi
+
+          echo "$prs" | while read -r pr_number branch; do
+            if [[ "$branch" == dependabot/* ]]; then
+              continue
+            fi
+
+            echo "=== Processing PR #${pr_number} (${branch}) ==="
+            git fetch origin "${branch}:${branch}" || {
+              echo "Could not fetch branch ${branch}, skipping."
+              continue
+            }
+            git checkout "${branch}"
+
+            if git rebase origin/main; then
+              echo "Rebase clean for #${pr_number}. Force-pushing..."
+              git push --force-with-lease origin "${branch}" || echo "Push rejected or branch updated remotely."
+              gh pr edit "${pr_number}" --remove-label "conflict" 2>/dev/null || true
+            else
+              echo "Conflict detected on PR #${pr_number}! Aborting rebase..."
+              git rebase --abort
+              gh label create conflict --color d73a4a --description "Has merge conflicts with main" 2>/dev/null || true
+              gh pr edit "${pr_number}" --add-label "conflict" 2>/dev/null || true
+              gh pr comment "${pr_number}" --body "⚠️ Automatic rebase failed due to merge conflicts with \`main\`. Please rebase manually." 2>/dev/null || true
+            fi
+
+            git checkout main
+          done
