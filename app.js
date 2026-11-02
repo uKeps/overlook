@@ -122,6 +122,14 @@ function topBar() {
     (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
     `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>` +
     `<button class="dock-fold" data-act="dock-mode" data-tip="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}" aria-label="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}">${icon(dockMode === "float" ? "pin" : "fold", 18)}</button>`;
+  const onDock = $("#dock a.on");
+  const dock = $("#dock");
+  if (dock && onDock) {
+    try {
+      const targetLeft = onDock.offsetLeft - (dock.clientWidth - onDock.clientWidth) / 2;
+      dock.scrollTo({ left: Math.max(0, targetLeft), behavior: "smooth" });
+    } catch {}
+  }
 }
 
 // ---------------------------------------------------------------- Calendar: the week strip at the top, or a floating pill
@@ -2334,12 +2342,23 @@ const ACTIONS = {
   },
   reload: () => { const f = $("#svcf"); f.src = f.src; },
   capture: () => { $("#capture-day").textContent = D.today; $("#capture").showModal(); $("#capture-text").focus(); },
+  "capture-close": () => $("#capture").close(),
+  "capture-save": async () => {
+    const ta = $("#capture-text");
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.value = ""; $("#capture").close();
+    await api("/api/capture", { text });
+    toast("Captured in the daily note");
+    D = await api("/api"); if (!route().pg) home(); topBar();
+  },
 };
 document.addEventListener("click", (e) => {
   if (e.target.closest("a[target]")) return;
   if (cwdOpen && !e.target.closest("#cwd-pop") && !e.target.closest('[data-act="cwd-open"]')) {
     cwdOpen = false; cwdPaneKey = ""; paintCwdPop();
   }
+  if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const res = e.target.closest(".ev.result");
@@ -2351,11 +2370,18 @@ document.addEventListener("input", (e) => { if (e.target.id === "search") { quer
 $("#capture-text").addEventListener("keydown", async (e) => {
   if (e.key !== "Enter" || e.shiftKey) return;
   e.preventDefault();
-  const text = e.target.value.trim();
-  if (!text) return;
-  await api("/api/capture", { text });
-  e.target.value = ""; $("#capture").close(); toast("Captured in the daily note");
-  D = await api("/api"); if (!route().pg) home(); topBar();
+  ACTIONS["capture-save"]();
+});
+document.querySelectorAll("dialog").forEach((d) => {
+  d.addEventListener("click", (e) => {
+    if (e.target === d) {
+      const r = d.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
+    }
+  });
+});
+$("#dock-pill")?.addEventListener("click", () => {
+  $("#dockwrap")?.classList.toggle("open");
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && cwdOpen) { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); return; }
@@ -2389,10 +2415,34 @@ document.addEventListener("keydown", (e) => {
     if (revealed && e.key === "2") answer(true);
   }
 });
-// Swipe on the carousel.
-let x0 = null;
-document.addEventListener("pointerdown", (e) => { x0 = e.target.closest("#car") ? e.clientX : null; });
-document.addEventListener("pointerup", (e) => { if (x0 !== null && Math.abs(e.clientX - x0) > 60) move(e.clientX < x0 ? 1 : -1); x0 = null; });
+// Swipe on the carousel (pointer + touch).
+let x0 = null, touchStartX = null, touchStartY = null;
+document.addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "touch") return;
+  x0 = e.target.closest("#car") ? e.clientX : null;
+});
+document.addEventListener("pointerup", (e) => {
+  if (e.pointerType === "touch") return;
+  if (x0 !== null && Math.abs(e.clientX - x0) > 60) move(e.clientX < x0 ? 1 : -1);
+  x0 = null;
+});
+document.addEventListener("touchstart", (e) => {
+  if (e.target.closest("#car")) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }
+}, { passive: true });
+document.addEventListener("touchend", (e) => {
+  if (touchStartX !== null && touchStartY !== null && e.changedTouches?.length) {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    touchStartX = null; touchStartY = null;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) move(dx < 0 ? 1 : -1);
+  }
+}, { passive: true });
+document.addEventListener("touchcancel", () => {
+  touchStartX = null; touchStartY = null;
+}, { passive: true });
 document.addEventListener("dragstart", (e) => {
   const item = e.target.closest?.("[draggable][data-kind]");
   if (!item) return;

@@ -122,7 +122,19 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appJs).toContain('const CAL_KEY = "overlook.calendar", DOCK_KEY = "overlook.dock", UI_KEY = "overlook.ui";');
   expect(appJs).toContain('"ui-toggle"');
   expect(appCss).toContain('html[data-ui="minimal"] .min-home');
-  expect(readFileSync(`${ROOT}/index.html`, "utf8")).toContain('id="ui-btn"');
+  expect(appCss).toContain("@media (max-width: 640px)");
+  expect(appCss).toContain("@media (max-width: 480px)");
+  expect(appCss).toContain("--safe-bottom");
+  expect(appJs).toContain('"capture-close"');
+  expect(appJs).toContain('"capture-save"');
+  expect(appJs).toContain('e.pointerType === "touch"');
+  expect(appJs).toContain("getBoundingClientRect");
+  expect(appCss).toContain("touch-action: pan-y");
+  const html = readFileSync(`${ROOT}/index.html`, "utf8");
+  expect(html).toContain('id="ui-btn"');
+  expect(html).toContain("viewport-fit=cover");
+  expect(html).toContain('data-act="capture-close"');
+  expect(html).toContain('data-act="capture-save"');
 });
 
 test("agent CLI commands", () => {
