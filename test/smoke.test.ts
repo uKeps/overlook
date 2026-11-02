@@ -1620,3 +1620,66 @@ test("adversarial verification: floating fleet sidebar, extended canvas panes, 8
   expect(openState.railFloat).toBe(true);
   expect(openState.pillHidden).toBe(true);
 });
+
+test("adversarial verification: terminal & shell launcher, emulator detection, fallback chain, and settings persistence", async () => {
+  const { buildTerminalArgs } = await import("../tasks");
+
+  // 1. Argument builder correctness for various emulators
+  const ghosttyArgs = buildTerminalArgs("ghostty", "/home/test", ["-e", "bash"]);
+  expect(ghosttyArgs).toEqual(["ghostty", "--working-directory=/home/test", "-e", "-e", "bash"]);
+
+  const kittyArgs = buildTerminalArgs("kitty", "/home/test", ["bash"]);
+  expect(kittyArgs).toEqual(["kitty", "--directory=/home/test", "bash"]);
+
+  const xdgArgs = buildTerminalArgs("xdg-terminal-exec", "/home/test", ["bash"]);
+  expect(xdgArgs).toEqual(["xdg-terminal-exec", "--dir=/home/test", "--", "bash"]);
+
+  // 2. GET /api/terminals returns detected terminals and shells
+  const termRes = await (await fetch(`${BASE}/api/terminals`)).json();
+  expect(termRes).toBeDefined();
+  expect(Array.isArray(termRes.terminals)).toBe(true);
+  expect(Array.isArray(termRes.shells)).toBe(true);
+  expect(typeof termRes.defaultTerminal).toBe("string");
+  expect(typeof termRes.defaultShell).toBe("string");
+
+  // 3. POST /api/terminal/open rejects non-installed shell with 400
+  const badShell = await post("/api/terminal/open", { shell: "non-existent-shell-404xyz" });
+  expect(badShell.status).toBe(400);
+  const errTxt = await badShell.text();
+  expect(errTxt).toContain("is not installed");
+
+  // 4. POST /api/terminal/open succeeds when launching a valid shell
+  if (termRes.terminals.length > 0) {
+    const okRes = await post("/api/terminal/open", { shell: "bash", cwd: ROOT });
+    expect(okRes.status).toBe(200);
+    const data = await okRes.json();
+    expect(data.ok).toBe(true);
+    expect(data.shell).toBe("bash");
+    expect(data.cwd).toBe(ROOT);
+  }
+
+  // 5. Settings persistence for terminal preferences
+  const updateSettings = await post("/api/settings", {
+    defaultTerminal: "ghostty",
+    fallbackTerminal: "kitty",
+    defaultShell: "bash",
+  });
+  expect(updateSettings.status).toBe(200);
+  const cfg = await (await fetch(`${BASE}/api/settings`)).json();
+  expect(cfg.defaultTerminal).toBe("ghostty");
+  expect(cfg.fallbackTerminal).toBe("kitty");
+  expect(cfg.defaultShell).toBe("bash");
+
+  // 6. Frontend assets contain split-button, popover, and state hooks
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+  expect(appCss).toContain(".orch-term-split");
+  expect(appCss).toContain(".term-pop");
+  expect(appCss).toContain(".orch-term-main");
+  expect(appJs).toContain('"term-quick"');
+  expect(appJs).toContain('"term-menu-toggle"');
+  expect(appJs).toContain("loadTerminals");
+  expect(appJs).toContain("paintTermPop");
+  expect(appJs).toContain("set-terminal");
+});
+

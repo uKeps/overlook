@@ -913,6 +913,58 @@ body.dock-float .orch-shell { height: calc(100dvh - 98px); }
 .orch-mode-seg { height: 30px; padding: 2px; flex: none; border-radius: 8px; }
 .orch-mode-seg button { padding: 0 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; border-radius: 6px; }
 
+/* Terminal Split-Button & Launcher */
+.orch-term-split { display: inline-flex; align-items: center; position: relative; flex: none; }
+.orch-term-split .orch-term-main {
+  height: 30px; padding: 0 10px; font-size: 11.5px; gap: 5px;
+  border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 0;
+}
+.orch-term-split .orch-term-drop {
+  height: 30px; width: 22px; padding: 0; display: grid; place-items: center;
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+}
+.orch-term-split:hover .btn { border-color: rgba(255, 255, 255, .16); }
+.orch-term-split.open .orch-term-drop {
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+@media (max-width: 1024px) {
+  .orch-term-lbl { display: none; }
+  .orch-term-split .orch-term-main { padding: 0 7px; }
+}
+
+/* Terminal Dropdown Popover (#term-pop) */
+.term-pop {
+  position: fixed; z-index: 999; width: 290px;
+  border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  background: color-mix(in srgb, var(--surface) 96%, #08080a);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .58);
+}
+.term-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.term-pop-cwd { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.term-pop-tag { font: 600 10px var(--mono); color: var(--accent); text-transform: uppercase; }
+.term-pop-cwd code { font: 500 11px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-pop-sec-title { font: 600 10.5px var(--mono); color: var(--faint); text-transform: uppercase; letter-spacing: .05em; margin: 4px 0 2px; }
+.term-pop-list { display: flex; flex-direction: column; gap: 2px; }
+.term-pop-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 28px;
+  padding: 0 8px; border-radius: 6px; font-size: 12px; color: var(--muted);
+  transition: background .12s, color .12s; text-align: left;
+}
+.term-pop-row:hover { background: var(--glass-2); color: var(--ink); }
+.term-pop-row.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-weight: 500; }
+.term-badge { margin-left: auto; font: 500 9.5px var(--mono); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--faint); }
+.term-badge.default { border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
+.term-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+.term-pop-config { font: 500 11px var(--mono); color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.term-pop-config:hover { color: var(--ink); }
+.term-pop-foot .btn { height: 26px; padding: 0 10px; font-size: 11px; }
+
+html[data-ui="minimal"] .term-pop { background: var(--surface); border-color: var(--line); box-shadow: 0 12px 28px rgba(0, 0, 0, .4); }
+html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11px; }
+
+
 /* Interactive PC Folder Browser Popover (#cwd-pop) */
 .cwd-pop {
   position: fixed; z-index: 999;

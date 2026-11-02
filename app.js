@@ -44,6 +44,7 @@ const I = {
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  terminal: '<polyline points="4 17 10 12 4 7"/><path d="M12 19h8"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
@@ -670,6 +671,65 @@ try {
 function saveCanvas() {
   try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode })); } catch {}
 }
+let termList = [], shellList = [], prefTerm = "", prefShell = "", termPopOpen = false;
+try { prefTerm = localStorage.getItem("overlook.terminal") || ""; } catch {}
+try { prefShell = localStorage.getItem("overlook.shell") || ""; } catch {}
+
+async function loadTerminals() {
+  try {
+    const data = await api("/api/terminals");
+    termList = data.terminals || [];
+    shellList = data.shells || [];
+    if (!prefTerm) prefTerm = data.defaultTerminal || (termList[0]?.id || "");
+    if (!prefShell && prefShell !== "") prefShell = data.defaultShell || "";
+    const lbl = $("#orch-term-lbl");
+    if (lbl) {
+      const cur = termList.find((t) => t.id === prefTerm);
+      lbl.textContent = cur?.name || "Terminal";
+    }
+  } catch {}
+}
+
+function paintTermPop() {
+  const pop = $("#term-pop");
+  if (!pop) return;
+  if (!termPopOpen) { pop.hidden = true; $("#orch-term-split")?.classList.remove("open"); return; }
+  const split = $("#orch-term-split");
+  if (split) {
+    const r = split.getBoundingClientRect();
+    pop.style.top = `${Math.min(window.innerHeight - 340, r.bottom + 6)}px`;
+    pop.style.left = `${Math.max(10, Math.min(window.innerWidth - 305, r.left - 60))}px`;
+  }
+  const cwd = $("#run-cwd")?.value || orchCwd || "~";
+  pop.innerHTML = `<div class="term-pop-head">
+      <div class="term-pop-cwd"><span class="term-pop-tag">Folder</span><code>${esc(cwdLabel(cwd))}</code></div>
+      <button type="button" class="btn glass orch-icon-btn" data-act="term-menu-close" title="Close">${icon("x", 12)}</button>
+    </div>
+    <div class="term-pop-sec-title">Terminal Emulator</div>
+    <div class="term-pop-list">
+      ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
+        ${icon("terminal", 13)} <span>${esc(t.name)}</span>
+        ${t.id === prefTerm ? '<span class="term-badge default">active</span>' : ""}
+      </button>`).join("") || '<small class="empty">No terminal detected</small>'}
+    </div>
+    <div class="term-pop-sec-title">Shell</div>
+    <div class="term-pop-list">
+      <button type="button" class="term-pop-row ${!prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="">
+        ${icon("bolt", 13)} <span>Default Login Shell</span>
+        ${!prefShell ? '<span class="term-badge default">default</span>' : ""}
+      </button>
+      ${shellList.map((s) => `<button type="button" class="term-pop-row ${s.id === prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="${esc(s.id)}">
+        ${icon("bolt", 13)} <span>${esc(s.name)}</span>
+        ${s.id === prefShell ? '<span class="term-badge default">active</span>' : ""}
+      </button>`).join("")}
+    </div>
+    <div class="term-pop-foot">
+      <a class="term-pop-config" href="#/settings">${icon("settings", 12)} Settings</a>
+      <button type="button" class="btn peach" data-act="term-launch" title="Launch now">Launch ${icon("play", 11)}</button>
+    </div>`;
+  pop.hidden = false;
+  $("#orch-term-split")?.classList.add("open");
+}
 const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
 const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
 function updateSelectionUI() {
@@ -971,6 +1031,14 @@ function agents() {
           <div class="orch-multi" id="run-multi"></div>
         </div>
         <div class="orch-cluster orch-cluster-act">
+          <div class="orch-term-split" id="orch-term-split">
+            <button type="button" class="btn glass orch-term-main" data-act="term-quick" title="Launch terminal in active folder">
+              ${icon("terminal", 13)} <span class="orch-term-lbl" id="orch-term-lbl">${esc(termList.find((t) => t.id === prefTerm)?.name || "Terminal")}</span>
+            </button>
+            <button type="button" class="btn glass orch-term-drop" data-act="term-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Choose terminal emulator or shell">
+              ${icon("fold", 11)}
+            </button>
+          </div>
           <button type="button" class="btn glass orch-more-btn" data-act="orch-deck-toggle" title="Toggle Role presets, Model &amp; Routines">${icon("fold", 13)} Options</button>
           <button class="btn peach" id="run-submit" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
         </div>
@@ -990,6 +1058,7 @@ function agents() {
       </div>
       ${ready.length ? "" : "<small>No agent is set up yet: see README › Agents.</small>"}
       <div class="cwd-pop glass" id="cwd-pop" hidden></div>
+      <div class="term-pop glass" id="term-pop" hidden></div>
     </form>
     <div class="orch-work ${orchRail ? "" : "rail-shut"} ${orchRail && orchRailMode === "float" ? "rail-float" : ""}" id="agents-body"></div>
   </div>`;
@@ -998,6 +1067,7 @@ function agents() {
   $("#run-model").onchange = () => runOptions(true);
   runOptions();
   renderMultiChips();
+  loadTerminals();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
   orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); }, 2000);
@@ -1621,6 +1691,7 @@ async function orchPaint(force) {
         <button type="button" class="fchip" data-act="orch-new" title="Open a new Agent Tile">${icon("plus", 12)} Agent</button>
         <button type="button" class="fchip" data-act="orch-add-sticky" title="Add a Sticky Note to Canvas">${icon("spark", 12)} Sticky</button>
         <button type="button" class="fchip" data-act="orch-tab" data-k="notes" title="Open Vault Notes list">${icon("notes", 12)} Notes</button>
+        <button type="button" class="fchip" data-act="term-quick" title="Launch terminal in active folder">${icon("terminal", 12)} Terminal</button>
         <button type="button" class="fchip" data-act="orch-arrange" title="Auto-tile floating windows">Arrange</button>
         <button type="button" class="fchip" data-act="orch-fit" title="Fit all windows in view">Fit</button>
         <span class="orch-hud-sep"></span>
@@ -2198,6 +2269,29 @@ async function settingsPage() {
       </div>
       <small>Vault path and language apply immediately and persist to <code>.env</code>; port takes effect on the next restart.</small>
     </form>
+    <h3>Terminal &amp; Shell</h3>
+    <form class="task glass" id="set-terminal">
+      <div class="set-row">
+        <label>Primary emulator
+          <select class="pick" id="set-term-primary">
+            ${(cfg.terminals || []).map((t) => `<option value="${esc(t.id)}" ${t.id === cfg.defaultTerminal ? "selected" : ""}>${esc(t.name)}</option>`).join("") || '<option value="">None detected</option>'}
+          </select>
+        </label>
+        <label>Fallback emulator
+          <select class="pick" id="set-term-fallback">
+            <option value="" ${!cfg.fallbackTerminal ? "selected" : ""}>None</option>
+            ${(cfg.terminals || []).map((t) => `<option value="${esc(t.id)}" ${t.id === cfg.fallbackTerminal ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Default shell
+          <select class="pick" id="set-term-shell">
+            ${(cfg.shells || []).map((s) => `<option value="${esc(s.id)}" ${s.id === cfg.defaultShell ? "selected" : ""}>${esc(s.name)}</option>`).join("") || '<option value="bash">Bash</option>'}
+          </select>
+        </label>
+        <button class="btn peach" type="submit">Save</button>
+      </div>
+      <small>Auto-detects installed emulators (Ghostty, Kitty, etc.). Falls back to secondary emulator if primary is unavailable.</small>
+    </form>
     <h3>Card images</h3>
     <form class="task glass" id="set-images">
       <div class="set-row">
@@ -2242,6 +2336,24 @@ async function settingsPage() {
     try {
       await api("/api/settings", { vaultDir: $("#set-vault-dir").value, vaultLang: $("#set-vault-lang").value, port: Number($("#set-port").value) });
       [D, S] = await Promise.all([api("/api"), api("/api/system")]); topBar(); toast("Vault & server settings saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-terminal").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/settings", {
+        defaultTerminal: $("#set-term-primary").value,
+        fallbackTerminal: $("#set-term-fallback").value,
+        defaultShell: $("#set-term-shell").value,
+      });
+      prefTerm = $("#set-term-primary").value;
+      prefShell = $("#set-term-shell").value;
+      try {
+        localStorage.setItem("overlook.terminal", prefTerm);
+        localStorage.setItem("overlook.shell", prefShell);
+      } catch {}
+      toast("Terminal preferences saved");
+      settingsPage();
     } catch (err) { toast(err.message); }
   };
   $("#set-images").onsubmit = async (e) => {
@@ -2409,6 +2521,47 @@ const ACTIONS = {
     $("#run")?.classList.toggle("open", orchDeckOpen);
     document.querySelectorAll('[data-act="orch-deck-toggle"]').forEach((b) => b.classList.toggle("on", orchDeckOpen));
     if (!orchDeckOpen && el) el.blur();
+  },
+  "term-quick": async (el) => {
+    const cwd = el?.dataset?.cwd || $("#run-cwd")?.value || orchCwd;
+    try {
+      const res = await api("/api/terminal/open", { terminal: prefTerm || undefined, shell: prefShell || undefined, cwd });
+      toast(res.fallback ? `${res.terminal} (fallback) opened in ${cwdLabel(res.cwd)}` : `${res.terminal} opened in ${cwdLabel(res.cwd)}`);
+    } catch (e) {
+      toast(e.message);
+    }
+  },
+  "term-menu-toggle": () => {
+    termPopOpen = !termPopOpen;
+    paintTermPop();
+  },
+  "term-menu-close": () => {
+    termPopOpen = false;
+    paintTermPop();
+  },
+  "term-pick-emu": (el) => {
+    prefTerm = el.dataset.id;
+    try { localStorage.setItem("overlook.terminal", prefTerm); } catch {}
+    const cur = termList.find((t) => t.id === prefTerm);
+    const lbl = $("#orch-term-lbl");
+    if (lbl) lbl.textContent = cur?.name || "Terminal";
+    paintTermPop();
+  },
+  "term-pick-shell": (el) => {
+    prefShell = el.dataset.id;
+    try { localStorage.setItem("overlook.shell", prefShell); } catch {}
+    paintTermPop();
+  },
+  "term-launch": async () => {
+    termPopOpen = false;
+    paintTermPop();
+    const cwd = $("#run-cwd")?.value || orchCwd;
+    try {
+      const res = await api("/api/terminal/open", { terminal: prefTerm || undefined, shell: prefShell || undefined, cwd });
+      toast(res.fallback ? `${res.terminal} (fallback) opened in ${cwdLabel(res.cwd)}` : `${res.terminal} opened in ${cwdLabel(res.cwd)}`);
+    } catch (e) {
+      toast(e.message);
+    }
   },
   "orch-mode": (el) => {
     orchMode = (el.dataset.m || el.dataset.mode) === "free" ? "free" : "tile";
@@ -2723,6 +2876,9 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("a[target]")) return;
   if (cwdOpen && !e.target.closest("#cwd-pop") && !e.target.closest('[data-act="cwd-open"]')) {
     cwdOpen = false; cwdPaneKey = ""; paintCwdPop();
+  }
+  if (termPopOpen && !e.target.closest("#term-pop") && !e.target.closest("#orch-term-split")) {
+    termPopOpen = false; paintTermPop();
   }
   if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
   if (!e.target.closest("#orch-fleet-wrap")) $("#orch-fleet-wrap")?.classList.remove("open");
