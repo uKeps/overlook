@@ -997,33 +997,40 @@ function paintTermPop() {
   const curEmu = termList.find((t) => t.id === prefTerm) || { id: "ghostty", name: "Ghostty" };
   const emuName = curEmu.name;
   pop.innerHTML = `<div class="term-pop-head">
-      <div class="term-pop-cwd"><span class="term-pop-tag">Folder</span><code>${esc(cwdLabel(cwd))}</code></div>
+      <div class="term-pop-cwd"><span class="term-pop-tag">${icon("folder", 11)} CWD</span><code>${esc(cwdLabel(cwd))}</code></div>
       <button type="button" class="btn glass orch-icon-btn" data-act="term-menu-close" title="Close">${icon("x", 12)}</button>
     </div>
-    <button type="button" class="btn peach" style="width:100%;height:32px;justify-content:center;gap:6px;font-size:12px;margin:2px 0;" data-act="term-canvas-pop">
+    <button type="button" class="btn peach term-pop-cta" data-act="term-canvas-pop">
       ${icon("terminal", 14)} Open ${esc(emuName)} in Canvas
     </button>
-    <div class="term-pop-sec-title">Terminal Emulator (Ghostty / Kitty)</div>
-    <div class="term-pop-list">
-      ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
-        ${icon("ext", 13)} <span>${esc(t.name)}</span>
-        ${t.id === prefTerm ? '<span class="term-badge default">selected</span>' : ""}
-      </button>`).join("") || '<small class="empty">No external emulator detected</small>'}
+    <div class="term-pop-sec">
+      <div class="term-pop-sec-title">Terminal Emulator</div>
+      <div class="term-pop-list">
+        ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
+          <span class="term-row-ic">${icon("terminal", 13)}</span>
+          <span class="term-row-name">${esc(t.name)}</span>
+          ${t.id === prefTerm ? '<span class="term-check">✓</span>' : ""}
+        </button>`).join("") || '<small class="empty">No external emulator detected</small>'}
+      </div>
     </div>
-    <div class="term-pop-sec-title">Shell</div>
-    <div class="term-pop-list">
-      <button type="button" class="term-pop-row ${!prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="">
-        ${icon("bolt", 13)} <span>Default Login Shell</span>
-        ${!prefShell ? '<span class="term-badge default">default</span>' : ""}
-      </button>
-      ${shellList.map((s) => `<button type="button" class="term-pop-row ${s.id === prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="${esc(s.id)}">
-        ${icon("bolt", 13)} <span>${esc(s.name)}</span>
-        ${s.id === prefShell ? '<span class="term-badge default">active</span>' : ""}
-      </button>`).join("")}
+    <div class="term-pop-sec">
+      <div class="term-pop-sec-title">Shell</div>
+      <div class="term-pop-list">
+        <button type="button" class="term-pop-row ${!prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="">
+          <span class="term-row-ic">${icon("bolt", 13)}</span>
+          <span class="term-row-name">Default Login Shell</span>
+          ${!prefShell ? '<span class="term-check">✓</span>' : ""}
+        </button>
+        ${shellList.map((s) => `<button type="button" class="term-pop-row ${s.id === prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="${esc(s.id)}">
+          <span class="term-row-ic">${icon("bolt", 13)}</span>
+          <span class="term-row-name">${esc(s.name)}</span>
+          ${s.id === prefShell ? '<span class="term-check">✓</span>' : ""}
+        </button>`).join("")}
+      </div>
     </div>
     <div class="term-pop-foot">
       <a class="term-pop-config" href="#/settings">${icon("settings", 12)} Settings</a>
-      <button type="button" class="btn glass" data-act="term-launch" title="Launch ${esc(emuName)} window on Desktop">${icon("ext", 11)} Launch ${esc(emuName)} (Desktop)</button>
+      <button type="button" class="btn glass" data-act="term-launch" title="Launch ${esc(emuName)} window on Desktop">${icon("ext", 11)} Desktop Window</button>
     </div>`;
   pop.hidden = false;
   $("#orch-term-split")?.classList.add("open");
@@ -1349,10 +1356,10 @@ function agents() {
         </div>
         <div class="orch-cluster orch-cluster-act">
           <div class="orch-term-split" id="orch-term-split">
-            <button type="button" class="btn glass orch-term-main" data-act="term-canvas" title="Open terminal in Canvas">
+            <button type="button" class="orch-term-main" data-act="term-canvas" title="Open terminal in Canvas">
               ${icon("terminal", 13)} <span class="orch-term-lbl" id="orch-term-lbl">Terminal</span>
             </button>
-            <button type="button" class="btn glass orch-term-drop" data-act="term-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Choose terminal emulator or shell">
+            <button type="button" class="orch-term-drop" data-act="term-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Choose terminal emulator or shell">
               ${icon("fold", 11)}
             </button>
           </div>

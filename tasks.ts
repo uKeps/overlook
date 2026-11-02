@@ -417,6 +417,7 @@ export function detectShells(): ShellInfo[] {
       const s = l.trim();
       if (!s || s.startsWith("#")) continue;
       const bName = s.split("/").pop() || "";
+      if (["git-shell", "rbash", "systemd-home-fallback-shell", "nologin", "false", "sync"].includes(bName)) continue;
       const match = common.find((c) => c.id === bName);
       if (existsSync(s)) {
         found.set(bName, { id: bName, name: match?.name || bName, path: s });
@@ -429,7 +430,11 @@ export function detectShells(): ShellInfo[] {
       if (p) found.set(c.id, { id: c.id, name: c.name, path: p });
     }
   }
-  return [...found.values()];
+  const priority = ["bash", "zsh", "fish", "pwsh", "powershell", "sh"];
+  return [...found.values()].sort((a, b) => {
+    const ia = priority.indexOf(a.id), ib = priority.indexOf(b.id);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
 }
 
 export function buildTerminalArgs(termId: string, cwd: string, cmdArgs: string[] = []): string[] {

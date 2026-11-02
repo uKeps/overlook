@@ -884,7 +884,12 @@ body.agents .feed:not(.orch-feed) { max-height: calc(100dvh - 300px); min-height
 }
 body.dock-float .orch-shell { height: calc(100dvh - 98px); }
 
-.orch-deck { padding: 6px 10px; gap: 6px; flex: none; border-radius: 12px; }
+.orch-deck {
+  padding: 6px 10px; gap: 6px; flex: none; border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: color-mix(in srgb, var(--surface) 90%, #08090c);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .4), 0 0 0 1px rgba(0, 0, 0, .5);
+}
 .orch-bar { display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 8px; }
 .orch-cluster { display: flex; align-items: center; gap: 6px; }
 .orch-cluster-nav { flex: none; }
@@ -896,7 +901,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 98px); }
 }
 .task.orch-deck .orch-bar textarea {
   flex: 1 1 160px; min-width: 120px; height: 30px; min-height: 30px; max-height: 100px; padding: 5px 10px;
-  border-radius: 8px; border: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 55%, transparent);
+  border-radius: 8px; border: 1px solid rgba(255, 255, 255, .16); background: color-mix(in srgb, var(--bg) 65%, transparent);
   font: 12.5px/1.45 var(--body); color: var(--ink); transition: border-color .15s, min-height .15s;
 }
 .task.orch-deck .orch-bar textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, transparent); min-height: 48px; }
@@ -912,72 +917,119 @@ body.dock-float .orch-shell { height: calc(100dvh - 98px); }
 .orch-cwd-btn svg:first-child { color: var(--accent); flex: none; }
 .orch-mode-seg { height: 30px; padding: 2px; flex: none; border-radius: 8px; }
 .orch-mode-seg button { padding: 0 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; border-radius: 6px; }
+.orch-more-btn { display: inline-flex; align-items: center; gap: 5px; }
+.orch-more-btn svg { transition: transform .18s ease; }
+.orch-deck.open .orch-more-btn svg { transform: rotate(180deg); }
 
 /* Terminal Split-Button & Launcher */
-.orch-term-split { display: inline-flex; align-items: center; position: relative; flex: none; }
+.orch-term-split {
+  display: inline-flex; align-items: stretch; position: relative; flex: none;
+  height: 30px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .16);
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  overflow: hidden;
+  transition: border-color .15s, box-shadow .15s;
+}
+.orch-term-split:hover {
+  border-color: rgba(255, 255, 255, .28);
+}
+.orch-term-split.open {
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 .orch-term-split .orch-term-main {
-  height: 30px; padding: 0 10px; font-size: 11.5px; gap: 5px;
-  border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 0;
+  height: 100% !important; padding: 0 10px !important; font-size: 11.5px !important; gap: 6px !important;
+  border: none !important; border-radius: 0 !important;
+  background: transparent !important; box-shadow: none !important;
+  display: inline-flex !important; align-items: center !important;
+  color: var(--ink); cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.orch-term-split .orch-term-main:hover {
+  background: rgba(255, 255, 255, .08) !important;
 }
 .orch-term-split .orch-term-drop {
-  height: 30px; width: 22px; padding: 0; display: grid; place-items: center;
-  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  height: 100% !important; width: 26px !important; min-width: 26px !important; max-width: 26px !important;
+  padding: 0 !important; margin: 0 !important;
+  display: flex !important; align-items: center !important; justify-content: center !important;
+  border: none !important; border-left: 1px solid rgba(255, 255, 255, .14) !important; border-radius: 0 !important;
+  background: transparent !important; box-shadow: none !important;
+  color: var(--muted); cursor: pointer;
+  transition: background .12s, color .12s;
 }
-.orch-term-split:hover .btn { border-color: rgba(255, 255, 255, .16); }
+.orch-term-split .orch-term-drop:hover,
 .orch-term-split.open .orch-term-drop {
-  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 15%, rgba(255, 255, 255, .08)) !important;
+  color: var(--accent) !important;
+}
+.orch-term-split .orch-term-drop svg {
+  display: block; margin: 0 auto;
+  transition: transform .18s ease;
+}
+.orch-term-split.open .orch-term-drop svg {
+  transform: rotate(180deg);
 }
 @media (max-width: 1024px) {
   .orch-term-lbl { display: none; }
-  .orch-term-split .orch-term-main { padding: 0 7px; }
+  .orch-term-split .orch-term-main { padding: 0 7px !important; }
 }
 
 /* Terminal Dropdown Popover (#term-pop) */
 .term-pop {
-  position: fixed; z-index: 999; width: 290px;
-  border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
-  background: color-mix(in srgb, var(--surface) 96%, #08080a);
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
-  box-shadow: 0 16px 40px rgba(0, 0, 0, .58);
+  position: fixed; z-index: 999; width: 310px;
+  border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  background: rgba(18, 19, 24, 0.96); backdrop-filter: blur(28px);
+  border: 1px solid rgba(255, 255, 255, .16);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .75), 0 0 0 1px rgba(0, 0, 0, .5);
 }
 .term-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.term-pop-cwd { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
-.term-pop-tag { font: 600 10px var(--mono); color: var(--accent); text-transform: uppercase; }
-.term-pop-cwd code { font: 500 11px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.term-pop-sec-title { font: 600 10.5px var(--mono); color: var(--faint); text-transform: uppercase; letter-spacing: .05em; margin: 4px 0 2px; }
+.term-pop-cwd {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1;
+  padding: 4px 8px; border-radius: 6px; background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .08);
+}
+.term-pop-tag { font: 600 9.5px var(--mono); color: var(--accent); text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
+.term-pop-cwd code { font: 500 11px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-pop-cta {
+  width: 100%; height: 34px; justify-content: center; gap: 7px; font-size: 12px; font-weight: 500;
+  border-radius: 8px; margin: 2px 0;
+}
+.term-pop-sec { display: flex; flex-direction: column; gap: 3px; }
+.term-pop-sec-title { font: 600 10px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: 2px 4px; }
 .term-pop-list { display: flex; flex-direction: column; gap: 2px; }
 .term-pop-row {
   display: flex; align-items: center; gap: 8px; width: 100%; height: 28px;
-  padding: 0 8px; border-radius: 6px; font-size: 12px; color: var(--muted);
+  padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--muted);
   transition: background .12s, color .12s; text-align: left;
 }
-.term-pop-row:hover { background: var(--glass-2); color: var(--ink); }
-.term-pop-row.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-weight: 500; }
+.term-pop-row:hover { background: rgba(255, 255, 255, .08); color: var(--ink); }
+.term-pop-row.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: #fff; font-weight: 500; }
+.term-pop-row .term-row-ic { display: flex; align-items: center; color: var(--accent); opacity: .85; }
+.term-pop-row .term-row-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-pop-row .term-check { color: var(--accent); font-weight: 700; margin-left: auto; }
 .term-badge { margin-left: auto; font: 500 9.5px var(--mono); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--faint); }
 .term-badge.default { border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
-.term-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+.term-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .08); }
 .term-pop-config { font: 500 11px var(--mono); color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
 .term-pop-config:hover { color: var(--ink); }
 .term-pop-foot .btn { height: 26px; padding: 0 10px; font-size: 11px; }
 
-html[data-ui="minimal"] .term-pop { background: var(--surface); border-color: var(--line); box-shadow: 0 12px 28px rgba(0, 0, 0, .4); }
+html[data-ui="minimal"] .term-pop { background: var(--surface); border-color: rgba(255, 255, 255, .18); box-shadow: 0 20px 48px rgba(0, 0, 0, .55); }
 html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11px; }
 
 /* Embedded Terminal in Canvas & Split Pane */
 /* Authentic Ghostty & Kitty Native Terminal Window UI */
 .orch-pane[data-kind="terminal"] {
   display: flex; flex-direction: column; min-width: 360px; min-height: 280px;
-  background: #111113; border: 1px solid rgba(255, 255, 255, .14);
+  background: #111114; border: 1px solid rgba(255, 255, 255, .2);
   border-radius: 10px; overflow: hidden;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, .7), 0 0 0 1px rgba(255, 255, 255, .04);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .85), 0 24px 64px rgba(0, 0, 0, .75);
 }
 .orch-pane[data-kind="terminal"].theme-kitty {
-  background: #151515; border-color: rgba(0, 215, 135, .28);
+  background: #131416; border-color: rgba(0, 215, 135, .38);
 }
 .orch-pane[data-kind="terminal"] .orch-head {
   height: 38px; min-height: 38px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between;
-  background: rgba(24, 24, 28, .98); border-bottom: 1px solid rgba(255, 255, 255, .08);
+  background: rgba(22, 23, 28, .98); border-bottom: 1px solid rgba(255, 255, 255, .16);
   user-select: none; border-radius: 9px 9px 0 0;
   position: relative; z-index: 20;
 }
@@ -1005,10 +1057,11 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 }
 
 .ghostty-tab-pill {
-  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 6px;
-  background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .09);
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px;
+  background: rgba(255, 255, 255, .12); border: 1px solid rgba(255, 255, 255, .22);
   font: 500 11.5px ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace; color: #fff;
   position: relative; z-index: 25;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
 }
 .ghostty-tab-ic { color: var(--accent); display: flex; align-items: center; }
 .ghostty-tab-proc { font-size: 10.5px; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, .1); color: var(--muted); }
@@ -1376,9 +1429,9 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 
 /* Free 2D Maestri Canvas mode */
 .orch-canvas.free {
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, .15);
   background-color: color-mix(in srgb, var(--bg) 72%, transparent);
-  background-image: radial-gradient(color-mix(in srgb, var(--ink) 16%, transparent) 1px, transparent 1px);
+  background-image: radial-gradient(color-mix(in srgb, var(--ink) 18%, transparent) 1px, transparent 1px);
   background-size: 22px 22px;
   cursor: grab;
 }
@@ -1389,15 +1442,16 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 .orch-plane.free .orch-pane {
   position: absolute; pointer-events: auto; overflow: visible;
   left: var(--px, 24px); top: var(--py, 20px); width: var(--pw, 556px); height: var(--ph, 410px);
-  background: color-mix(in srgb, var(--surface) 95%, #070709);
-  box-shadow: 0 18px 46px rgba(0, 0, 0, .45);
+  background: #111216;
+  border: 1px solid rgba(255, 255, 255, .18);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .8), 0 20px 52px rgba(0, 0, 0, .6);
 }
 .orch-pane > .orch-head { border-radius: calc(var(--r) - 1px) calc(var(--r) - 1px) 0 0; }
 .orch-pane > .orch-talk { border-radius: 0 0 calc(var(--r) - 1px) calc(var(--r) - 1px); }
 .orch-plane.free .orch-pane.active {
   z-index: 6;
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  box-shadow: 0 22px 58px rgba(0, 0, 0, .58), 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 24px 64px rgba(0, 0, 0, .7);
 }
 .orch-plane.free .orch-head { cursor: grab; user-select: none; }
 .orch-plane.free .orch-head:active { cursor: grabbing; }
@@ -1526,11 +1580,14 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 .orch-pane {
   position: relative; border-radius: var(--r); display: flex; flex-direction: column;
   min-height: 0; height: 100%; overflow: hidden; transition: border-color .15s, box-shadow .15s;
+  background: #111216;
+  border: 1px solid rgba(255, 255, 255, .16);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .75);
   container-type: inline-size; container-name: pane;
 }
 .orch-plane:is(.split-cols, .split-rows, .grid) .orch-pane.active {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 10px 30px rgba(0, 0, 0, .5);
 }
 .orch-empty { border-radius: var(--r); display: grid; place-items: center; height: 100%; text-align: center; padding: 32px; pointer-events: auto; }
 
@@ -1554,7 +1611,8 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 .orch-head {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
   min-height: 40px; height: 40px; max-height: 40px; overflow: hidden;
-  padding: 0 10px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 26%, transparent);
+  padding: 0 12px; border-bottom: 1px solid rgba(255, 255, 255, .15);
+  background: rgba(22, 23, 28, .98);
   cursor: grab; user-select: none;
 }
 .orch-title { display: flex; align-items: center; gap: 8px; min-width: 40px; flex: 1 1 0%; overflow: hidden; }
@@ -1648,16 +1706,16 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 .orch-needs-bar span { flex: 1; min-width: 0; }
 
 .orch-talk {
-  flex: none; margin: 0; border-top: 1px solid var(--line); border-radius: 0;
-  padding: 8px 12px; background: color-mix(in srgb, var(--bg) 50%, transparent);
+  flex: none; margin: 0; border-top: 1px solid rgba(255, 255, 255, .15); border-radius: 0;
+  padding: 8px 12px; background: rgba(18, 19, 24, .98);
   display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
 }
 .orch-talk textarea {
   flex: 1; min-width: 0; min-height: 34px; max-height: 90px; padding: 6px 10px;
-  border-radius: 8px; border: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 75%, transparent);
-  font: 13.5px/1.4 var(--body);
+  border-radius: 8px; border: 1px solid rgba(255, 255, 255, .15); background: rgba(255, 255, 255, .05);
+  font: 13.5px/1.4 var(--body); color: var(--ink);
 }
-.orch-talk textarea:focus { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.orch-talk textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .orch-talk .orch-hint { flex: none; width: auto; max-width: 210px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 11px var(--mono); color: var(--faint); padding: 0 4px; }
 
 @media (max-width: 900px) {

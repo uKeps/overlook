@@ -1812,4 +1812,43 @@ test("adversarial verification: canvas multiselect deletion via Delete key, traf
   expect(appCss).toContain(".orch-resize.e::after, .orch-resize.w::after");
 });
 
+test("adversarial verification: canvas high-contrast contours, split terminal button alignment, and clean shell detection", async () => {
+  // 1. Shell detection filtering
+  const termRes = await (await fetch(`${BASE}/api/terminals`)).json();
+  const shellIds = (termRes.shells || []).map((s: any) => s.id);
+  expect(shellIds).not.toContain("git-shell");
+  expect(shellIds).not.toContain("rbash");
+  expect(shellIds).not.toContain("systemd-home-fallback-shell");
+  expect(shellIds).not.toContain("nologin");
+  expect(shellIds).not.toContain("false");
+
+  // 2. High-contrast dual-layer contours in CSS
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+  expect(appCss).toContain(".orch-plane.free .orch-pane");
+  expect(appCss).toContain("box-shadow: 0 0 0 1px rgba(0, 0, 0, .8), 0 20px 52px rgba(0, 0, 0, .6)");
+  expect(appCss).toContain(".orch-deck");
+  expect(appCss).toContain("box-shadow: 0 4px 20px rgba(0, 0, 0, .4), 0 0 0 1px rgba(0, 0, 0, .5)");
+  expect(appCss).toContain(".orch-head");
+  expect(appCss).toContain("border-bottom: 1px solid rgba(255, 255, 255, .15)");
+  expect(appCss).toContain(".orch-talk");
+  expect(appCss).toContain("border-top: 1px solid rgba(255, 255, 255, .15)");
+  expect(appCss).toContain(".ghostty-tab-pill");
+
+  // 3. Seamless split button & popover structure in JS
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  expect(appJs).toContain('<button type="button" class="orch-term-main"');
+  expect(appJs).toContain('<button type="button" class="orch-term-drop"');
+  expect(appJs).not.toContain('class="btn glass orch-term-main"');
+  expect(appJs).not.toContain('class="btn glass orch-term-drop"');
+  expect(appJs).toContain("term-pop-cta");
+  expect(appJs).toContain("term-row-ic");
+  expect(appJs).toContain("term-check");
+
+  // 4. Split-button chevron rotation in CSS
+  expect(appCss).toContain(".orch-term-split .orch-term-drop svg");
+  expect(appCss).toContain(".orch-term-split.open .orch-term-drop svg");
+  expect(appCss).toContain("transform: rotate(180deg)");
+});
+
+
 
