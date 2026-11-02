@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -75,7 +75,10 @@ async function notes(): Promise<Note[]> {
     const folder = dirname(path);
     if (!/^[1-8] /.test(folder) || folder.startsWith("7 ") || path.endsWith(".excalidraw.md") || basename(path).startsWith("_")) continue;
     const f = Bun.file(`${ROOT}/${path}`);
-    const { fm, body } = frontmatter(await f.text());
+    if (!(await f.exists())) continue;
+    let txt = "";
+    try { txt = await f.text(); } catch { continue; }
+    const { fm, body } = frontmatter(txt);
     const type = fm[L.keys.type] ?? "";
     out.push({
       path, folder,
@@ -515,6 +518,7 @@ const page = (t: string, msg: string) => new Response(`<!doctype html><meta char
 <body style="background:#121212;color:#EAE8E3;font:15px/1.6 system-ui;display:grid;place-items:center;min-height:90vh;margin:0;padding:24px">
 <main style="max-width:520px"><h1 style="font-weight:400">${t}</h1><p style="color:#A3A19C">${msg.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!)}</p><p><a style="color:#F2B48C" href="/#/services">Back to Services →</a></p></main>`, { headers: { "content-type": "text/html; charset=utf-8" } });
 
+loadTasks(import.meta.dir);
 startScheduler(ROOT, import.meta.dir);
 startPinterest(`${TAILNET ? `https://${TAILNET}` : `http://127.0.0.1:${PORT}`}/auth/pinterest/callback`); // Tailscale HTTPS redirect
 
@@ -583,7 +587,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/task/stop") return json(stopTask(String(b.id)) && { ok: true });
     if (p === "/api/task/delete" || p === "/api/task/dismiss") {
       if (typeof b.id !== "string" || !b.id.trim()) return new Response("missing id", { status: 400 });
-      return deleteTask(b.id.trim()) ? json({ ok: true }) : new Response("not found", { status: 400 });
+      return deleteTask(b.id.trim(), import.meta.dir) ? json({ ok: true }) : new Response("not found", { status: 400 });
     }
     return new Response("404", { status: 404 });
   }

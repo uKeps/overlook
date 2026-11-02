@@ -1,6 +1,6 @@
 // Agents Overlook can put to work on the vault. CLI agents (claude, agy, codex...) are spawned in the vault folder;
 // API agents (Anthropic, or any OpenAI-compatible endpoint) work through four tools jailed to the vault's notes.
-// Tasks live in memory. ponytail: lost on restart; persist them if the history starts to matter.
+// Tasks persist to cache/tasks.json (last 50 tasks). On startup, unfinished tasks are marked ended.
 import { resolve, dirname, relative, isAbsolute, sep, join } from "node:path";
 import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
@@ -57,14 +57,60 @@ const clip = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "…" : s);
 const MESSAGE = 20_000; // a whole message reads in full; the cap only guards against a runaway one
 const log = (task: Task, e: Omit<Event, "at">) => { task.events.push({ ...e, at: now() }); if (task.events.length > 300) task.events.shift(); };
 
+let tasksDir = import.meta.dir;
+const tasksFile = (dir: string) => `${dir}/cache/tasks.json`;
+
+export function saveTasks(dir: string = tasksDir) {
+  tasksDir = dir;
+  const file = tasksFile(dir);
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    while (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
+    const list = [...tasks.values()].slice(-50).map(({ stop, ...t }) => t);
+    writeFileSync(file, JSON.stringify(list, null, 1));
+  } catch {}
+}
+
+export function loadTasks(dir: string = tasksDir): Task[] {
+  tasksDir = dir;
+  const file = tasksFile(dir);
+  try {
+    if (!existsSync(file)) return [];
+    const list = JSON.parse(readFileSync(file, "utf8"));
+    if (!Array.isArray(list)) return [];
+    tasks.clear();
+    let changed = false;
+    const nowIso = now();
+    for (const t of list.slice(-50)) {
+      if (t && typeof t === "object" && t.id) {
+        if (!t.end) {
+          t.end = nowIso;
+          t.ok = false;
+          changed = true;
+        }
+        delete t.stop;
+        if (!Array.isArray(t.events)) t.events = [];
+        tasks.set(t.id, t as Task);
+      }
+    }
+    if (changed) saveTasks(dir);
+    return [...tasks.values()];
+  } catch {
+    return [];
+  }
+}
+loadTasks();
+
 export const taskList = () => [...tasks.values()].reverse().map(({ events, stop, ...t }) => ({ ...t, prompt: clip(t.prompt, 160) }));
 export const getTask = (id: string) => { const t = tasks.get(id); if (!t) return null; const { stop, ...rest } = t; return rest; };
 export const stopTask = (id: string) => { const t = tasks.get(id); if (!t?.stop || t.end) return false; t.stop(); return true; };
-export function deleteTask(id: string): boolean {
+export function deleteTask(id: string, dir: string = tasksDir): boolean {
   const t = tasks.get(id);
   if (!t) return false;
   if (!t.end) stopTask(id);
-  return tasks.delete(id);
+  const deleted = tasks.delete(id);
+  if (deleted) saveTasks(dir);
+  return deleted;
 }
 export const routineRunning = (name: string) => [...tasks.values()].some((t) => t.routine === name && !t.end);
 
@@ -151,7 +197,7 @@ function checkQuota(task: Task, textOrErr: unknown) {
   task.ok = false;
 }
 
-function execTask(a: Agent, task: Task, prompt: string, resumed: boolean) {
+function execTask(a: Agent, task: Task, prompt: string, resumed: boolean, dir: string = tasksDir) {
   log(task, { t: "you", txt: prompt });
   task.end = undefined; task.ok = undefined; task.stop = undefined;
   const ctrl = new AbortController();
@@ -164,7 +210,7 @@ function execTask(a: Agent, task: Task, prompt: string, resumed: boolean) {
     checkQuota(task, e);
     log(task, { t: "error", txt });
   })
-    .finally(() => { task.end = now(); clearTimeout(timer); });
+    .finally(() => { task.end = now(); clearTimeout(timer); saveTasks(dir); });
 }
 
 export function runTask(root: string, dir: string, agentId: string, prompt: string, opts: RunOpts = {}) {
@@ -175,7 +221,8 @@ export function runTask(root: string, dir: string, agentId: string, prompt: stri
   const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, cwd, role, prompt, routine: opts.routine, start: now(), events: [] };
   tasks.set(task.id, task);
   if (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
-  execTask(a, task, prompt, !!opts.session);
+  saveTasks(dir);
+  execTask(a, task, prompt, !!opts.session, dir);
   return task;
 }
 
@@ -185,7 +232,8 @@ export function continueTask(root: string, dir: string, id: string, prompt: stri
   if (!task.end) return "task is still running";
   const r = resolveRun(root, dir, task.agent, { model: task.model || undefined, effort: task.effort || undefined, cwd: task.cwd });
   if (typeof r === "string") return r;
-  execTask(r.a, task, prompt, !!task.session);
+  saveTasks(dir);
+  execTask(r.a, task, prompt, !!task.session, dir);
   return task;
 }
 

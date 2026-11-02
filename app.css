@@ -441,10 +441,62 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); backdrop-filter: blur(4px); }
 .capture-foot small { color: var(--faint); flex: 1; }
 .capture-tabs { flex: none; }
 .capture-tabs button { padding: 0 13px; font-size: 12.5px; }
-#capture-agent-panel { margin-bottom: 12px; }
-.capture-fields-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.capture-fields-row .pick { flex: 1 1 140px; min-width: 0; }
-.capture-fields-row .seg { flex: none; }
+.capture-agent-panel,
+#capture-agent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.capture-agent-row,
+.capture-fields-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.capture-agent-row:has(#capture-model[hidden]),
+.capture-fields-row:has(#capture-model[hidden]) {
+  grid-template-columns: 1fr;
+}
+.capture-agent-row .pick,
+.capture-fields-row .pick {
+  width: 100%;
+  min-width: 0;
+}
+.capture-effort-row,
+#capture-effort-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+}
+.capture-effort-row:has(#capture-effort[hidden]),
+#capture-effort-row:has(#capture-effort[hidden]) {
+  display: none;
+}
+.capture-effort-label,
+.capture-effort-row label,
+#capture-effort-row label,
+.capture-effort-row .capture-effort-label,
+#capture-effort-row .capture-effort-label {
+  font: 500 12px/1 var(--body);
+  color: var(--muted);
+  letter-spacing: .02em;
+  user-select: none;
+}
+.capture-effort-row .seg,
+#capture-effort-row .seg {
+  display: inline-flex;
+  flex: none;
+}
+.capture-effort-row .seg button,
+#capture-effort-row .seg button {
+  min-width: 44px;
+  text-align: center;
+  justify-content: center;
+}
 
 /* Quota Exhaustion Alert & Model Switch */
 .quota-alert {
@@ -1457,18 +1509,40 @@ body.dock-float .orch-shell { height: calc(100dvh - 118px); }
     width: calc(100vw - 20px);
     max-width: 520px;
   }
+  .capture-agent-row,
   .capture-fields-row {
-    flex-direction: column;
-    align-items: stretch;
+    grid-template-columns: 1fr;
     gap: 8px;
   }
-  .capture-fields-row .pick,
-  .capture-fields-row .seg {
+  .capture-agent-row .pick,
+  .capture-fields-row .pick {
     width: 100%;
   }
-  .capture-fields-row .seg button {
+  .capture-effort-row,
+  #capture-effort-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .capture-effort-label,
+  .capture-effort-row label,
+  #capture-effort-row label,
+  .capture-effort-row .capture-effort-label,
+  #capture-effort-row .capture-effort-label {
+    font-size: 11.5px;
+  }
+  .capture-effort-row .seg,
+  #capture-effort-row .seg {
+    display: flex;
+    width: 100%;
+  }
+  .capture-effort-row .seg button,
+  #capture-effort-row .seg button {
     flex: 1;
+    min-width: 0;
     text-align: center;
+    padding: 0 4px;
+    font-size: 11.5px;
   }
   .orch-pin-btn,
   .orch-dismiss-btn {

@@ -1468,17 +1468,17 @@ function renderQuotaBanner(t, paneKeyStr) {
   
   let actionsHtml = "";
   if (suggested) {
-    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(suggested.id)}" data-pane="${esc(paneKeyStr || "")}">Switch to ${esc(suggested.label)} &amp; Retry</button>`;
+    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(suggested.id)}" data-pane="${esc(paneKeyStr || "")}" data-agent="${esc(t.agent || "")}" data-prompt="${esc(t.prompt || "")}" data-effort="${esc(t.effort || "")}">Switch to ${esc(suggested.label)} &amp; Retry</button>`;
     if (otherModels.length > 1) {
       actionsHtml += `<div class="quota-dropdown-wrap">
         <select class="pick quota-model-sel" aria-label="Select alternate model">
           ${otherModels.map((m) => `<option value="${esc(m.id)}" ${m.id === suggested.id ? "selected" : ""}>${esc(m.label)}</option>`).join("")}
         </select>
-        <button type="button" class="btn glass quota-custom-btn" data-act="quota-retry-sel" data-task="${esc(t.id)}" data-pane="${esc(paneKeyStr || "")}">Retry</button>
+        <button type="button" class="btn glass quota-custom-btn" data-act="quota-retry-sel" data-task="${esc(t.id)}" data-pane="${esc(paneKeyStr || "")}" data-agent="${esc(t.agent || "")}" data-prompt="${esc(t.prompt || "")}" data-effort="${esc(t.effort || "")}">Retry</button>
       </div>`;
     }
   } else {
-    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(t.model || "")}" data-pane="${esc(paneKeyStr || "")}">Retry</button>`;
+    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(t.model || "")}" data-pane="${esc(paneKeyStr || "")}" data-agent="${esc(t.agent || "")}" data-prompt="${esc(t.prompt || "")}" data-effort="${esc(t.effort || "")}">Retry</button>`;
   }
 
   return `<div class="quota-alert glass" data-task-id="${esc(t.id)}">
@@ -1491,37 +1491,61 @@ function renderQuotaBanner(t, paneKeyStr) {
   </div>`;
 }
 
-async function retryTask(taskId, model, paneKeyStr) {
+async function retryTask(taskId, model, paneKeyStr, opts = {}) {
+  const cachedTask = S?.tasks?.find((x) => x.id === taskId) || {};
+  const btn = $(`[data-task="${taskId}"]`);
+  const agent = opts.agent || btn?.dataset?.agent || cachedTask.agent;
+  const prompt = opts.prompt || btn?.dataset?.prompt || cachedTask.prompt;
+  const effort = opts.effort || btn?.dataset?.effort || cachedTask.effort;
+  model = model || opts.model || btn?.dataset?.model || cachedTask.model;
+
+  let res;
   try {
     toast(`Switching to ${model || "alternate model"} & retrying…`);
-    const res = await api("/api/task/retry", { id: taskId, model });
+    res = await api("/api/task/retry", { id: taskId, model });
     if (!res || !res.id) throw new Error("Retry did not return a valid task ID");
-    
-    if (paneKeyStr || (route().pg === "agents" && orchPanes.some((x) => x.kind === "task" && x.id === taskId))) {
-      const p = orchPanes.find((x) => (paneKeyStr && paneKey(x) === paneKeyStr) || (x.kind === "task" && x.id === taskId));
-      if (p) {
-        const oldKey = paneKey(p);
-        p.id = res.id;
-        const newKey = paneKey(p);
-        rekey(oldKey, newKey);
-        orchSigs.delete(oldKey);
-        orchSigs.delete(newKey);
-        if (orchActive === oldKey) orchActive = newKey;
-        if (orchMax === oldKey) orchMax = newKey;
-        saveCanvas();
-      }
-      S = await api("/api/system");
-      agentsBody();
-      orchPaint(true);
-      toast(`Switched to ${model} & retrying in tile`);
-      return;
-    }
-    
-    toast(`Switched to ${model} & retrying`);
-    location.hash = `#/t/${encodeURIComponent(res.id)}`;
   } catch (err) {
-    toast(`Retry failed: ${err.message}`);
+    const msg = String(err?.message || "");
+    if (msg.includes("404") || /task not found/i.test(msg)) {
+      toast("Task session expired. Re-dispatching as a new task…");
+      if (prompt && agent) {
+        try {
+          res = await api("/api/run", { agent, prompt, model, effort });
+          if (!res || !res.id) throw new Error("Re-dispatch did not return a valid task ID");
+        } catch (dispatchErr) {
+          return toast(`Re-dispatch failed: ${dispatchErr.message}`);
+        }
+      } else {
+        return;
+      }
+    } else {
+      return toast(`Retry failed: ${err.message}`);
+    }
   }
+
+  if (!res || !res.id) return;
+  if (paneKeyStr || (route().pg === "agents" && orchPanes.some((x) => x.kind === "task" && x.id === taskId))) {
+    const p = orchPanes.find((x) => (paneKeyStr && paneKey(x) === paneKeyStr) || (x.kind === "task" && x.id === taskId));
+    if (p) {
+      const oldKey = paneKey(p);
+      p.id = res.id;
+      const newKey = paneKey(p);
+      rekey(oldKey, newKey);
+      orchSigs.delete(oldKey);
+      orchSigs.delete(newKey);
+      if (orchActive === oldKey) orchActive = newKey;
+      if (orchMax === oldKey) orchMax = newKey;
+      saveCanvas();
+    }
+    S = await api("/api/system");
+    agentsBody();
+    orchPaint(true);
+    toast(`Switched to ${model || "new task"} & retrying in tile`);
+    return;
+  }
+  
+  toast(`Switched to ${model || "new task"} & retrying`);
+  location.hash = `#/t/${encodeURIComponent(res.id)}`;
 }
 
 async function orchPaint(force) {
@@ -2607,10 +2631,10 @@ const ACTIONS = {
       topBar();
     }
   },
-  "quota-retry": (el) => retryTask(el.dataset.task, el.dataset.model, el.dataset.pane),
+  "quota-retry": (el) => retryTask(el.dataset.task, el.dataset.model, el.dataset.pane, { agent: el.dataset.agent, prompt: el.dataset.prompt, effort: el.dataset.effort }),
   "quota-retry-sel": (el) => {
     const sel = el.parentElement?.querySelector(".quota-model-sel");
-    retryTask(el.dataset.task, sel?.value, el.dataset.pane);
+    retryTask(el.dataset.task, sel?.value, el.dataset.pane, { agent: el.dataset.agent, prompt: el.dataset.prompt, effort: el.dataset.effort });
   },
 };
 document.addEventListener("click", (e) => {

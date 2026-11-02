@@ -35,10 +35,13 @@
     </div>
     <button type="button" class="dialog-close" data-act="capture-close" aria-label="Close">✕</button>
   </div>
-  <div id="capture-agent-panel" hidden>
-    <div class="capture-fields-row">
+  <div class="capture-agent-panel" id="capture-agent-panel" hidden>
+    <div class="capture-fields-row capture-agent-row">
       <select class="pick" id="capture-agent" aria-label="Agent"></select>
       <select class="pick" id="capture-model" aria-label="Model" hidden></select>
+    </div>
+    <div class="capture-effort-row" id="capture-effort-row">
+      <span class="capture-effort-label">Effort</span>
       <div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>
     </div>
   </div>

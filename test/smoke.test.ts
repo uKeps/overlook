@@ -175,8 +175,18 @@ test("effort selection in capture modal and dismiss chat in fleet sidebar", () =
   expect(html).toContain('<select class="pick" id="capture-model" aria-label="Model" hidden></select>');
   expect(html).toContain('<div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>');
 
+  expect(html).toContain('<div class="capture-agent-panel" id="capture-agent-panel" hidden>');
+  expect(html).toContain('<div class="capture-fields-row capture-agent-row">');
+  expect(html).toContain('<div class="capture-effort-row" id="capture-effort-row">');
+  expect(html).toContain('<span class="capture-effort-label">Effort</span>');
+
   const css = readFileSync(`${ROOT}/app.css`, "utf8");
   expect(css).toContain(".capture-fields-row");
+  expect(css).toContain(".capture-agent-panel");
+  expect(css).toContain(".capture-agent-row");
+  expect(css).toContain(".capture-effort-row");
+  expect(css).toContain(".capture-effort-label");
+  expect(css).toContain("grid-template-columns: 1fr 1fr;");
   expect(css).toContain(".orch-item-actions");
   expect(css).toContain(".orch-dismiss-btn");
   expect(css).toContain("var(--bad)");
@@ -328,6 +338,98 @@ test("tasks can be deleted or dismissed while running or after finishing", async
   const finishedTasksAfter = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
   expect(finishedTasksAfter.some((t: any) => t.id === finishId)).toBe(false);
   expect((await post("/api/task/dismiss", { id: finishId })).status).toBe(400);
+});
+
+test("task persistence across reload", async () => {
+  const cacheFile = `${ROOT}/cache/tasks.json`;
+
+  // 1. Run a task to completion
+  const taskId = await run("echo", "persist-test-run");
+  const finishedTask = await finished(taskId);
+  expect(finishedTask.ok).toBe(true);
+
+  // 2. Verify cache/tasks.json was written and contains the task without a stop function
+  expect(existsSync(cacheFile)).toBe(true);
+  let saved = JSON.parse(readFileSync(cacheFile, "utf8"));
+  expect(Array.isArray(saved)).toBe(true);
+  const found = saved.find((t: any) => t.id === taskId);
+  expect(found).toBeDefined();
+  expect(found.prompt).toBe("persist-test-run");
+  expect(found.ok).toBe(true);
+  expect(found.end).toBeDefined();
+  expect(found.stop).toBeUndefined();
+
+  // 3. Inject a simulated unfinished/zombie task (no end timestamp) into cache/tasks.json
+  const zombieId = "zombie-task-test";
+  saved.push({
+    id: zombieId,
+    agent: "echo",
+    model: "m1",
+    effort: "low",
+    cwd: ROOT,
+    prompt: "zombie task before restart",
+    start: new Date(Date.now() - 30000).toISOString(),
+    events: [],
+  });
+  writeFileSync(cacheFile, JSON.stringify(saved, null, 1));
+
+  // 4. Reload the server (restart process)
+  server.kill();
+  await server.exited;
+  server = Bun.spawn(["bun", "server.ts"], { cwd: ROOT, env: ENV, stdout: "ignore", stderr: "inherit" });
+  for (let i = 0; i < 100; i++) {
+    try { await fetch(BASE); break; } catch { await Bun.sleep(100); }
+  }
+
+  // 5. Verify the tasks after reload:
+  // - Completed task still present with ok = true
+  // - Zombie task recovered: marked with end timestamp and ok = false
+  const sys = await (await fetch(`${BASE}/api/system`)).json();
+  const reloadedTask = sys.tasks.find((t: any) => t.id === taskId);
+  expect(reloadedTask).toBeDefined();
+  expect(reloadedTask.ok).toBe(true);
+
+  const reloadedZombie = sys.tasks.find((t: any) => t.id === zombieId);
+  expect(reloadedZombie).toBeDefined();
+  expect(reloadedZombie.end).toBeDefined();
+  expect(reloadedZombie.ok).toBe(false);
+
+  const zombieDetail = await (await fetch(`${BASE}/api/task?id=${zombieId}`)).json();
+  expect(zombieDetail.ok).toBe(false);
+  expect(zombieDetail.end).toBeDefined();
+
+  // 6. Delete a task and verify it is removed from cache/tasks.json
+  const delRes = await post("/api/task/delete", { id: zombieId });
+  expect(delRes.status).toBe(200);
+  saved = JSON.parse(readFileSync(cacheFile, "utf8"));
+  expect(saved.some((t: any) => t.id === zombieId)).toBe(false);
+
+  // 7. Verify helper capping at last 50 tasks
+  const unitDir = `${ROOT}/unit-cap-test`;
+  mkdirSync(`${unitDir}/cache`, { recursive: true });
+  const lots = Array.from({ length: 60 }, (_, i) => ({
+    id: `lot-${i}`,
+    agent: "echo",
+    model: "m1",
+    effort: "low",
+    cwd: ROOT,
+    prompt: `task-${i}`,
+    start: new Date().toISOString(),
+    end: new Date().toISOString(),
+    ok: true,
+    events: [],
+  }));
+  writeFileSync(`${unitDir}/cache/tasks.json`, JSON.stringify(lots, null, 1));
+  const { loadTasks, saveTasks } = await import(`${ROOT}/tasks.ts`);
+  const loaded = loadTasks(unitDir);
+  expect(loaded.length).toBe(50);
+  expect(loaded[0].id).toBe("lot-10");
+  expect(loaded[49].id).toBe("lot-59");
+  saveTasks(unitDir);
+  const savedLots = JSON.parse(readFileSync(`${unitDir}/cache/tasks.json`, "utf8"));
+  expect(savedLots.length).toBe(50);
+  expect(savedLots[0].id).toBe("lot-10");
+  expect(savedLots[49].id).toBe("lot-59");
 });
 
 test("an OpenAI-compatible agent writes notes and cannot leave the vault", async () => {
@@ -1131,5 +1233,291 @@ test("adversarial verification: fleet sidebar chat dismissal, external session p
   expect(orchPanes[0].kind).toBe("new");
   expect(orchActive).toBe(`new:${orchSeq}`);
 });
+
+test("adversarial verification: capture modal 2-tier layout, effort switching, and mobile responsiveness", async () => {
+  const html = readFileSync(`${ROOT}/index.html`, "utf8");
+  const css = readFileSync(`${ROOT}/app.css`, "utf8");
+  const js = readFileSync(`${ROOT}/app.js`, "utf8");
+
+  // 1. Structure in index.html: Deterministic 2-tier layout
+  // Row 1: Agent & Model selects inside .capture-agent-row
+  expect(html).toContain('<div class="capture-agent-panel" id="capture-agent-panel" hidden>');
+  expect(html).toContain('<div class="capture-fields-row capture-agent-row">');
+  expect(html).toContain('<select class="pick" id="capture-agent" aria-label="Agent"></select>');
+  expect(html).toContain('<select class="pick" id="capture-model" aria-label="Model" hidden></select>');
+  // Row 2: Effort label + Segmented control inside #capture-effort-row
+  expect(html).toContain('<div class="capture-effort-row" id="capture-effort-row">');
+  expect(html).toContain('<span class="capture-effort-label">Effort</span>');
+  expect(html).toContain('<div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>');
+
+  // 2. CSS Desktop layout rules
+  expect(css).toContain("display: flex;\n  flex-direction: column;\n  gap: 10px;\n  margin-bottom: 12px;");
+  // Row 1: 2 equal columns (1fr 1fr), collapsing to 1fr when model is hidden
+  expect(css).toContain(".capture-agent-row,\n.capture-fields-row {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 8px;\n  align-items: center;\n}");
+  expect(css).toContain(".capture-agent-row:has(#capture-model[hidden]),\n.capture-fields-row:has(#capture-model[hidden]) {\n  grid-template-columns: 1fr;\n}");
+  expect(css).toContain(".capture-agent-row .pick,\n.capture-fields-row .pick {\n  width: 100%;\n  min-width: 0;\n}");
+  // Row 2: Effort label + Segmented control with space-between
+  expect(css).toContain(".capture-effort-row,\n#capture-effort-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  min-height: 34px;\n}");
+  expect(css).toContain(".capture-effort-row:has(#capture-effort[hidden]),\n#capture-effort-row:has(#capture-effort[hidden]) {\n  display: none;\n}");
+  expect(css).toContain(".capture-effort-row .seg,\n#capture-effort-row .seg {\n  display: inline-flex;\n  flex: none;\n}");
+  expect(css).toContain(".capture-effort-row .seg button,\n#capture-effort-row .seg button {\n  min-width: 44px;\n  text-align: center;\n  justify-content: center;\n}");
+
+  // 3. CSS Mobile responsive behavior (@media max-width: 640px)
+  expect(css).toContain(".capture-agent-row,\n  .capture-fields-row {\n    grid-template-columns: 1fr;\n    gap: 8px;\n  }");
+  expect(css).toContain(".capture-effort-row,\n  #capture-effort-row {\n    flex-direction: column;\n    align-items: stretch;\n    gap: 6px;\n  }");
+  expect(css).toContain(".capture-effort-row .seg,\n  #capture-effort-row .seg {\n    display: flex;\n    width: 100%;\n  }");
+  expect(css).toContain(".capture-effort-row .seg button,\n  #capture-effort-row .seg button {\n    flex: 1;\n    min-width: 0;\n    text-align: center;\n    padding: 0 4px;\n    font-size: 11.5px;\n  }");
+
+  // 4. Switching between Antigravity (3 efforts) and Claude Code (5 efforts)
+  const runOptionsCode = js.match(/function runOptions[\s\S]*?^}/m)?.[0]!;
+  const runChoiceCode = js.match(/const runChoice = [\s\S]*?;/)?.[0]!;
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (c: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c as keyof typeof esc]);
+
+  function makeMockEl(tag: string, attrs: any = {}) {
+    const el: any = {
+      tagName: tag.toUpperCase(),
+      value: attrs.value || "",
+      hidden: attrs.hidden ?? false,
+      _html: "",
+      dataset: { ...attrs.dataset },
+      children: [] as any[],
+      classList: {
+        classes: new Set(attrs.className ? attrs.className.split(" ").filter(Boolean) : []),
+        contains(c: string) { return this.classes.has(c); },
+        add(c: string) { this.classes.add(c); },
+        remove(c: string) { this.classes.delete(c); },
+        toggle(c: string, force?: boolean) {
+          if (force === true) this.classes.add(c);
+          else if (force === false) this.classes.delete(c);
+          else if (this.classes.has(c)) this.classes.delete(c);
+          else this.classes.add(c);
+        }
+      },
+      querySelector(sel: string) {
+        if (sel === ".on") return this.children.find((c: any) => c.classList.contains("on")) || null;
+        return null;
+      }
+    };
+    if (tag === "select") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          const vals = [...html.matchAll(/value="([^"]*)"/g)].map((m) => m[1]);
+          if (vals.length && !vals.includes(this.value)) this.value = vals[0];
+        },
+        get() { return this._html; }
+      });
+    } else if (tag === "div") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          this.children = [];
+          for (const [, attrsStr] of html.matchAll(/<button([^>]*)>([^<]*)<\/button>/g)) {
+            const vMatch = attrsStr.match(/data-v="([^"]*)"/);
+            const classMatch = attrsStr.match(/class="([^"]*)"/);
+            const btn = makeMockEl("button", {
+              dataset: { v: vMatch ? vMatch[1] : "" },
+              className: classMatch ? classMatch[1] : "",
+            });
+            btn.parentElement = this;
+            this.children.push(btn);
+          }
+        },
+        get() { return this._html; }
+      });
+    }
+    return el;
+  }
+
+  const dom = new Map<string, any>();
+  const $ = (sel: string) => dom.get(sel) || (sel.includes(" .on") ? dom.get(sel.split(" ")[0])?.querySelector(".on") : null);
+
+  const mockRunners = [
+    {
+      id: "agy",
+      name: "Antigravity",
+      effort: "medium",
+      models: [{ id: "agy-pro", label: "Antigravity Pro", efforts: ["low", "medium", "high"] }],
+    },
+    {
+      id: "claude",
+      name: "Claude Code",
+      effort: "high",
+      models: [{ id: "claude-sonnet", label: "Claude Sonnet", efforts: ["low", "medium", "high", "xhigh", "max"] }],
+    },
+    {
+      id: "single-model-no-effort",
+      name: "Simple Agent",
+      models: [],
+      efforts: [],
+    }
+  ];
+
+  const compiled = new Function("$", "esc", "S", `${runOptionsCode}\n${runChoiceCode}\nreturn { runOptions, runChoice };`);
+  const { runOptions, runChoice } = compiled($, esc, { runners: mockRunners });
+
+  const captureAgent = makeMockEl("select", { value: "agy" });
+  const captureModel = makeMockEl("select", { value: "agy-pro" });
+  const captureEffort = makeMockEl("div", { hidden: true });
+
+  dom.set("#capture-agent", captureAgent);
+  dom.set("#capture-model", captureModel);
+  dom.set("#capture-effort", captureEffort);
+
+  // A. Select Antigravity (3 efforts)
+  captureAgent.value = "agy";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureModel.value).toBe("agy-pro");
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "medium", "high"]);
+  expect(runChoice("capture")).toEqual({ agent: "agy", model: "agy-pro", effort: "medium" });
+
+  // B. Switch to Claude Code (5 efforts)
+  captureAgent.value = "claude";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureModel.value).toBe("claude-sonnet");
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(runChoice("capture")).toEqual({ agent: "claude", model: "claude-sonnet", effort: "high" });
+
+  // C. Switch to Agent with no models and no efforts
+  captureAgent.value = "single-model-no-effort";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(true);
+  expect(captureEffort.hidden).toBe(true);
+  expect(captureEffort.children.length).toBe(0);
+  expect(runChoice("capture")).toEqual({ agent: "single-model-no-effort", model: undefined, effort: undefined });
+});
+
+test("adversarial verification: task persistence across reload, retryTask 404 recovery, and notes resilience", async () => {
+  const js = readFileSync(`${ROOT}/app.js`, "utf8");
+
+  // 1. retryTask 404 handling in Standalone Page Mode
+  const toastLogs: string[] = [];
+  const apiCalls: { endpoint: string; body: any }[] = [];
+  const mockApi = async (url: string, body?: any) => {
+    apiCalls.push({ endpoint: url, body });
+    if (url === "/api/task/retry") {
+      if (body?.id === "fail-dispatch") throw new Error("404: task not found");
+      if (body?.id === "500-error") throw new Error("500: internal server error");
+      throw new Error("404: task not found");
+    }
+    if (url === "/api/run") {
+      if (body?.agent === "fail-dispatch") throw new Error("Server out of resources");
+      return { id: "new-redispatched-task" };
+    }
+    if (url === "/api/system") return { runners: [], tasks: [] };
+    return {};
+  };
+
+  const mockToast = (msg: string) => { toastLogs.push(msg); };
+  const mockRoute = () => ({ pg: "t", arg: "expired-task-1" });
+  const mockLocation = { hash: "" };
+
+  const retryCode = js.match(/async function retryTask\([\s\S]*?\n\}/)?.[0];
+  expect(retryCode).toBeTruthy();
+
+  const retryFn = new Function(
+    "api", "toast", "route", "location", "S", "orchPanes", "$", "paneKey", "rekey", "orchSigs", "orchActive", "orchMax", "saveCanvas", "agentsBody", "orchPaint",
+    `return (${retryCode});`
+  )(
+    mockApi, mockToast, mockRoute, mockLocation,
+    { tasks: [{ id: "expired-task-1", agent: "claude", prompt: "write summary", model: "sonnet", effort: "high" }] },
+    [], () => null, (x: any) => `${x.kind}:${x.id}`, () => {}, new Set(), "", "", () => {}, () => {}, () => {}
+  );
+
+  // A. Standalone 404 re-dispatch test
+  await retryFn("expired-task-1", "opus", "");
+  expect(toastLogs).toContain("Task session expired. Re-dispatching as a new task…");
+  expect(apiCalls.some((c) => c.endpoint === "/api/run" && c.body.agent === "claude" && c.body.prompt === "write summary" && c.body.model === "opus" && c.body.effort === "high")).toBe(true);
+  expect(mockLocation.hash).toBe("#/t/new-redispatched-task");
+
+  // B. Canvas Tile 404 re-dispatch test (re-keys canvas tile in place)
+  let savedCanvas = false;
+  let paintedCanvas = false;
+  let rekeyedOld = "", rekeyedNew = "";
+  const mockPanes = [{ kind: "task", id: "tile-expired-task" }];
+  const mockSigs = new Set(["task:tile-expired-task"]);
+  let activePane = "task:tile-expired-task";
+
+  const tileRetryFn = new Function(
+    "api", "toast", "route", "location", "S", "orchPanes", "$", "paneKey", "rekey", "orchSigs", "orchActive", "orchMax", "saveCanvas", "agentsBody", "orchPaint",
+    `return (${retryCode});`
+  )(
+    mockApi, mockToast, () => ({ pg: "agents", arg: "" }), mockLocation,
+    { tasks: [{ id: "tile-expired-task", agent: "agy", prompt: "audit security", model: "agy-1", effort: "medium" }] },
+    mockPanes,
+    () => null,
+    (x: any) => `${x.kind}:${x.id}`,
+    (oldK: string, newK: string) => { rekeyedOld = oldK; rekeyedNew = newK; },
+    mockSigs,
+    activePane,
+    "",
+    () => { savedCanvas = true; },
+    () => {},
+    () => { paintedCanvas = true; }
+  );
+
+  await tileRetryFn("tile-expired-task", "agy-2", "task:tile-expired-task", { agent: "agy", prompt: "audit security", effort: "medium" });
+  expect(mockPanes[0].id).toBe("new-redispatched-task");
+  expect(rekeyedOld).toBe("task:tile-expired-task");
+  expect(rekeyedNew).toBe("task:new-redispatched-task");
+  expect(savedCanvas).toBe(true);
+  expect(paintedCanvas).toBe(true);
+  expect(toastLogs).toContain("Switched to agy-2 & retrying in tile");
+
+  // C. Re-dispatch failure recovery test
+  toastLogs.length = 0;
+  await retryFn("fail-dispatch", "m", "", { agent: "fail-dispatch", prompt: "boom" });
+  expect(toastLogs).toContain("Re-dispatch failed: Server out of resources");
+
+  // D. Generic non-404 error handling test
+  toastLogs.length = 0;
+  await retryFn("500-error", "m", "");
+  expect(toastLogs).toContain("Retry failed: 500: internal server error");
+
+  // 2. notes() resilience against missing/deleted or empty files during scan
+  const testGhostPath = `${VAULT}/1 Inbox/ghost-adversarial-test.md`;
+  const testZeroPath = `${VAULT}/1 Inbox/zero-adversarial-test.md`;
+  try {
+    writeFileSync(testGhostPath, "# Ghost Note\nTemporary note to be deleted.");
+    writeFileSync(testZeroPath, ""); // 0-byte empty file
+
+    const resBefore = await fetch(`${BASE}/api`);
+    expect(resBefore.status).toBe(200);
+    const dataBefore = await resBefore.json();
+    expect(dataBefore.notes.some((n: any) => n.path.includes("ghost-adversarial-test.md"))).toBe(true);
+    expect(dataBefore.notes.some((n: any) => n.path.includes("zero-adversarial-test.md"))).toBe(true);
+
+    // Delete the ghost file suddenly
+    rmSync(testGhostPath, { force: true });
+    expect(existsSync(testGhostPath)).toBe(false);
+
+    // Rapid successive requests should never throw or return 500
+    const [res1, res2, res3] = await Promise.all([
+      fetch(`${BASE}/api`),
+      fetch(`${BASE}/api`),
+      fetch(`${BASE}/api`)
+    ]);
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    expect(res3.status).toBe(200);
+
+    const dataAfter = await res1.json();
+    expect(dataAfter.notes.some((n: any) => n.path.includes("ghost-adversarial-test.md"))).toBe(false);
+    // 0-byte file handled safely with basename fallback
+    const zeroNote = dataAfter.notes.find((n: any) => n.path.includes("zero-adversarial-test.md"));
+    expect(zeroNote).toBeDefined();
+    expect(zeroNote.title).toBe("zero-adversarial-test");
+    expect(zeroNote.tags).toEqual([]);
+    expect(zeroNote.links).toEqual([]);
+  } finally {
+    rmSync(testGhostPath, { force: true });
+    rmSync(testZeroPath, { force: true });
+  }
+});
+
 
 
