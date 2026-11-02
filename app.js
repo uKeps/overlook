@@ -1363,7 +1363,7 @@ function agents() {
               ${icon("fold", 11)}
             </button>
           </div>
-          <button type="button" class="btn glass orch-more-btn" data-act="orch-deck-toggle" title="Toggle Role presets, Model &amp; Routines">${icon("fold", 13)} Options</button>
+          <button type="button" class="btn glass orch-more-btn" data-act="orch-deck-toggle" title="Toggle Role presets, Model &amp; Routines"><span>Options</span> ${icon("fold", 11)}</button>
           <button class="btn peach" id="run-submit" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
         </div>
       </div>
