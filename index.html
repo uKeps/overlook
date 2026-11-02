@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Overlook</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='5' fill='%23f4b88f'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -28,9 +28,15 @@
 <div class="dockwrap" id="dockwrap"><button type="button" class="dock-pill" id="dock-pill" aria-label="Show the dock"></button><nav class="dock glass" id="dock" aria-label="Pages"></nav></div>
 
 <dialog id="capture" class="glass">
-  <label for="capture-text">Capture to the daily note</label>
+  <div class="dialog-head">
+    <label for="capture-text">Capture to the daily note</label>
+    <button type="button" class="dialog-close" data-act="capture-close" aria-label="Close">✕</button>
+  </div>
   <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question. Enter saves."></textarea>
-  <small>Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
+  <div class="capture-foot">
+    <small>Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
+    <button type="button" class="btn peach" data-act="capture-save">Save</button>
+  </div>
 </dialog>
 <dialog id="picker" class="glass" aria-label="Choose an image"></dialog>
 <div class="toast glass" id="toast" role="status"></div>
