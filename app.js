@@ -641,6 +641,13 @@ let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdD
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
 const CANVAS_KEY = "overlook.canvas", PANE_MIME = "text/x-overlook-pane";
+const DISMISSED_KEY = "overlook:dismissed-sessions";
+let dismissedSessions = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
+})();
+function saveDismissedSessions() {
+  try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions])); } catch {}
+}
 try {
   const c = JSON.parse(localStorage.getItem(CANVAS_KEY) || "null");
   if (c) { orchPanes = c.panes || []; orchLinks = c.links || []; orchMode = c.mode || "tile"; orchPanX = c.panX ?? 24; orchPanY = c.panY ?? 20; orchZoom = c.zoom || 1; orchSeq = c.seq || 1; }
@@ -648,7 +655,7 @@ try {
 function saveCanvas() {
   try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq })); } catch {}
 }
-const paneKey = (p) => `${p.kind}:${p.id}`;
+const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
 const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
 function updateSelectionUI() {
   const plane = $("#orch-plane");
@@ -893,6 +900,7 @@ function fleetItems() {
     });
   }
   for (const a of S.agents || []) {
+    if (dismissedSessions.has(a.key)) continue;
     seen.add(a.key);
     const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
     items.push({
@@ -902,7 +910,7 @@ function fleetItems() {
     });
   }
   for (const f of S.background || []) {
-    if (seen.has(f.key)) continue;
+    if (seen.has(f.key) || dismissedSessions.has(f.key)) continue;
     const wait = f.state === "blocked" || !!f.needs;
     const act = f.state === "working" || f.state === "running";
     items.push({
@@ -1288,11 +1296,16 @@ function agentsBody() {
   };
   const list = all.filter((x) => orchFilter === "all" || x.group === orchFilter);
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p.kind === "new" || p.kind === "sticky" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p))));
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   document.querySelector('[data-act="orch-rail"]')?.classList.toggle("on", orchRail);
   if (!orchPanes.length) {
     const first = list[0] || all[0];
-    if (first) orchPanes = [ensurePaneRect({ kind: first.kind, id: first.id }, 0)];
+    if (first) {
+      orchPanes = [ensurePaneRect({ kind: first.kind, id: first.id }, 0)];
+    } else {
+      const newId = String(++orchSeq);
+      orchPanes = [ensurePaneRect({ kind: "new", id: newId, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd }, 0)];
+    }
   }
   orchPanes.forEach(ensurePaneRect);
   if (!orchPanes.some((p) => paneKey(p) === orchActive)) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
@@ -1345,7 +1358,10 @@ function agentsBody() {
         </span>
         <span class="pill ${it.peach ? "peach" : ""}">${esc(it.badge)}</span>
       </button>
-      <button type="button" class="orch-pin-btn ${isPin && orchPanes.length > 1 ? "on" : ""}" data-act="orch-pin" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${isPin && orchPanes.length > 1 ? "Remove from workspace" : "Add side-by-side to Split / Canvas"}">${icon(isPin && orchPanes.length > 1 ? "x" : "plus", 13)}</button>
+      <div class="orch-item-actions">
+        <button type="button" class="orch-pin-btn ${isPin && orchPanes.length > 1 ? "on" : ""}" data-act="orch-pin" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${isPin && orchPanes.length > 1 ? "Remove from workspace" : "Add side-by-side to Split / Canvas"}">${icon(isPin && orchPanes.length > 1 ? "x" : "plus", 13)}</button>
+        <button type="button" class="orch-dismiss-btn" data-act="orch-dismiss" data-kind="${it.kind}" data-id="${esc(it.id)}" aria-label="Dismiss chat" title="Dismiss chat">${icon("x", 12)}</button>
+      </div>
     </div>`;
   }).join("") || `<p class="empty">No runs in this view.</p>`;
   $("#orch-ledger-sum").innerHTML = `<span>Vault Ledger</span><small>${D.log.length} runs · ${D.findings.length} findings</small>`;
@@ -1781,11 +1797,13 @@ async function orchSend(p, card) {
 // Model and effort pickers follow the chosen agent: only what agents.json lists for it. Effort levels can differ per model.
 function runOptions(keepModel, p = "run") {
   const r = S.runners?.find((x) => x.id === $(`#${p}-agent`)?.value) || {}, ms = r.models || [], sel = $(`#${p}-model`);
-  if (!keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
-  const es = ms.find((m) => m.id === sel.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
+  if (sel && !keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
+  const es = ms.find((m) => m.id === sel?.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
   const seg = $(`#${p}-effort`);
-  seg.hidden = !es.length;
-  seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
+  if (seg) {
+    seg.hidden = !es.length;
+    seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
+  }
 }
 const runChoice = (p = "run") => ({ agent: $(`#${p}-agent`)?.value, model: $(`#${p}-model`)?.hidden ? undefined : $(`#${p}-model`)?.value, effort: $(`#${p}-effort`)?.hidden ? undefined : $(`#${p}-effort .on`)?.dataset.v });
 // Agent, model and effort pickers; runOptions(false, p) fills the last two for the chosen agent.
@@ -2192,33 +2210,17 @@ function render() {
 }
 
 let captureMode = "daily";
-function populateCaptureAgentOptions() {
-  const agentSel = $("#capture-agent-sel"), modelSel = $("#capture-model-sel");
-  if (!agentSel || !modelSel) return;
+function initCaptureAgent() {
+  const agentSel = $("#capture-agent");
+  if (!agentSel) return;
   const runners = (S.runners || []).filter((r) => r.ready);
-  if (!runners.length) {
-    agentSel.innerHTML = '<option value="">No agents ready</option>';
-    modelSel.hidden = true;
-    return;
-  }
   const cur = agentSel.value;
-  agentSel.innerHTML = runners.map((r) => `<option value="${esc(r.id)}" ${r.id === cur ? "selected" : ""}>${esc(r.name)}</option>`).join("");
-  if (!runners.some((r) => r.id === agentSel.value)) agentSel.value = runners[0].id;
-  updateCaptureModelOptions();
-  agentSel.onchange = updateCaptureModelOptions;
-}
-function updateCaptureModelOptions() {
-  const agentSel = $("#capture-agent-sel"), modelSel = $("#capture-model-sel");
-  if (!agentSel || !modelSel) return;
-  const r = (S.runners || []).find((x) => x.id === agentSel.value) || {};
-  const ms = r.models || [];
-  if (!ms.length) {
-    modelSel.hidden = true;
-    modelSel.innerHTML = "";
-  } else {
-    modelSel.hidden = false;
-    modelSel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label || m.id)}</option>`).join("");
-  }
+  agentSel.innerHTML = (runners.length ? runners : S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("");
+  if (cur && (S.runners || []).some((r) => r.id === cur)) agentSel.value = cur;
+  agentSel.onchange = () => runOptions(false, "capture");
+  const modelSel = $("#capture-model");
+  if (modelSel) modelSel.onchange = () => runOptions(true, "capture");
+  runOptions(false, "capture");
 }
 function setCaptureMode(mode) {
   captureMode = mode;
@@ -2235,7 +2237,7 @@ function setCaptureMode(mode) {
     if (ta) ta.placeholder = "Topic or instructions for the agent… Enter dispatches.";
     if (hint) hint.innerHTML = "Dispatches an agent to research and write a note in your vault.";
     if (btn) btn.textContent = "Dispatch Agent";
-    populateCaptureAgentOptions();
+    initCaptureAgent();
   } else {
     if (ta) ta.placeholder = "An idea, a link, a question. Enter saves.";
     if (hint) hint.innerHTML = `Goes to the daily note for <span id="capture-day">${esc(D?.today || "")}</span>. Your agent processes it later.`;
@@ -2489,6 +2491,54 @@ const ACTIONS = {
     orchSigs.clear();
     agentsBody();
   },
+  "orch-dismiss": async (el) => {
+    const kind = el.dataset.kind, id = el.dataset.id;
+    if (!kind || !id) return;
+    const targetKey = `${kind}:${id}`;
+    orchSelected.delete(targetKey);
+    updateSelectionUI();
+    orchLinks = orchLinks.filter((l) => l.a !== targetKey && l.b !== targetKey);
+    if (kind === "task") {
+      try { await api("/api/task/delete", { id }); } catch (e) { return toast(e.message); }
+      if (S?.tasks) S.tasks = S.tasks.filter((t) => t.id !== id);
+    } else if (kind === "agent") {
+      dismissedSessions.add(id);
+      saveDismissedSessions();
+    }
+    const wasInPanes = orchPanes.some((p) => paneKey(p) === targetKey);
+    if (wasInPanes) {
+      orchPanes = orchPanes.filter((p) => paneKey(p) !== targetKey);
+      const paneKeys = new Set(orchPanes.map(paneKey));
+      orchLinks = orchLinks.filter((l) => paneKeys.has(l.a) && paneKeys.has(l.b));
+      if (orchPanes.length === 0) {
+        const next = fleetItems().find((x) => paneKey(x) !== targetKey);
+        if (next) {
+          const item = { kind: next.kind, id: next.id };
+          if (orchMode === "free") ensurePaneRect(item, 0);
+          orchPanes = [item];
+          orchActive = paneKey(next);
+        } else {
+          const newId = String(++orchSeq);
+          const item = { kind: "new", id: newId, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd };
+          if (orchMode === "free") ensurePaneRect(item, 0);
+          orchPanes = [item];
+          orchActive = `new:${newId}`;
+        }
+      } else if (orchActive === targetKey) {
+        orchActive = paneKey(orchPanes[0]);
+      }
+      if (orchMax === targetKey) orchMax = "";
+      saveCanvas();
+    } else if (orchActive === targetKey) {
+      orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
+      if (orchMax === targetKey) orchMax = "";
+      saveCanvas();
+    }
+    try { S = await api("/api/system"); } catch {}
+    orchSigs.clear();
+    agentsBody();
+    toast("Chat dismissed");
+  },
   open: async (el) => {
     try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
   },
@@ -2511,6 +2561,7 @@ const ACTIONS = {
   reload: () => { const f = $("#svcf"); f.src = f.src; },
   capture: () => {
     setCaptureMode("daily");
+    initCaptureAgent();
     $("#capture-day").textContent = D?.today || "";
     $("#capture").showModal();
     $("#capture-text").focus();
@@ -2522,12 +2573,11 @@ const ACTIONS = {
     const text = ta.value.trim();
     if (!text) return;
     if (captureMode === "agent") {
-      const agent = $("#capture-agent-sel")?.value;
-      const model = $("#capture-model-sel")?.hidden ? undefined : $("#capture-model-sel")?.value;
+      const { agent, model, effort } = runChoice("capture");
       ta.value = "";
       $("#capture").close();
       try {
-        const res = await api("/api/note/agent", { topic: text, agent, model });
+        const res = await api("/api/note/agent", { topic: text, agent, model, effort });
         const taskId = res?.id || res?.taskId;
         if (taskId) {
           toast(`<a href="#/t/${esc(taskId)}">Agent dispatched: "${esc(text)}"</a>`);

@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -581,6 +581,10 @@ async function handle(req: Request, port: number) {
     if (p === "/api/schedule") { const r = addScheduled(ROOT, import.meta.dir, b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/schedule/delete") return json(removeScheduled(import.meta.dir, String(b.id)) && { ok: true });
     if (p === "/api/task/stop") return json(stopTask(String(b.id)) && { ok: true });
+    if (p === "/api/task/delete" || p === "/api/task/dismiss") {
+      if (typeof b.id !== "string" || !b.id.trim()) return new Response("missing id", { status: 400 });
+      return deleteTask(b.id.trim()) ? json({ ok: true }) : new Response("not found", { status: 400 });
+    }
     return new Response("404", { status: 404 });
   }
   if (p === "/api") return json(await state());

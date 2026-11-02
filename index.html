@@ -37,8 +37,9 @@
   </div>
   <div id="capture-agent-panel" hidden>
     <div class="capture-fields-row">
-      <select class="pick" id="capture-agent-sel" aria-label="Agent"></select>
-      <select class="pick" id="capture-model-sel" aria-label="Model"></select>
+      <select class="pick" id="capture-agent" aria-label="Agent"></select>
+      <select class="pick" id="capture-model" aria-label="Model" hidden></select>
+      <div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>
     </div>
   </div>
   <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question. Enter saves." aria-label="Capture text"></textarea>

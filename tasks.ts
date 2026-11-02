@@ -60,6 +60,12 @@ const log = (task: Task, e: Omit<Event, "at">) => { task.events.push({ ...e, at:
 export const taskList = () => [...tasks.values()].reverse().map(({ events, stop, ...t }) => ({ ...t, prompt: clip(t.prompt, 160) }));
 export const getTask = (id: string) => { const t = tasks.get(id); if (!t) return null; const { stop, ...rest } = t; return rest; };
 export const stopTask = (id: string) => { const t = tasks.get(id); if (!t?.stop || t.end) return false; t.stop(); return true; };
+export function deleteTask(id: string): boolean {
+  const t = tasks.get(id);
+  if (!t) return false;
+  if (!t.end) stopTask(id);
+  return tasks.delete(id);
+}
 export const routineRunning = (name: string) => [...tasks.values()].some((t) => t.routine === name && !t.end);
 
 export type RunOpts = { model?: string; effort?: string; routine?: string; cwd?: string; session?: string; role?: string };
@@ -187,9 +193,18 @@ export function retryTask(root: string, dir: string, id: string, opts: { model?:
   const task = tasks.get(id);
   if (!task) return "task not found";
   if (!task.end) return "task is still running";
+  const a = loadAgents(dir).find((x) => x.id === task.agent);
+  const targetModel = opts.model || task.model || undefined;
+  let targetEffort = opts.effort;
+  if (!targetEffort && a) {
+    const ms = models(a);
+    const m = targetModel ? ms.find((x) => x.id === targetModel) : ms[0];
+    const es = m?.efforts ?? efforts(a);
+    if (task.effort && es.includes(task.effort)) targetEffort = task.effort;
+  }
   return runTask(root, dir, task.agent, task.prompt, {
-    model: opts.model || task.model || undefined,
-    effort: opts.effort || task.effort || undefined,
+    model: targetModel,
+    effort: targetEffort,
     cwd: task.cwd,
     session: task.session,
     role: task.role,

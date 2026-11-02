@@ -442,8 +442,9 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); backdrop-filter: blur(4px); }
 .capture-tabs { flex: none; }
 .capture-tabs button { padding: 0 13px; font-size: 12.5px; }
 #capture-agent-panel { margin-bottom: 12px; }
-.capture-fields-row { display: flex; align-items: center; gap: 10px; }
-.capture-fields-row .pick { flex: 1; min-width: 0; }
+.capture-fields-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.capture-fields-row .pick { flex: 1 1 140px; min-width: 0; }
+.capture-fields-row .seg { flex: none; }
 
 /* Quota Exhaustion Alert & Model Switch */
 .quota-alert {
@@ -928,12 +929,27 @@ body.dock-float .orch-shell { height: calc(100dvh - 118px); }
 .orch-info b { font: 500 12.5px/1.35 var(--body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orch-info small { font: 400 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orch-need { font-size: 11px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-.orch-pin-btn {
+.orch-item-actions {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+}
+.orch-pin-btn,
+.orch-dismiss-btn {
   width: 30px; flex: none; display: grid; place-items: center; color: var(--faint);
   border-left: 1px solid transparent; transition: color .15s, background .15s;
 }
-.orch-item:hover .orch-pin-btn, .orch-pin-btn.on { color: var(--muted); border-left-color: var(--line); }
+.orch-item:hover .orch-pin-btn, .orch-pin-btn.on,
+.orch-item:hover .orch-dismiss-btn { color: var(--muted); border-left-color: var(--line); }
 .orch-pin-btn:hover, .orch-pin-btn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.orch-dismiss-btn:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+@media (pointer: coarse) {
+  .orch-pin-btn,
+  .orch-dismiss-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
 
 .orch-ledger { flex: none; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 25%, transparent); }
 .orch-ledger summary {
@@ -1445,6 +1461,19 @@ body.dock-float .orch-shell { height: calc(100dvh - 118px); }
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
+  }
+  .capture-fields-row .pick,
+  .capture-fields-row .seg {
+    width: 100%;
+  }
+  .capture-fields-row .seg button {
+    flex: 1;
+    text-align: center;
+  }
+  .orch-pin-btn,
+  .orch-dismiss-btn {
+    min-width: 40px;
+    min-height: 40px;
   }
   .capture-tabs button {
     padding: 0 10px;

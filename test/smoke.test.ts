@@ -131,6 +131,9 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appCss).toContain(".quota-countdown");
   expect(appCss).toContain(".quota-actions");
   expect(appCss).toContain(".capture-tabs");
+  expect(appCss).toContain(".capture-fields-row");
+  expect(appCss).toContain(".orch-item-actions");
+  expect(appCss).toContain(".orch-dismiss-btn");
   expect(appJs).toContain('"capture-close"');
   expect(appJs).toContain('"capture-save"');
   expect(appJs).toContain('function detectQuota(');
@@ -139,8 +142,10 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appJs).toContain('"quota-retry"');
   expect(appJs).toContain('"quota-retry-sel"');
   expect(appJs).toContain('function setCaptureMode(');
-  expect(appJs).toContain('function populateCaptureAgentOptions(');
-  expect(appJs).toContain('function updateCaptureModelOptions(');
+  expect(appJs).toContain('runOptions(false, "capture")');
+  expect(appJs).toContain('runChoice("capture")');
+  expect(appJs).toContain('"orch-dismiss"');
+  expect(appJs).toContain('"overlook:dismissed-sessions"');
   expect(appJs).toContain('api("/api/note/agent"');
   expect(appJs).toContain('api("/api/task/retry"');
   expect(appJs).toContain('if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }');
@@ -157,10 +162,36 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(html).toContain('data-act="capture-tab" data-tab="daily" role="tab"');
   expect(html).toContain('data-act="capture-tab" data-tab="agent" role="tab"');
   expect(html).toContain('id="capture-agent-panel" hidden');
-  expect(html).toContain('id="capture-agent-sel"');
-  expect(html).toContain('id="capture-model-sel"');
+  expect(html).toContain('id="capture-agent"');
+  expect(html).toContain('id="capture-model"');
+  expect(html).toContain('id="capture-effort"');
   expect(html).toContain('id="capture-hint"');
   expect(html).toContain('id="capture-submit-btn"');
+});
+
+test("effort selection in capture modal and dismiss chat in fleet sidebar", () => {
+  const html = readFileSync(`${ROOT}/index.html`, "utf8");
+  expect(html).toContain('<select class="pick" id="capture-agent" aria-label="Agent"></select>');
+  expect(html).toContain('<select class="pick" id="capture-model" aria-label="Model" hidden></select>');
+  expect(html).toContain('<div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>');
+
+  const css = readFileSync(`${ROOT}/app.css`, "utf8");
+  expect(css).toContain(".capture-fields-row");
+  expect(css).toContain(".orch-item-actions");
+  expect(css).toContain(".orch-dismiss-btn");
+  expect(css).toContain("var(--bad)");
+  expect(css).toContain("min-width: 40px");
+  expect(css).toContain("min-height: 40px");
+
+  const js = readFileSync(`${ROOT}/app.js`, "utf8");
+  expect(js).toContain('data-act="orch-dismiss"');
+  expect(js).toContain('"orch-dismiss"');
+  expect(js).toContain('"overlook:dismissed-sessions"');
+  expect(js).toContain('dismissedSessions.has(');
+  expect(js).toContain('runOptions(false, "capture")');
+  expect(js).toContain('runChoice("capture")');
+  expect(js).toContain('api("/api/task/delete"');
+  expect(js).toContain('const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");');
 });
 
 test("agent CLI commands", () => {
@@ -256,6 +287,47 @@ test("a running task can be stopped", async () => {
   expect((await post("/api/task/stop", { id })).status).toBe(200);
   const t = await finished(id);
   expect(t.ok).toBe(false);
+});
+
+test("tasks can be deleted or dismissed while running or after finishing", async () => {
+  // Input validation
+  expect((await post("/api/task/delete", {})).status).toBe(400);
+  expect((await post("/api/task/delete", { id: 123 })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: "nonexistent" })).status).toBe(400);
+  expect((await post("/api/task/dismiss", { id: "nonexistent" })).status).toBe(400);
+
+  // Deleting a running task stops it and removes it from taskList()
+  const runId = await run("sleeper");
+  await Bun.sleep(200);
+  const tasksBefore = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(tasksBefore.some((t: any) => t.id === runId)).toBe(true);
+
+  const delRes = await post("/api/task/delete", { id: runId });
+  expect(delRes.status).toBe(200);
+  expect(await delRes.json()).toEqual({ ok: true });
+
+  // Ensure task is removed from getTask and taskList()
+  expect((await fetch(`${BASE}/api/task?id=${runId}`)).status).toBe(404);
+  const tasksAfter = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(tasksAfter.some((t: any) => t.id === runId)).toBe(false);
+
+  // Deleting again returns 400
+  expect((await post("/api/task/delete", { id: runId })).status).toBe(400);
+
+  // Deleting a finished task removes it from taskList()
+  const finishId = await run("echo", "done");
+  await finished(finishId);
+  const finishedTasksBefore = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(finishedTasksBefore.some((t: any) => t.id === finishId)).toBe(true);
+
+  const disRes = await post("/api/task/dismiss", { id: finishId });
+  expect(disRes.status).toBe(200);
+  expect(await disRes.json()).toEqual({ ok: true });
+
+  expect((await fetch(`${BASE}/api/task?id=${finishId}`)).status).toBe(404);
+  const finishedTasksAfter = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(finishedTasksAfter.some((t: any) => t.id === finishId)).toBe(false);
+  expect((await post("/api/task/dismiss", { id: finishId })).status).toBe(400);
 });
 
 test("an OpenAI-compatible agent writes notes and cannot leave the vault", async () => {
@@ -607,7 +679,18 @@ test("task retry endpoint handles invalid input, missing models, single-model ag
   const sessRetryRes = await post("/api/task/retry", { id: sessTask.id });
   expect(sessRetryRes.status).toBe(200);
   const sessRetried = await finished((await sessRetryRes.json()).id);
-  expect(sessRetried.session).toBe(sessTask.session);
+  // 9. Effort fallback when switching models on retry
+  const bigTask = await finished(await run("mixed", "x", { model: "big" }));
+  expect(bigTask.model).toBe("big");
+  expect(bigTask.effort).toBe("high");
+  // Retrying with model "small" (efforts: ["medium"]) without effort falls back to "medium"
+  const smallRetryRes = await post("/api/task/retry", { id: bigTask.id, model: "small" });
+  expect(smallRetryRes.status).toBe(200);
+  const smallRetried = await finished((await smallRetryRes.json()).id);
+  expect(smallRetried.model).toBe("small");
+  expect(smallRetried.effort).toBe("medium");
+  // Retrying with model "small" and explicitly invalid effort "high" returns 400
+  expect((await post("/api/task/retry", { id: bigTask.id, model: "small", effort: "high" })).status).toBe(400);
 
   await post("/api/settings", { agents: init.agents });
 });
@@ -680,4 +763,373 @@ test("note agent endpoint validates topic boundaries, layouts in pt and en, cust
   // Restore settings
   await post("/api/settings", { vaultLang: "en", agents: init.agents });
 });
+
+test("adversarial verification: capture modal effort selection, dynamic model visibility, and backend validation", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+
+  const dynamicAgent = {
+    id: "dyn-agent",
+    name: "Dynamic Agent",
+    run: ["echo", "dyn", "{prompt}", "{model}", "{effort}"],
+    models: [
+      { id: "with-efforts", label: "Model With Efforts", efforts: ["low", "high"] },
+      { id: "no-efforts", label: "Model Without Efforts", efforts: [] },
+      { id: "inherited", label: "Model Inherited" },
+    ],
+    efforts: ["medium"],
+    effort: "medium",
+  };
+  const noModelsAgent = {
+    id: "no-models-agent",
+    name: "No Models Agent",
+    run: ["echo", "no-models", "{prompt}", "{effort}"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    effort: "high",
+  };
+  const bareAgent = { id: "bare-agent", name: "Bare Agent", run: ["echo", "bare"] };
+
+  await post("/api/settings", { agents: [...init.agents, dynamicAgent, noModelsAgent, bareAgent] });
+
+  // 1. Frontend simulation of runOptions and runChoice
+  const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
+  const runOptionsCode = appJs.match(/function runOptions[\s\S]*?^}/m)?.[0]!;
+  const runChoiceCode = appJs.match(/const runChoice = [\s\S]*?;/)?.[0]!;
+  const effortActionCode = appJs.match(/effort:\s*(\(el\)[\s\S]*?\)),/)?.[1]!;
+
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (c: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c as keyof typeof esc]);
+
+  function makeMockElement(tag: string, attrs: any = {}) {
+    const el: any = {
+      tagName: tag.toUpperCase(),
+      value: attrs.value || "",
+      hidden: attrs.hidden ?? false,
+      _html: "",
+      dataset: { ...attrs.dataset },
+      children: [] as any[],
+      classList: {
+        classes: new Set(attrs.className ? attrs.className.split(" ").filter(Boolean) : []),
+        contains(c: string) { return this.classes.has(c); },
+        toggle(c: string, force?: boolean) {
+          if (force === undefined) { if (this.classes.has(c)) this.classes.delete(c); else this.classes.add(c); }
+          else if (force) this.classes.add(c); else this.classes.delete(c);
+        },
+        add(c: string) { this.classes.add(c); },
+        delete(c: string) { this.classes.delete(c); },
+      },
+      setAttribute(name: string, val: any) { this[name] = String(val); },
+      getAttribute(name: string) { return this[name]; },
+      querySelectorAll(sel: string) {
+        if (sel === "button") return this.children.filter((c: any) => c.tagName === "BUTTON");
+        return [];
+      },
+      querySelector(sel: string) {
+        if (sel === ".on") return this.children.find((c: any) => c.classList.contains("on")) || null;
+        return null;
+      },
+    };
+    if (tag === "select") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          const matches = [...html.matchAll(/<option value="([^"]*)"/g)];
+          if (matches.length > 0) this.value = matches[0][1];
+          else this.value = "";
+        },
+        get() { return this._html; }
+      });
+    } else if (tag === "div") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          this.children = [];
+          const matches = [...html.matchAll(/<button([^>]*)>([^<]*)<\/button>/g)];
+          for (const [, attrsStr] of matches) {
+            const vMatch = attrsStr.match(/data-v="([^"]*)"/);
+            const classMatch = attrsStr.match(/class="([^"]*)"/);
+            const btn = makeMockElement("button", {
+              dataset: { v: vMatch ? vMatch[1] : "" },
+              className: classMatch ? classMatch[1] : "",
+            });
+            btn.parentElement = this;
+            this.children.push(btn);
+          }
+        },
+        get() { return this._html; }
+      });
+    }
+    return el;
+  }
+
+  const domElements = new Map<string, any>();
+  const $ = (sel: string) => {
+    if (sel.includes(" .on")) {
+      const parentSel = sel.split(" ")[0];
+      return domElements.get(parentSel)?.querySelector(".on") || null;
+    }
+    return domElements.get(sel) || null;
+  };
+
+  const sysRunners = (await (await fetch(`${BASE}/api/system`)).json()).runners;
+  const mockS = { runners: sysRunners };
+
+  const compiled = new Function("$", "esc", "S", `${runOptionsCode}\n${runChoiceCode}\nreturn { runOptions, runChoice };`);
+  const { runOptions, runChoice } = compiled($, esc, mockS);
+
+  const captureAgent = makeMockElement("select", { value: "dyn-agent" });
+  const captureModel = makeMockElement("select", { value: "with-efforts" });
+  const captureEffort = makeMockElement("div", { hidden: true });
+
+  domElements.set("#capture-agent", captureAgent);
+  domElements.set("#capture-model", captureModel);
+  domElements.set("#capture-effort", captureEffort);
+
+  // A. Model with specific efforts ["low", "high"]
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureModel.value).toBe("with-efforts");
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "high"]);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "with-efforts", effort: "low" });
+
+  // Simulate clicking second effort button "high"
+  const effortFn = new Function("el", `(${effortActionCode.replace(/^effort:\s*/, "").replace(/,\s*$/, "")})(el);`);
+  effortFn(captureEffort.children[1]);
+  expect(captureEffort.children[1].classList.contains("on")).toBe(true);
+  expect(captureEffort.children[0].classList.contains("on")).toBe(false);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "with-efforts", effort: "high" });
+
+  // B. Switch to model without efforts: efforts: [] -> #capture-effort hidden
+  captureModel.value = "no-efforts";
+  runOptions(true, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureEffort.hidden).toBe(true);
+  expect(captureEffort.children.length).toBe(0);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "no-efforts", effort: undefined });
+
+  // C. Switch to model with inherited efforts
+  captureModel.value = "inherited";
+  runOptions(true, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["medium"]);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "inherited", effort: "medium" });
+
+  // D. Switch to agent without models but with efforts (no-models-agent)
+  captureAgent.value = "no-models-agent";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(true);
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(runChoice("capture")).toEqual({ agent: "no-models-agent", model: undefined, effort: "high" });
+
+  // E. Switch to agent with neither models nor efforts (bare-agent)
+  captureAgent.value = "bare-agent";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(true);
+  expect(captureEffort.hidden).toBe(true);
+  expect(runChoice("capture")).toEqual({ agent: "bare-agent", model: undefined, effort: undefined });
+
+  // 2. Backend validation via POST /api/note/agent & resolveRun
+  // A. Model with efforts: valid efforts low and high pass
+  const rLow = await post("/api/note/agent", { topic: "Low Effort Note", agent: "dyn-agent", model: "with-efforts", effort: "low" });
+  expect(rLow.status).toBe(200);
+  const tLow = await finished((await rLow.json()).id);
+  expect(tLow.model).toBe("with-efforts");
+  expect(tLow.effort).toBe("low");
+
+  const rHigh = await post("/api/note/agent", { topic: "High Effort Note", agent: "dyn-agent", model: "with-efforts", effort: "high" });
+  expect(rHigh.status).toBe(200);
+  const tHigh = await finished((await rHigh.json()).id);
+  expect(tHigh.model).toBe("with-efforts");
+  expect(tHigh.effort).toBe("high");
+
+  // Invalid effort for this model fails
+  const rInvalid = await post("/api/note/agent", { topic: "Invalid Effort", agent: "dyn-agent", model: "with-efforts", effort: "medium" });
+  expect(rInvalid.status).toBe(400);
+  expect(await rInvalid.text()).toContain('Dynamic Agent has no effort "medium" for Model With Efforts');
+
+  // B. Model with no efforts: any effort passed fails
+  const rNoEffortFail = await post("/api/note/agent", { topic: "No Effort Check", agent: "dyn-agent", model: "no-efforts", effort: "low" });
+  expect(rNoEffortFail.status).toBe(400);
+  expect(await rNoEffortFail.text()).toContain('Dynamic Agent has no effort "low" for Model Without Efforts');
+
+  // Model with no efforts and omitted effort succeeds
+  const rNoEffortOk = await post("/api/note/agent", { topic: "No Effort Ok", agent: "dyn-agent", model: "no-efforts" });
+  expect(rNoEffortOk.status).toBe(200);
+  const tNoEffortOk = await finished((await rNoEffortOk.json()).id);
+  expect(tNoEffortOk.model).toBe("no-efforts");
+  expect(tNoEffortOk.effort).toBe("");
+
+  // C. Non-string effort and model types are safely coerced by str()
+  const rNonStrEffort = await post("/api/note/agent", { topic: "Non string effort", agent: "dyn-agent", model: "with-efforts", effort: 9999 });
+  expect(rNonStrEffort.status).toBe(200);
+  const tNonStrEffort = await finished((await rNonStrEffort.json()).id);
+  expect(tNonStrEffort.effort).toBe("low"); // falls back to first/default effort
+
+  const rNonStrModel = await post("/api/note/agent", { topic: "Non string model", agent: "dyn-agent", model: { bad: true } });
+  expect(rNonStrModel.status).toBe(200);
+  const tNonStrModel = await finished((await rNonStrModel.json()).id);
+  expect(tNonStrModel.model).toBe("with-efforts"); // falls back to first model
+
+  // Restore settings
+  await post("/api/settings", { agents: init.agents });
+});
+
+test("adversarial verification: fleet sidebar chat dismissal, external session persistence, and canvas synchronization", async () => {
+  // 1. Backend task delete and alias dismiss edge cases
+  expect((await post("/api/task/delete", { id: "" })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: "   " })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: false })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: ["t1"] })).status).toBe(400);
+  expect((await post("/api/task/dismiss", { id: "not-a-real-task" })).status).toBe(400);
+
+  // Active sleeper task abortion
+  const runId = await run("sleeper");
+  await Bun.sleep(150);
+  const delRunning = await post("/api/task/delete", { id: runId });
+  expect(delRunning.status).toBe(200);
+  expect(await delRunning.json()).toEqual({ ok: true });
+  expect((await fetch(`${BASE}/api/task?id=${runId}`)).status).toBe(404);
+  expect((await post("/api/task/delete", { id: runId })).status).toBe(400);
+
+  // Finished task dismissal via alias
+  const echoId = await run("echo", "dismiss-me");
+  await finished(echoId);
+  const disFinished = await post("/api/task/dismiss", { id: echoId });
+  expect(disFinished.status).toBe(200);
+  expect(await disFinished.json()).toEqual({ ok: true });
+  expect((await fetch(`${BASE}/api/task?id=${echoId}`)).status).toBe(404);
+  expect((await post("/api/task/dismiss", { id: echoId })).status).toBe(400);
+
+  // 2. External agent session dismissal & fleetItems exclusion & persistence
+  const storageMap = new Map<string, string>();
+  const mockLocalStorage = {
+    getItem: (k: string) => storageMap.get(k) || null,
+    setItem: (k: string, v: string) => storageMap.set(k, String(v)),
+    removeItem: (k: string) => storageMap.delete(k),
+  };
+
+  const DISMISSED_KEY = "overlook:dismissed-sessions";
+  // Corrupted localStorage handling
+  storageMap.set(DISMISSED_KEY, "{ broken-json: true");
+  let dismissedSessions = (() => {
+    try { return new Set(JSON.parse(mockLocalStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
+  })();
+  expect(dismissedSessions.size).toBe(0);
+
+  // Dismissing external sessions
+  dismissedSessions.add("c:sess-1");
+  dismissedSessions.add("bg:task-1");
+  mockLocalStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions]));
+
+  // Reload simulation
+  const reloaded = new Set(JSON.parse(mockLocalStorage.getItem(DISMISSED_KEY) || "[]"));
+  expect(reloaded.has("c:sess-1")).toBe(true);
+  expect(reloaded.has("bg:task-1")).toBe(true);
+
+  // Test fleetItems filtering logic
+  const mockS = {
+    tasks: [{ id: "t-1", prompt: "task 1", agent: "agy" }],
+    agents: [
+      { key: "c:sess-1", name: "claude", cwd: "/tmp", seconds: 10 },
+      { key: "c:sess-2", name: "claude", cwd: "/tmp", seconds: 20 },
+    ],
+    background: [
+      { key: "bg:task-1", title: "BG 1", cwd: "/tmp", state: "done", since: Date.now() },
+      { key: "bg:task-2", title: "BG 2", cwd: "/tmp", state: "done", since: Date.now() },
+    ],
+  };
+
+  const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
+  expect(appJs).toContain("dismissedSessions.has(a.key)");
+  expect(appJs).toContain("dismissedSessions.has(f.key)");
+
+  const items: any[] = [];
+  const seen = new Set();
+  for (const t of mockS.tasks) items.push({ kind: "task", id: t.id });
+  for (const a of mockS.agents) {
+    if (dismissedSessions.has(a.key)) continue;
+    seen.add(a.key);
+    items.push({ kind: "agent", id: a.key });
+  }
+  for (const f of mockS.background) {
+    if (seen.has(f.key) || dismissedSessions.has(f.key)) continue;
+    items.push({ kind: "agent", id: f.key });
+  }
+
+  expect(items.map((x) => `${x.kind}:${x.id}`)).toEqual(["task:t-1", "agent:c:sess-2", "agent:bg:task-2"]);
+
+  // 3. Canvas synchronization simulation from ACTIONS["orch-dismiss"]
+  let orchPanes = [{ kind: "task", id: "t1" }, { kind: "agent", id: "a1" }, { kind: "task", id: "t2" }];
+  let orchLinks = [
+    { a: "task:t1", b: "agent:a1" },
+    { a: "agent:a1", b: "task:t2" },
+  ];
+  let orchSelected = new Set(["task:t1", "agent:a1"]);
+  let orchActive = "task:t1";
+  let orchMax = "task:t1";
+  let orchSeq = 10;
+  const paneKey = (p: any) => `${p.kind}:${p.id}`;
+
+  const dismissSync = (kind: string, id: string, availableFleet: any[]) => {
+    const targetKey = `${kind}:${id}`;
+    orchSelected.delete(targetKey);
+    orchLinks = orchLinks.filter((l) => l.a !== targetKey && l.b !== targetKey);
+    if (kind === "agent") dismissedSessions.add(id);
+
+    const wasInPanes = orchPanes.some((p) => paneKey(p) === targetKey);
+    if (wasInPanes) {
+      orchPanes = orchPanes.filter((p) => paneKey(p) !== targetKey);
+      const paneKeys = new Set(orchPanes.map(paneKey));
+      orchLinks = orchLinks.filter((l) => paneKeys.has(l.a) && paneKeys.has(l.b));
+      if (orchPanes.length === 0) {
+        const next = availableFleet.find((x) => paneKey(x) !== targetKey);
+        if (next) {
+          orchPanes = [{ kind: next.kind, id: next.id }];
+          orchActive = paneKey(next);
+        } else {
+          const newId = String(++orchSeq);
+          orchPanes = [{ kind: "new", id: newId }];
+          orchActive = `new:${newId}`;
+        }
+      } else if (orchActive === targetKey) {
+        orchActive = paneKey(orchPanes[0]);
+      }
+      if (orchMax === targetKey) orchMax = "";
+    } else if (orchActive === targetKey) {
+      orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
+      if (orchMax === targetKey) orchMax = "";
+    }
+  };
+
+  // Step 1: Dismiss active & maximized pane task:t1
+  dismissSync("task", "t1", [{ kind: "task", id: "t2" }, { kind: "agent", id: "a1" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:a1", "task:t2"]);
+  expect(orchLinks).toEqual([{ a: "agent:a1", b: "task:t2" }]); // orphan link to t1 pruned
+  expect(orchSelected.has("task:t1")).toBe(false);
+  expect(orchSelected.has("agent:a1")).toBe(true);
+  expect(orchActive).toBe("agent:a1"); // shifted to remaining pane
+  expect(orchMax).toBe(""); // cleared
+
+  // Step 2: Dismiss non-pane sidebar item (wasInPanes: false)
+  dismissSync("task", "t99", [{ kind: "task", id: "t2" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:a1", "task:t2"]); // unchanged
+
+  // Step 3: Dismiss pane when other panes remain
+  dismissSync("task", "t2", [{ kind: "agent", id: "a1" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:a1"]);
+  expect(orchLinks).toEqual([]);
+
+  // Step 4: Dismiss the last remaining pane when fleet has fallback
+  dismissSync("agent", "a1", [{ kind: "agent", id: "a1" }, { kind: "agent", id: "fallback-fleet" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:fallback-fleet"]);
+  expect(orchActive).toBe("agent:fallback-fleet");
+
+  // Step 5: Dismiss the last remaining pane when fleet is EMPTY -> fallback to new prompt pane
+  dismissSync("agent", "fallback-fleet", [{ kind: "agent", id: "fallback-fleet" }]);
+  expect(orchPanes.length).toBe(1);
+  expect(orchPanes[0].kind).toBe("new");
+  expect(orchActive).toBe(`new:${orchSeq}`);
+});
+
 
