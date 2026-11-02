@@ -1775,4 +1775,41 @@ test("adversarial verification: embedded canvas terminal, session management, cd
   expect(appCss).toContain(".orch-fleet-quick-act");
 });
 
+test("adversarial verification: canvas multiselect deletion via Backspace/Delete, traffic lights unpin, and edge handle isolation", async () => {
+  // 1. Verify terminal session create and close API contract
+  const createRes = await post("/api/terminal/session/create", { id: "test_term_multisel", shell: "bash", cwd: REPO });
+  expect(createRes.status).toBe(200);
+  const createJson = (await createRes.json()) as any;
+  expect(createJson.ok).toBe(true);
+  expect(createJson.session.id).toBe("test_term_multisel");
+
+  const closeRes = await post("/api/terminal/session/close", { id: "test_term_multisel" });
+  expect(closeRes.status).toBe(200);
+  const closeJson = (await closeRes.json()) as any;
+  expect(closeJson.ok).toBe(true);
+
+  // 2. Verify frontend multiselect deletion and traffic lights isolation
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+
+  // Multiselect & Backspace/Delete handling
+  expect(appJs).toContain("deleteSelectedPanes");
+  expect(appJs).toContain('api("/api/terminal/session/close", { id: pane.id })');
+  expect(appJs).toContain('e.key === "Delete" || e.key === "Backspace"');
+  expect(appJs).toContain("isEditingText");
+  expect(appJs).toContain("ghostty-cli-input");
+
+  // Traffic lights unpin & empty canvas protection
+  expect(appJs).toContain('if (!orchPanes.length && orchMode !== "free")');
+  expect(appJs).toContain('.dot, .orch-resize');
+  expect(appJs).toContain('if (c.length === 2) r.dataset.corner = c;');
+
+  // CSS layer hierarchy and handle isolation
+  expect(appCss).toContain(".ghostty-traffic-lights .dot");
+  expect(appCss).toContain("z-index: 35");
+  expect(appCss).toContain('.orch-pane[data-kind="terminal"] .orch-resize.nw::after');
+  expect(appCss).toContain("display: none !important");
+  expect(appCss).toContain(".orch-resize.e::after, .orch-resize.w::after");
+});
+
 

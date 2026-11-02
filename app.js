@@ -790,6 +790,8 @@ function mountTerminalPane(card, p) {
     card.dataset.termBound = "1";
     window.addEventListener("keydown", (e) => {
       if (orchActive !== paneKey(p)) return;
+      if (orchSelected.size > 1) return;
+      if ((e.key === "Backspace" || e.key === "Delete") && orchSelected.size > 0) return;
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
       if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter")) {
@@ -1044,13 +1046,22 @@ function updateSelectionUI() {
 function deleteSelectedPanes() {
   if (!orchSelected.size) return;
   const count = orchSelected.size;
+  for (const k of orchSelected) {
+    const pane = orchPanes.find((p) => paneKey(p) === k);
+    if (pane && pane.kind === "terminal") {
+      api("/api/terminal/session/close", { id: pane.id }).catch(() => {});
+      termPanesState.delete(pane.id);
+    }
+  }
   orchPanes = orchPanes.filter((p) => !orchSelected.has(paneKey(p)));
   orchLinks = orchLinks.filter((l) => !orchSelected.has(l.a) && !orchSelected.has(l.b));
   if (orchSelected.has(orchActive)) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
   orchSelected.clear();
-  toast(`Removed ${count} item${count > 1 ? "s" : ""} from Canvas`);
+  updateSelectionUI();
+  toast(`Closed ${count} selected pane${count > 1 ? "s" : ""}`);
   saveCanvas();
   orchSigs.clear();
+  agentsBody();
   orchPaint(true);
 }
 
@@ -1593,9 +1604,11 @@ function bindPaneDragResize(card, p) {
     if (!r) {
       r = document.createElement("div");
       r.className = `orch-resize ${c}`;
-      r.dataset.corner = c;
+      if (c.length === 2) r.dataset.corner = c;
       r.title = c.length === 1 ? "Drag edge to resize" : "Drag corner to resize";
       card.appendChild(r);
+    } else if (c.length === 1 && r.dataset.corner) {
+      delete r.dataset.corner;
     }
     r.addEventListener("pointerdown", (e) => {
       if (orchMode !== "free" || orchMax) return;
@@ -1700,7 +1713,7 @@ function agentsBody() {
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
   orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   document.querySelector('[data-act="orch-rail"]')?.classList.toggle("on", orchRail);
-  if (!orchPanes.length) {
+  if (!orchPanes.length && orchMode !== "free") {
     const first = list[0] || all[0];
     if (first) {
       orchPanes = [ensurePaneRect({ kind: first.kind, id: first.id }, 0)];
@@ -2056,7 +2069,7 @@ async function orchPaint(force) {
         <div class="orch-resize se" data-corner="se" title="Drag corner to resize"></div>
         <div class="orch-port" title="Drag to connect to another card (provides context)">●</div>`;
       card.addEventListener("pointerdown", (e) => {
-        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port")) return;
+        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot")) return;
         if (e.shiftKey || e.metaKey || e.ctrlKey) {
           if (orchSelected.has(key)) orchSelected.delete(key);
           else orchSelected.add(key);
@@ -3200,11 +3213,19 @@ const ACTIONS = {
   "orch-unpin": (el) => {
     const k = el.dataset.key;
     orchMax = "";
+    const pane = orchPanes.find((p) => paneKey(p) === k);
+    if (pane && pane.kind === "terminal") {
+      api("/api/terminal/session/close", { id: pane.id }).catch(() => {});
+      termPanesState.delete(pane.id);
+    }
     orchPanes = orchPanes.filter((p) => paneKey(p) !== k);
+    orchSelected.delete(k);
+    updateSelectionUI();
     if (orchActive === k) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
     saveCanvas();
     orchSigs.clear();
     agentsBody();
+    orchPaint(true);
   },
   "orch-dismiss": async (el) => {
     const kind = el.dataset.kind, id = el.dataset.id;
@@ -3370,8 +3391,11 @@ document.addEventListener("keydown", (e) => {
     updateSelectionUI();
     return;
   }
-  if ((e.key === "Delete" || e.key === "Backspace") && orchSelected.size > 0 && route().pg === "agents" && orchMode === "free" && !orchMax) {
-    if (!e.target.closest("input, textarea, select, [contenteditable]")) {
+  if ((e.key === "Delete" || e.key === "Backspace") && orchSelected.size > 0 && route().pg === "agents" && !orchMax) {
+    const isEditingText = e.target.closest("textarea, select, [contenteditable]") ||
+      (e.target.closest("input") && !e.target.classList.contains("ghostty-cli-input")) ||
+      (e.target.classList?.contains("ghostty-cli-input") && e.target.value.length > 0 && orchSelected.size <= 1);
+    if (!isEditingText) {
       e.preventDefault();
       deleteSelectedPanes();
       return;
