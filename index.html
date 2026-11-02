@@ -37,8 +37,14 @@
   </div>
   <div class="capture-agent-panel" id="capture-agent-panel" hidden>
     <div class="capture-fields-row capture-agent-row">
-      <select class="pick" id="capture-agent" aria-label="Agent"></select>
-      <select class="pick" id="capture-model" aria-label="Model" hidden></select>
+      <div class="capture-field">
+        <label class="capture-field-label" for="capture-agent">Agent</label>
+        <select class="pick" id="capture-agent" aria-label="Agent"></select>
+      </div>
+      <div class="capture-field" id="capture-model-wrap">
+        <label class="capture-field-label" for="capture-model">Model</label>
+        <select class="pick" id="capture-model" aria-label="Model" hidden></select>
+      </div>
     </div>
     <div class="capture-effort-row" id="capture-effort-row">
       <span class="capture-effort-label">Effort</span>

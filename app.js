@@ -1828,6 +1828,10 @@ function runOptions(keepModel, p = "run") {
     seg.hidden = !es.length;
     seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
   }
+  const mWrap = $(`#${p}-model-wrap`);
+  if (mWrap) mWrap.hidden = !ms.length;
+  const eRow = $(`#${p}-effort-row`);
+  if (eRow) eRow.hidden = !es.length;
 }
 const runChoice = (p = "run") => ({ agent: $(`#${p}-agent`)?.value, model: $(`#${p}-model`)?.hidden ? undefined : $(`#${p}-model`)?.value, effort: $(`#${p}-effort`)?.hidden ? undefined : $(`#${p}-effort .on`)?.dataset.v });
 // Agent, model and effort pickers; runOptions(false, p) fills the last two for the chosen agent.

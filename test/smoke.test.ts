@@ -1250,17 +1250,17 @@ test("adversarial verification: capture modal 2-tier layout, effort switching, a
   expect(html).toContain('<span class="capture-effort-label">Effort</span>');
   expect(html).toContain('<div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>');
 
-  // 2. CSS Desktop layout rules
-  expect(css).toContain("display: flex;\n  flex-direction: column;\n  gap: 10px;\n  margin-bottom: 12px;");
+  // 2. CSS Desktop layout rules: standardized 2-tier layout with micro-labels and 100% width controls
+  expect(css).toContain(".capture-agent-panel,\n#capture-agent-panel {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  margin-bottom: 14px;\n  padding: 12px 14px;");
   // Row 1: 2 equal columns (1fr 1fr), collapsing to 1fr when model is hidden
-  expect(css).toContain(".capture-agent-row,\n.capture-fields-row {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 8px;\n  align-items: center;\n}");
+  expect(css).toContain(".capture-agent-row,\n.capture-fields-row {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 10px;");
   expect(css).toContain(".capture-agent-row:has(#capture-model[hidden]),\n.capture-fields-row:has(#capture-model[hidden]) {\n  grid-template-columns: 1fr;\n}");
   expect(css).toContain(".capture-agent-row .pick,\n.capture-fields-row .pick {\n  width: 100%;\n  min-width: 0;\n}");
-  // Row 2: Effort label + Segmented control with space-between
-  expect(css).toContain(".capture-effort-row,\n#capture-effort-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  min-height: 34px;\n}");
+  // Row 2: Standardized effort row with full-width segmented control and distributed buttons
+  expect(css).toContain(".capture-effort-row,\n#capture-effort-row {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;");
   expect(css).toContain(".capture-effort-row:has(#capture-effort[hidden]),\n#capture-effort-row:has(#capture-effort[hidden]) {\n  display: none;\n}");
-  expect(css).toContain(".capture-effort-row .seg,\n#capture-effort-row .seg {\n  display: inline-flex;\n  flex: none;\n}");
-  expect(css).toContain(".capture-effort-row .seg button,\n#capture-effort-row .seg button {\n  min-width: 44px;\n  text-align: center;\n  justify-content: center;\n}");
+  expect(css).toContain(".capture-effort-row .seg,\n#capture-effort-row .seg,\n.capture-effort-seg {\n  display: flex;\n  width: 100%;\n}");
+  expect(css).toContain(".capture-effort-row .seg button,\n#capture-effort-row .seg button,\n.capture-effort-seg button {\n  flex: 1;\n  min-width: 0;\n  text-align: center;\n  justify-content: center;");
 
   // 3. CSS Mobile responsive behavior (@media max-width: 640px)
   expect(css).toContain(".capture-agent-row,\n  .capture-fields-row {\n    grid-template-columns: 1fr;\n    gap: 8px;\n  }");
