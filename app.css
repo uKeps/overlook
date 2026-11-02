@@ -980,12 +980,17 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 .orch-term-view {
   flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: #090a0d; border-radius: 8px; margin: 6px 10px 8px;
-  border: 1px solid rgba(255, 255, 255, .06); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .4);
+  border: 1px solid rgba(255, 255, 255, .08); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .45);
+  cursor: text; transition: border-color .15s, box-shadow .15s;
+}
+.orch-pane[data-kind="terminal"].active .orch-term-view {
+  border-color: color-mix(in srgb, var(--accent) 50%, rgba(255, 255, 255, .12));
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, .55), 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .orch-term-output {
   flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 12px; margin: 0;
   font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  color: #abb2bf; white-space: pre-wrap; word-break: break-all;
+  color: #abb2bf; white-space: pre-wrap; word-break: break-all; cursor: text;
 }
 .orch-term-output::-webkit-scrollbar { width: 6px; }
 .orch-term-output::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 3px; }
@@ -1000,7 +1005,7 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 .orch-term-input-bar {
   display: flex; align-items: center; gap: 6px; padding: 6px 10px;
   background: rgba(255, 255, 255, .03); border-top: 1px solid rgba(255, 255, 255, .06);
-  font: 12.5px ui-monospace, SFMono-Regular, monospace;
+  font: 12.5px ui-monospace, SFMono-Regular, monospace; cursor: text;
 }
 .orch-term-input-bar .orch-term-prompt {
   color: var(--accent); font-weight: 600; white-space: nowrap; user-select: none;
@@ -1008,7 +1013,7 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
 }
 .orch-term-input {
   flex: 1; min-width: 0; background: transparent; border: none; outline: none;
-  color: #fff; font: inherit; font-size: 12.5px; caret-color: var(--accent);
+  color: #fff; font: inherit; font-size: 12.5px; caret-color: var(--accent); cursor: text;
 }
 .orch-term-input::placeholder { color: rgba(255, 255, 255, .25); font-size: 11.5px; }
 .orch-term-ctrl-c { height: 24px; padding: 0 6px; font: 600 10.5px var(--mono); color: var(--muted); border-radius: 5px; }

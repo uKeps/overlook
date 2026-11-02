@@ -1760,9 +1760,11 @@ test("adversarial verification: embedded canvas terminal, session management, cd
   expect(appJs).toContain("mountTerminalPane");
   expect(appJs).toContain('"term-canvas"');
   expect(appJs).toContain('"term-new-pane"');
+  expect(appJs).toContain('"term-launch-app"');
   expect(appJs).toContain('"term-close-session"');
   expect(appJs).toContain('["terminals", "Terminals"]');
   expect(appJs).toContain("ansiToHtml");
+  expect(appJs).toContain("focusInput");
   expect(appJs).not.toMatch(/\bROOT\b/);
   expect(appJs.indexOf("const cwdLabel =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));
   expect(appJs.indexOf("const paneKey =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));

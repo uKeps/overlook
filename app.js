@@ -736,10 +736,11 @@ function mountTerminalPane(card, p) {
   if (!feed) return;
   const viewId = `term-view-${p.id}`;
   let view = feed.querySelector(`#${viewId}`);
+  const emuName = (p.emulator || prefTerm) === "kitty" ? "Kitty" : "Ghostty";
   if (!view) {
     feed.innerHTML = `
-      <div class="orch-term-view" id="${viewId}">
-        <pre class="orch-term-output"></pre>
+      <div class="orch-term-view" id="${viewId}" title="Click anywhere to type">
+        <pre class="orch-term-output" tabindex="0"></pre>
         <form class="orch-term-input-bar">
           <span class="orch-term-prompt">${esc(cwdLabel(p.cwd))} ❯</span>
           <input type="text" class="orch-term-input" placeholder="Type command… (Enter to run, ↑/↓ history, Ctrl+C interrupt)" autocomplete="off" spellcheck="false" />
@@ -755,11 +756,37 @@ function mountTerminalPane(card, p) {
   const input = view.querySelector(".orch-term-input");
   const promptSpan = view.querySelector(".orch-term-prompt");
 
+  const focusInput = () => {
+    if (!input) return;
+    input.disabled = false;
+    input.focus();
+  };
+
+  view.onclick = (e) => {
+    if (!e.target.closest("button, a")) focusInput();
+  };
+  out.onclick = () => focusInput();
+  card.onclick = (e) => {
+    if (!e.target.closest("button, a, select, textarea, .orch-resize, .orch-port")) focusInput();
+  };
+
+  if (!card.dataset.termBound) {
+    card.dataset.termBound = "1";
+    window.addEventListener("keydown", (e) => {
+      if (orchActive !== paneKey(p)) return;
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter")) {
+        focusInput();
+      }
+    });
+  }
+
   if (!termPanesState.has(p.id)) {
     termPanesState.set(p.id, {
       history: [],
       historyIdx: 0,
-      lines: [`<div class="orch-term-line system">Overlook Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || orchCwd || "")}</div><div class="orch-term-line system">Type commands, press Enter to run, ↑/↓ for history.</div>`],
+      lines: [`<div class="orch-term-line system">${esc(emuName)} Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || orchCwd || "~")}</div><div class="orch-term-line system">Click anywhere to type · Press Enter to run · ↑/↓ for history</div>`],
       ws: null,
       running: false,
     });
@@ -768,6 +795,7 @@ function mountTerminalPane(card, p) {
   const state = termPanesState.get(p.id);
   out.innerHTML = state.lines.join("");
   out.scrollTop = out.scrollHeight;
+  setTimeout(focusInput, 30);
 
   if (!state.ws || state.ws.readyState > 1) {
     try {
@@ -805,11 +833,9 @@ function mountTerminalPane(card, p) {
               if (cwdCode) cwdCode.textContent = cwdLabel(p.cwd);
               saveCanvas();
             }
-            state.lines.push(out.innerHTML);
-            if (state.lines.length > 50) state.lines = [out.innerHTML];
+            state.lines = [out.innerHTML];
             out.scrollTop = out.scrollHeight;
-            input.disabled = false;
-            input.focus();
+            focusInput();
           }
         } catch {}
       };
@@ -855,6 +881,7 @@ function mountTerminalPane(card, p) {
 
     if (cmd.trim() === "clear") {
       clearTerminal(p.id);
+      focusInput();
       return;
     }
 
@@ -908,11 +935,12 @@ async function loadTerminals() {
     const data = await api("/api/terminals");
     termList = data.terminals || [];
     shellList = data.shells || [];
-    if (!prefTerm) prefTerm = data.defaultTerminal || (termList[0]?.id || "");
-    if (!prefShell && prefShell !== "") prefShell = data.defaultShell || "";
+    if (!prefTerm) prefTerm = data.defaultTerminal || (termList[0]?.id || "ghostty");
+    if (!prefShell && prefShell !== "") prefShell = data.defaultShell || "bash";
     const lbl = $("#orch-term-lbl");
     if (lbl) {
-      lbl.textContent = "Terminal";
+      const cur = termList.find((t) => t.id === prefTerm);
+      lbl.textContent = cur?.name || "Ghostty";
     }
   } catch {}
 }
@@ -928,13 +956,22 @@ function paintTermPop() {
     pop.style.left = `${Math.max(10, Math.min(window.innerWidth - 305, r.left - 60))}px`;
   }
   const cwd = $("#run-cwd")?.value || orchCwd || "~";
+  const curEmu = termList.find((t) => t.id === prefTerm) || { id: "ghostty", name: "Ghostty" };
+  const emuName = curEmu.name;
   pop.innerHTML = `<div class="term-pop-head">
       <div class="term-pop-cwd"><span class="term-pop-tag">Folder</span><code>${esc(cwdLabel(cwd))}</code></div>
       <button type="button" class="btn glass orch-icon-btn" data-act="term-menu-close" title="Close">${icon("x", 12)}</button>
     </div>
     <button type="button" class="btn peach" style="width:100%;height:32px;justify-content:center;gap:6px;font-size:12px;margin:2px 0;" data-act="term-canvas-pop">
-      ${icon("terminal", 14)} Open Terminal in Canvas
+      ${icon("terminal", 14)} Open ${esc(emuName)} in Canvas
     </button>
+    <div class="term-pop-sec-title">Terminal Emulator (Ghostty / Kitty)</div>
+    <div class="term-pop-list">
+      ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
+        ${icon("ext", 13)} <span>${esc(t.name)}</span>
+        ${t.id === prefTerm ? '<span class="term-badge default">selected</span>' : ""}
+      </button>`).join("") || '<small class="empty">No external emulator detected</small>'}
+    </div>
     <div class="term-pop-sec-title">Shell</div>
     <div class="term-pop-list">
       <button type="button" class="term-pop-row ${!prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="">
@@ -946,16 +983,9 @@ function paintTermPop() {
         ${s.id === prefShell ? '<span class="term-badge default">active</span>' : ""}
       </button>`).join("")}
     </div>
-    <div class="term-pop-sec-title">External Window (Desktop)</div>
-    <div class="term-pop-list">
-      ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
-        ${icon("ext", 13)} <span>${esc(t.name)}</span>
-        ${t.id === prefTerm ? '<span class="term-badge default">selected</span>' : ""}
-      </button>`).join("") || '<small class="empty">No external emulator detected</small>'}
-    </div>
     <div class="term-pop-foot">
       <a class="term-pop-config" href="#/settings">${icon("settings", 12)} Settings</a>
-      <button type="button" class="btn glass" data-act="term-launch" title="Launch external window">${icon("ext", 11)} Launch App</button>
+      <button type="button" class="btn glass" data-act="term-launch" title="Launch ${esc(emuName)} window on Desktop">${icon("ext", 11)} Launch ${esc(emuName)} (Desktop)</button>
     </div>`;
   pop.hidden = false;
   $("#orch-term-split")?.classList.add("open");
@@ -1227,11 +1257,12 @@ function fleetItems() {
   }
   for (const p of orchPanes) {
     if (p && p.kind === "terminal") {
+      const emuName = (p.emulator || prefTerm) === "kitty" ? "Kitty" : "Ghostty";
       items.push({
         kind: "terminal", id: p.id, agent: "terminal", ic: "terminal",
-        title: p.title || `Terminal (${p.shell || "bash"})`,
-        sub: `${shortCwd(p.cwd || orchCwd || "")} · terminal`,
-        group: "active", dot: "run", badge: p.shell || "shell", peach: true, needs: "",
+        title: p.title || `${emuName} (${p.shell || "bash"})`,
+        sub: `${shortCwd(p.cwd || orchCwd || "")} · ${emuName.toLowerCase()}`,
+        group: "active", dot: "run", badge: `${emuName.toLowerCase()} · ${p.shell || "shell"}`, peach: true, needs: "",
       });
     }
   }
@@ -2086,17 +2117,20 @@ async function orchPaint(force) {
       if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
       orchSigs.set(key, sig);
       const cwd = p.cwd || orchCwd || "";
+      const emuName = (p.emulator || prefTerm) === "kitty" ? "Kitty" : "Ghostty";
       const shellName = p.shell || prefShell || "bash";
       card.querySelector(".orch-head").innerHTML = `<div class="orch-title"><span class="h-av">${icon("terminal", 18)}</span>
           <div>
             <div class="orch-term-head-row">
-              <h4>${esc(p.title || `Terminal (${shellName})`)}</h4>
-              <span class="pill peach">${esc(shellName)}</span>
+              <h4>${esc(p.title || `${emuName} (${shellName})`)}</h4>
+              <span class="pill peach">${esc(emuName)}</span>
+              <span class="pill">${esc(shellName)}</span>
             </div>
             <small class="orch-term-cwd" title="${esc(cwd)}">📁 <code>${esc(cwdLabel(cwd))}</code></small>
           </div>
         </div>
         <div class="orch-acts">
+          <button type="button" class="btn glass orch-icon-btn" data-act="term-launch-app" data-key="${esc(key)}" title="Open in native ${esc(emuName)} window (Desktop)">${icon("ext", 12)}</button>
           <button type="button" class="btn glass orch-icon-btn" data-act="term-clear" data-key="${esc(key)}" title="Clear screen">${icon("trash", 12)}</button>
           <button type="button" class="btn glass orch-icon-btn" data-act="term-restart" data-key="${esc(key)}" title="Restart shell">${icon("reload", 12)}</button>
           ${paneBtns}
@@ -2827,31 +2861,49 @@ const ACTIONS = {
   "term-canvas": (el) => {
     const cwd = el?.dataset?.cwd || $("#run-cwd")?.value || orchCwd || "";
     const shell = prefShell || (shellList[0]?.id || "bash");
+    const emulator = prefTerm || "ghostty";
+    const emuName = emulator === "kitty" ? "Kitty" : "Ghostty";
     const termId = `term_${Date.now()}`;
-    const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
+    const p = { kind: "terminal", id: termId, emulator, shell, cwd, title: `${emuName} (${shell})` };
     addPane(p);
     saveCanvas();
-    toast(`Terminal (${shell}) opened in Canvas`);
+    toast(`${emuName} (${shell}) opened in Canvas`);
   },
   "term-canvas-pop": () => {
     termPopOpen = false;
     paintTermPop();
     const cwd = $("#run-cwd")?.value || orchCwd || "";
     const shell = prefShell || (shellList[0]?.id || "bash");
+    const emulator = prefTerm || "ghostty";
+    const emuName = emulator === "kitty" ? "Kitty" : "Ghostty";
     const termId = `term_${Date.now()}`;
-    const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
+    const p = { kind: "terminal", id: termId, emulator, shell, cwd, title: `${emuName} (${shell})` };
     addPane(p);
     saveCanvas();
-    toast(`Terminal (${shell}) opened in Canvas`);
+    toast(`${emuName} (${shell}) opened in Canvas`);
   },
   "term-new-pane": () => {
     const cwd = $("#run-cwd")?.value || orchCwd || "";
     const shell = prefShell || (shellList[0]?.id || "bash");
+    const emulator = prefTerm || "ghostty";
+    const emuName = emulator === "kitty" ? "Kitty" : "Ghostty";
     const termId = `term_${Date.now()}`;
-    const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
+    const p = { kind: "terminal", id: termId, emulator, shell, cwd, title: `${emuName} (${shell})` };
     addPane(p);
     saveCanvas();
-    toast(`New Terminal (${shell}) created in Canvas`);
+    toast(`New ${emuName} (${shell}) created in Canvas`);
+  },
+  "term-launch-app": async (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    const cwd = p?.cwd || $("#run-cwd")?.value || orchCwd;
+    const terminal = p?.emulator || prefTerm || "ghostty";
+    try {
+      const res = await api("/api/terminal/open", { terminal, shell: p?.shell || prefShell || undefined, cwd });
+      toast(res.fallback ? `${res.terminal} (fallback) opened in ${cwdLabel(res.cwd)}` : `${res.terminal} opened in ${cwdLabel(res.cwd)}`);
+    } catch (e) {
+      toast(e.message);
+    }
   },
   "term-clear": (el) => {
     const key = el.dataset.key;
@@ -2894,7 +2946,7 @@ const ACTIONS = {
     try { localStorage.setItem("overlook.terminal", prefTerm); } catch {}
     const cur = termList.find((t) => t.id === prefTerm);
     const lbl = $("#orch-term-lbl");
-    if (lbl) lbl.textContent = cur?.name || "Terminal";
+    if (lbl) lbl.textContent = cur?.name || "Ghostty";
     paintTermPop();
   },
   "term-pick-shell": (el) => {
