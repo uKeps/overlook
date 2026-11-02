@@ -1,6 +1,6 @@
 // Agents Overlook can put to work on the vault. CLI agents (claude, agy, codex...) are spawned in the vault folder;
 // API agents (Anthropic, or any OpenAI-compatible endpoint) work through four tools jailed to the vault's notes.
-// Tasks live in memory. ponytail: lost on restart; persist them if the history starts to matter.
+// Tasks persist to cache/tasks.json (last 50 tasks). On startup, unfinished tasks are marked ended.
 import { resolve, dirname, relative, isAbsolute, sep, join } from "node:path";
 import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
@@ -14,8 +14,8 @@ export type Agent = {
   model?: string; models?: (string | Model)[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>;
 };
 type Model = { id: string; label?: string; efforts?: string[] };
-type Event = { t: "you" | "text" | "tool" | "result" | "error"; txt: string; name?: string; at: string };
-type Task = { id: string; agent: string; model: string; effort: string; session?: string; cwd: string; role?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
+export type QuotaInfo = { exhausted: boolean; resetsIn?: string; message: string };
+type Task = { id: string; agent: string; model: string; effort: string; session?: string; cwd: string; role?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void; quota?: QuotaInfo };
 
 // Without agents.json: the CLIs Overlook always knew about. A CLI shows up as runnable only when it is on the PATH.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -57,9 +57,61 @@ const clip = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "…" : s);
 const MESSAGE = 20_000; // a whole message reads in full; the cap only guards against a runaway one
 const log = (task: Task, e: Omit<Event, "at">) => { task.events.push({ ...e, at: now() }); if (task.events.length > 300) task.events.shift(); };
 
+let tasksDir = import.meta.dir;
+const tasksFile = (dir: string) => `${dir}/cache/tasks.json`;
+
+export function saveTasks(dir: string = tasksDir) {
+  tasksDir = dir;
+  const file = tasksFile(dir);
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    while (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
+    const list = [...tasks.values()].slice(-50).map(({ stop, ...t }) => t);
+    writeFileSync(file, JSON.stringify(list, null, 1));
+  } catch {}
+}
+
+export function loadTasks(dir: string = tasksDir): Task[] {
+  tasksDir = dir;
+  const file = tasksFile(dir);
+  try {
+    if (!existsSync(file)) return [];
+    const list = JSON.parse(readFileSync(file, "utf8"));
+    if (!Array.isArray(list)) return [];
+    tasks.clear();
+    let changed = false;
+    const nowIso = now();
+    for (const t of list.slice(-50)) {
+      if (t && typeof t === "object" && t.id) {
+        if (!t.end) {
+          t.end = nowIso;
+          t.ok = false;
+          changed = true;
+        }
+        delete t.stop;
+        if (!Array.isArray(t.events)) t.events = [];
+        tasks.set(t.id, t as Task);
+      }
+    }
+    if (changed) saveTasks(dir);
+    return [...tasks.values()];
+  } catch {
+    return [];
+  }
+}
+loadTasks();
+
 export const taskList = () => [...tasks.values()].reverse().map(({ events, stop, ...t }) => ({ ...t, prompt: clip(t.prompt, 160) }));
 export const getTask = (id: string) => { const t = tasks.get(id); if (!t) return null; const { stop, ...rest } = t; return rest; };
 export const stopTask = (id: string) => { const t = tasks.get(id); if (!t?.stop || t.end) return false; t.stop(); return true; };
+export function deleteTask(id: string, dir: string = tasksDir): boolean {
+  const t = tasks.get(id);
+  if (!t) return false;
+  if (!t.end) stopTask(id);
+  const deleted = tasks.delete(id);
+  if (deleted) saveTasks(dir);
+  return deleted;
+}
 export const routineRunning = (name: string) => [...tasks.values()].some((t) => t.routine === name && !t.end);
 
 export type RunOpts = { model?: string; effort?: string; routine?: string; cwd?: string; session?: string; role?: string };
@@ -117,15 +169,48 @@ function resolveRun(root: string, dir: string, agentId: string, opts: RunOpts) {
   return { a, model: m?.id ?? "", effort: opts.effort || (es.includes(defaultEffort(a)) ? defaultEffort(a) : es[0] ?? ""), cwd, role };
 }
 
-function execTask(a: Agent, task: Task, prompt: string, resumed: boolean) {
+const QUOTA_RE = /RESOURCE_EXHAUSTED|\b429\b|Individual quota reached|[Rr]esets in|usage limit reached|insufficient_quota|rate_limit_exceeded|rate_limit_error|quota exceeded/i;
+function checkQuota(task: Task, textOrErr: unknown) {
+  if (!textOrErr) return;
+  let text = typeof textOrErr === "string" ? textOrErr : String((textOrErr as any)?.message ?? textOrErr);
+  const status = (textOrErr as any)?.status;
+  if (status === 429 && !text.includes("429")) text = `429 ${text}`;
+  if (!QUOTA_RE.test(text)) return;
+  let resetsIn: string | undefined;
+  const mReset = text.match(/[Rr]esets (?:in|at)\s+((?:[0-9]+\s*(?:hours?|minutes?|seconds?|[dhms])\b(?:\s+and\s+|\s*,?\s*)?)+|(?=[0-9]*[dhms])[0-9dhms]+)/i);
+  if (mReset) {
+    resetsIn = mReset[1].trim();
+  } else {
+    const mIso = text.match(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\b/);
+    if (mIso) resetsIn = mIso[0];
+  }
+  if (!resetsIn && (textOrErr as any)?.headers) {
+    const h = (textOrErr as any).headers;
+    const rAt = typeof h.get === "function" ? (h.get("anthropic-ratelimit-unified-resets-at") || h.get("retry-after")) : (h["anthropic-ratelimit-unified-resets-at"] || h["retry-after"]);
+    if (rAt) resetsIn = /^\d+$/.test(rAt) ? `${rAt}s` : rAt;
+  }
+  task.quota = {
+    exhausted: true,
+    resetsIn: resetsIn ?? task.quota?.resetsIn,
+    message: clip(text.trim(), 300),
+  };
+  task.ok = false;
+}
+
+function execTask(a: Agent, task: Task, prompt: string, resumed: boolean, dir: string = tasksDir) {
   log(task, { t: "you", txt: prompt });
   task.end = undefined; task.ok = undefined; task.stop = undefined;
   const ctrl = new AbortController();
   const timer = setTimeout(() => { log(task, { t: "error", txt: "timed out after 30 min" }); task.stop?.(); }, TIMEOUT);
   const work = a.run ? cli(a, task.cwd, task, prompt, resumed, ctrl) : a.api === "anthropic" ? anthropic(a, task.cwd, task, prompt, ctrl.signal) : openai(a, task.cwd, task, prompt, ctrl.signal);
   task.stop ??= () => ctrl.abort();
-  work.then((ok) => (task.ok = ok), (e) => { task.ok = false; log(task, { t: "error", txt: ctrl.signal.aborted ? "stopped" : String(e?.message ?? e) }); })
-    .finally(() => { task.end = now(); clearTimeout(timer); });
+  work.then((ok) => (task.ok = task.quota ? false : ok), (e) => {
+    task.ok = false;
+    const txt = ctrl.signal.aborted ? "stopped" : String(e?.message ?? e);
+    checkQuota(task, e);
+    log(task, { t: "error", txt });
+  })
+    .finally(() => { task.end = now(); clearTimeout(timer); saveTasks(dir); });
 }
 
 export function runTask(root: string, dir: string, agentId: string, prompt: string, opts: RunOpts = {}) {
@@ -136,7 +221,8 @@ export function runTask(root: string, dir: string, agentId: string, prompt: stri
   const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, cwd, role, prompt, routine: opts.routine, start: now(), events: [] };
   tasks.set(task.id, task);
   if (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
-  execTask(a, task, prompt, !!opts.session);
+  saveTasks(dir);
+  execTask(a, task, prompt, !!opts.session, dir);
   return task;
 }
 
@@ -146,12 +232,36 @@ export function continueTask(root: string, dir: string, id: string, prompt: stri
   if (!task.end) return "task is still running";
   const r = resolveRun(root, dir, task.agent, { model: task.model || undefined, effort: task.effort || undefined, cwd: task.cwd });
   if (typeof r === "string") return r;
-  execTask(r.a, task, prompt, !!task.session);
+  saveTasks(dir);
+  execTask(r.a, task, prompt, !!task.session, dir);
   return task;
+}
+
+export function retryTask(root: string, dir: string, id: string, opts: { model?: string; effort?: string } = {}) {
+  const task = tasks.get(id);
+  if (!task) return "task not found";
+  if (!task.end) return "task is still running";
+  const a = loadAgents(dir).find((x) => x.id === task.agent);
+  const targetModel = opts.model || task.model || undefined;
+  let targetEffort = opts.effort;
+  if (!targetEffort && a) {
+    const ms = models(a);
+    const m = targetModel ? ms.find((x) => x.id === targetModel) : ms[0];
+    const es = m?.efforts ?? efforts(a);
+    if (task.effort && es.includes(task.effort)) targetEffort = task.effort;
+  }
+  return runTask(root, dir, task.agent, task.prompt, {
+    model: targetModel,
+    effort: targetEffort,
+    cwd: task.cwd,
+    session: task.session,
+    role: task.role,
+  });
 }
 
 // ---------------------------------------------------------------- CLI agents
 function onCliLine(task: Task, l: string) {
+  checkQuota(task, l);
   if (l.startsWith("{")) {
     try {
       const j = JSON.parse(l);
@@ -172,8 +282,15 @@ function onCliLine(task: Task, l: string) {
             else log(task, { t: "text", txt: clip(s.text_delta, MESSAGE) });
           }
         } else if (j.event === "error" && j.error) {
-          log(task, { t: "error", txt: clip(String(j.error?.message ?? j.error), 400) });
+          const msg = String(j.error?.message ?? j.error);
+          checkQuota(task, msg);
+          log(task, { t: "error", txt: clip(msg, 400) });
         }
+        return;
+      } else if (j?.error) {
+        const msg = String(j.error?.message ?? (typeof j.error === "string" ? j.error : JSON.stringify(j.error)));
+        checkQuota(task, msg);
+        log(task, { t: "error", txt: clip(msg, 400) });
         return;
       }
     } catch {}
@@ -198,11 +315,11 @@ async function cli(a: Agent, cwd: string, task: Task, prompt: string, resumed: b
   task.stop = () => { ctrl.abort(); p.kill(); };
   await Promise.all([
     lines(p.stdout, (l) => onCliLine(task, l)),
-    lines(p.stderr, (l) => log(task, { t: "result", txt: clip(l, 400) })),
+    lines(p.stderr, (l) => { checkQuota(task, l); log(task, { t: task.quota ? "error" : "result", txt: clip(l, 400) }); }),
   ]);
   const code = await p.exited;
   if (ctrl.signal.aborted) throw new Error("stopped");
-  return code === 0;
+  return code === 0 && !task.quota;
 }
 // ---------------------------------------------------------------- Scheduled tasks
 // schedule.json is personal (not in git): agent tasks that run at a local date and time, once or on repeat.
@@ -373,7 +490,7 @@ function system(root: string, role?: string) {
 async function anthropic(a: Agent, root: string, task: Task, prompt: string, signal: AbortSignal) {
   // Loaded on first use: the rest of Overlook runs without `bun install`.
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: process.env[a.key!], ...(a.url ? { baseURL: a.url } : {}) });
+  const client = new Anthropic({ apiKey: process.env[a.key!], ...(a.url ? { baseURL: a.url } : {}), maxRetries: 0 });
   const model = task.model;
   const fallback = FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {};
   const tools = TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as any, strict: true }));

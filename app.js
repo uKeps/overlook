@@ -43,6 +43,7 @@ const I = {
   trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
@@ -53,8 +54,10 @@ async function api(p, body) {
 }
 function toast(msg) {
   const t = $("#toast");
-  t.textContent = msg; t.classList.add("on");
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 2600);
+  if (typeof msg === "string" && msg.includes("<")) t.innerHTML = msg;
+  else t.textContent = msg;
+  t.classList.add("on");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 3600);
 }
 // Opened over Tailscale (phone): embedded apps use the tailnet links, built from the current host.
 const remote = location.hostname.endsWith(".ts.net");
@@ -638,6 +641,13 @@ let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdD
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
 const CANVAS_KEY = "overlook.canvas", PANE_MIME = "text/x-overlook-pane";
+const DISMISSED_KEY = "overlook:dismissed-sessions";
+let dismissedSessions = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
+})();
+function saveDismissedSessions() {
+  try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions])); } catch {}
+}
 try {
   const c = JSON.parse(localStorage.getItem(CANVAS_KEY) || "null");
   if (c) { orchPanes = c.panes || []; orchLinks = c.links || []; orchMode = c.mode || "tile"; orchPanX = c.panX ?? 24; orchPanY = c.panY ?? 20; orchZoom = c.zoom || 1; orchSeq = c.seq || 1; }
@@ -645,7 +655,7 @@ try {
 function saveCanvas() {
   try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq })); } catch {}
 }
-const paneKey = (p) => `${p.kind}:${p.id}`;
+const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
 const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
 function updateSelectionUI() {
   const plane = $("#orch-plane");
@@ -890,6 +900,7 @@ function fleetItems() {
     });
   }
   for (const a of S.agents || []) {
+    if (dismissedSessions.has(a.key)) continue;
     seen.add(a.key);
     const [name, ic] = AGENT_NAME[a.name] || [a.name, "agents"];
     items.push({
@@ -899,7 +910,7 @@ function fleetItems() {
     });
   }
   for (const f of S.background || []) {
-    if (seen.has(f.key)) continue;
+    if (seen.has(f.key) || dismissedSessions.has(f.key)) continue;
     const wait = f.state === "blocked" || !!f.needs;
     const act = f.state === "working" || f.state === "running";
     items.push({
@@ -1285,11 +1296,16 @@ function agentsBody() {
   };
   const list = all.filter((x) => orchFilter === "all" || x.group === orchFilter);
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p.kind === "new" || p.kind === "sticky" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p))));
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   document.querySelector('[data-act="orch-rail"]')?.classList.toggle("on", orchRail);
   if (!orchPanes.length) {
     const first = list[0] || all[0];
-    if (first) orchPanes = [ensurePaneRect({ kind: first.kind, id: first.id }, 0)];
+    if (first) {
+      orchPanes = [ensurePaneRect({ kind: first.kind, id: first.id }, 0)];
+    } else {
+      const newId = String(++orchSeq);
+      orchPanes = [ensurePaneRect({ kind: "new", id: newId, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd }, 0)];
+    }
   }
   orchPanes.forEach(ensurePaneRect);
   if (!orchPanes.some((p) => paneKey(p) === orchActive)) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
@@ -1342,7 +1358,10 @@ function agentsBody() {
         </span>
         <span class="pill ${it.peach ? "peach" : ""}">${esc(it.badge)}</span>
       </button>
-      <button type="button" class="orch-pin-btn ${isPin && orchPanes.length > 1 ? "on" : ""}" data-act="orch-pin" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${isPin && orchPanes.length > 1 ? "Remove from workspace" : "Add side-by-side to Split / Canvas"}">${icon(isPin && orchPanes.length > 1 ? "x" : "plus", 13)}</button>
+      <div class="orch-item-actions">
+        <button type="button" class="orch-pin-btn ${isPin && orchPanes.length > 1 ? "on" : ""}" data-act="orch-pin" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${isPin && orchPanes.length > 1 ? "Remove from workspace" : "Add side-by-side to Split / Canvas"}">${icon(isPin && orchPanes.length > 1 ? "x" : "plus", 13)}</button>
+        <button type="button" class="orch-dismiss-btn" data-act="orch-dismiss" data-kind="${it.kind}" data-id="${esc(it.id)}" aria-label="Dismiss chat" title="Dismiss chat">${icon("x", 12)}</button>
+      </div>
     </div>`;
   }).join("") || `<p class="empty">No runs in this view.</p>`;
   $("#orch-ledger-sum").innerHTML = `<span>Vault Ledger</span><small>${D.log.length} runs · ${D.findings.length} findings</small>`;
@@ -1397,6 +1416,138 @@ function bindSplitResizer(plane) {
     plane.style.gridTemplateColumns = `minmax(0, ${orchRatio}fr) 10px minmax(0, ${100 - orchRatio}fr)`;
   }
 }
+function detectQuota(t) {
+  if (!t) return null;
+  if (t.quota?.exhausted) {
+    let resetsIn = t.quota.resetsIn || t.quota.resetIn;
+    if (!resetsIn && t.quota.resetAt) {
+      const ms = Math.max(0, new Date(t.quota.resetAt).getTime() - Date.now());
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
+      resetsIn = `${h}h${m}m${s}s`;
+    } else if (resetsIn && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(resetsIn)) {
+      const ms = Math.max(0, new Date(resetsIn).getTime() - Date.now());
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+      resetsIn = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    return {
+      exhausted: true,
+      message: t.quota.message || "Individual quota reached for this model.",
+      resetsIn: resetsIn || "",
+      model: t.quota.model || t.model,
+      agent: t.agent,
+    };
+  }
+  const evs = t.events || [];
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const e = evs[i], txt = e?.txt || "";
+    if (/RESOURCE_EXHAUSTED|429|Individual quota reached|quota exceeded|rate limit exceeded/i.test(txt)) {
+      const resetMatch = txt.match(/resets in\s+([0-9a-z\s]+?)(?:\.|\n|$)/i);
+      const resetsIn = resetMatch ? resetMatch[1].trim() : "";
+      return {
+        exhausted: true,
+        message: txt.length > 200 ? txt.slice(0, 200) + "…" : txt,
+        resetsIn,
+        model: t.model,
+        agent: t.agent,
+      };
+    }
+  }
+  return null;
+}
+
+function renderQuotaBanner(t, paneKeyStr) {
+  const q = detectQuota(t);
+  if (!q) return "";
+  const runner = (S.runners || []).find((r) => r.id === t.agent);
+  const ms = (runner?.models || []).map((m) => typeof m === "string" ? { id: m, label: m } : { id: m.id, label: m.label || m.id });
+  const otherModels = ms.filter((m) => m.id !== (t.model || q.model));
+  const suggested = otherModels.find((m) => /flash/i.test(m.id) || /flash/i.test(m.label))
+    || otherModels.find((m) => /haiku/i.test(m.id) || /haiku/i.test(m.label))
+    || otherModels.find((m) => /sonnet/i.test(m.id) || /sonnet/i.test(m.label))
+    || otherModels[0];
+  
+  let actionsHtml = "";
+  if (suggested) {
+    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(suggested.id)}" data-pane="${esc(paneKeyStr || "")}" data-agent="${esc(t.agent || "")}" data-prompt="${esc(t.prompt || "")}" data-effort="${esc(t.effort || "")}">Switch to ${esc(suggested.label)} &amp; Retry</button>`;
+    if (otherModels.length > 1) {
+      actionsHtml += `<div class="quota-dropdown-wrap">
+        <select class="pick quota-model-sel" aria-label="Select alternate model">
+          ${otherModels.map((m) => `<option value="${esc(m.id)}" ${m.id === suggested.id ? "selected" : ""}>${esc(m.label)}</option>`).join("")}
+        </select>
+        <button type="button" class="btn glass quota-custom-btn" data-act="quota-retry-sel" data-task="${esc(t.id)}" data-pane="${esc(paneKeyStr || "")}" data-agent="${esc(t.agent || "")}" data-prompt="${esc(t.prompt || "")}" data-effort="${esc(t.effort || "")}">Retry</button>
+      </div>`;
+    }
+  } else {
+    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(t.model || "")}" data-pane="${esc(paneKeyStr || "")}" data-agent="${esc(t.agent || "")}" data-prompt="${esc(t.prompt || "")}" data-effort="${esc(t.effort || "")}">Retry</button>`;
+  }
+
+  return `<div class="quota-alert glass" data-task-id="${esc(t.id)}">
+    <div class="quota-head">
+      <span class="quota-badge"><span class="quota-badge-dot"></span> Quota Exhausted</span>
+      ${q.resetsIn ? `<span class="quota-countdown">${icon("clock", 13)} Resets in ${esc(q.resetsIn)}</span>` : ""}
+    </div>
+    <div class="quota-msg">${fmt(q.message)}</div>
+    <div class="quota-actions">${actionsHtml}</div>
+  </div>`;
+}
+
+async function retryTask(taskId, model, paneKeyStr, opts = {}) {
+  const cachedTask = S?.tasks?.find((x) => x.id === taskId) || {};
+  const btn = $(`[data-task="${taskId}"]`);
+  const agent = opts.agent || btn?.dataset?.agent || cachedTask.agent;
+  const prompt = opts.prompt || btn?.dataset?.prompt || cachedTask.prompt;
+  const effort = opts.effort || btn?.dataset?.effort || cachedTask.effort;
+  model = model || opts.model || btn?.dataset?.model || cachedTask.model;
+
+  let res;
+  try {
+    toast(`Switching to ${model || "alternate model"} & retrying…`);
+    res = await api("/api/task/retry", { id: taskId, model });
+    if (!res || !res.id) throw new Error("Retry did not return a valid task ID");
+  } catch (err) {
+    const msg = String(err?.message || "");
+    if (msg.includes("404") || /task not found/i.test(msg)) {
+      toast("Task session expired. Re-dispatching as a new task…");
+      if (prompt && agent) {
+        try {
+          res = await api("/api/run", { agent, prompt, model, effort });
+          if (!res || !res.id) throw new Error("Re-dispatch did not return a valid task ID");
+        } catch (dispatchErr) {
+          return toast(`Re-dispatch failed: ${dispatchErr.message}`);
+        }
+      } else {
+        return;
+      }
+    } else {
+      return toast(`Retry failed: ${err.message}`);
+    }
+  }
+
+  if (!res || !res.id) return;
+  if (paneKeyStr || (route().pg === "agents" && orchPanes.some((x) => x.kind === "task" && x.id === taskId))) {
+    const p = orchPanes.find((x) => (paneKeyStr && paneKey(x) === paneKeyStr) || (x.kind === "task" && x.id === taskId));
+    if (p) {
+      const oldKey = paneKey(p);
+      p.id = res.id;
+      const newKey = paneKey(p);
+      rekey(oldKey, newKey);
+      orchSigs.delete(oldKey);
+      orchSigs.delete(newKey);
+      if (orchActive === oldKey) orchActive = newKey;
+      if (orchMax === oldKey) orchMax = newKey;
+      saveCanvas();
+    }
+    S = await api("/api/system");
+    agentsBody();
+    orchPaint(true);
+    toast(`Switched to ${model || "new task"} & retrying in tile`);
+    return;
+  }
+  
+  toast(`Switched to ${model || "new task"} & retrying`);
+  location.hash = `#/t/${encodeURIComponent(res.id)}`;
+}
+
 async function orchPaint(force) {
   const canvas = $("#orch-canvas"), plane = $("#orch-plane"), hud = $("#orch-hud");
   if (!canvas || !plane) return;
@@ -1581,7 +1732,9 @@ async function orchPaint(force) {
     if (p.kind === "task") {
       const t = await api(`/api/task?id=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!t || !card.isConnected) return;
-      const sig = `${t.end}|${t.ok}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      const qInfo = detectQuota(t);
+      const qSig = qInfo ? `${qInfo.exhausted}|${qInfo.model}|${qInfo.resetsIn}` : "";
+      const sig = `${t.end}|${t.ok}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${qSig}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
       if (!force && orchSigs.get(key) === sig) return;
       orchSigs.set(key, sig);
       const folder = t.cwd ? shortCwd(t.cwd) : "";
@@ -1593,7 +1746,7 @@ async function orchPaint(force) {
           ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}
           <a class="btn glass orch-icon-btn" href="#/t/${esc(t.id)}" title="Open dedicated page">${icon("ext", 13)}</a>
           ${paneBtns}</div>`;
-      card.querySelector(".orch-needs").innerHTML = "";
+      card.querySelector(".orch-needs").innerHTML = renderQuotaBanner(t, key);
       card.querySelector(".orch-msg").placeholder = !t.end ? "Running — wait or Stop to send a follow-up…" : "Send a follow-up in this workspace… Enter sends";
       const feed = card.querySelector(".orch-feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 90;
       feed.innerHTML = renderEvents(t.events, runnerName(t.agent)) || `<p class="empty">Waiting for output…</p>`;
@@ -1668,11 +1821,17 @@ async function orchSend(p, card) {
 // Model and effort pickers follow the chosen agent: only what agents.json lists for it. Effort levels can differ per model.
 function runOptions(keepModel, p = "run") {
   const r = S.runners?.find((x) => x.id === $(`#${p}-agent`)?.value) || {}, ms = r.models || [], sel = $(`#${p}-model`);
-  if (!keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
-  const es = ms.find((m) => m.id === sel.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
+  if (sel && !keepModel) { sel.hidden = !ms.length; sel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(""); }
+  const es = ms.find((m) => m.id === sel?.value)?.efforts || r.efforts || [], pick = es.includes(r.effort) ? r.effort : es[0];
   const seg = $(`#${p}-effort`);
-  seg.hidden = !es.length;
-  seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
+  if (seg) {
+    seg.hidden = !es.length;
+    seg.innerHTML = es.map((e) => `<button type="button" role="radio" aria-checked="${e === pick}" class="${e === pick ? "on" : ""}" data-act="effort" data-v="${esc(e)}">${esc(e)}</button>`).join("");
+  }
+  const mWrap = $(`#${p}-model-wrap`);
+  if (mWrap) mWrap.hidden = !ms.length;
+  const eRow = $(`#${p}-effort-row`);
+  if (eRow) eRow.hidden = !es.length;
 }
 const runChoice = (p = "run") => ({ agent: $(`#${p}-agent`)?.value, model: $(`#${p}-model`)?.hidden ? undefined : $(`#${p}-model`)?.value, effort: $(`#${p}-effort`)?.hidden ? undefined : $(`#${p}-effort .on`)?.dataset.v });
 // Agent, model and effort pickers; runOptions(false, p) fills the last two for the chosen agent.
@@ -1718,19 +1877,22 @@ async function runPrompt() {
 let taskTimer = null, taskLast = "";
 async function taskPage(id) {
   clearInterval(taskTimer); taskLast = "";
-  main.innerHTML = `<div class="ph" id="task-head"></div><div class="feed list glass" id="feed"><p class="empty">Loading…</p></div>
+  main.innerHTML = `<div class="ph" id="task-head"></div><div id="task-needs"></div><div class="feed list glass" id="feed"><p class="empty">Loading…</p></div>
     <form class="talk glass" id="task-talk"><textarea id="task-msg" rows="2" placeholder="Send a follow-up prompt… Enter sends, Shift+Enter adds a line" aria-label="Follow-up prompt"></textarea>
       <button class="btn peach" type="submit">Continue ${icon("r", 14)}</button><small id="task-hint">Continues this task session in the same workspace.</small></form>`;
   const paint = async () => {
     if (route().pg !== "t" || route().arg !== id) return clearInterval(taskTimer);
     const t = await api(`/api/task?id=${encodeURIComponent(id)}`).catch(() => null);
     if (!t) { main.innerHTML = `<div class="ph"><h1>Task not found</h1><p>Tasks live in memory and are gone after a restart.</p></div><a class="btn glass" href="#/agents">Back to Agents</a>`; return clearInterval(taskTimer); }
-    const signature = `${t.end}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}`;
+    const qInfo = detectQuota(t);
+    const qSig = qInfo ? `${qInfo.exhausted}|${qInfo.model}|${qInfo.resetsIn}` : "";
+    const signature = `${t.end}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${qSig}`;
     if (signature === taskLast) return;
     taskLast = signature;
     $("#task-head").innerHTML = `<h1><span class="h-av">${avatar(t.agent, "agents", 30)}</span>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc([taskMeta(t), t.cwd ? shortCwd(t.cwd) : "", `started ${ago(Date.parse(t.start))}`].filter(Boolean).join(" · "))}</p>
       <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}
         ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}</div>`;
+    $("#task-needs").innerHTML = renderQuotaBanner(t, "");
     const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
     feed.innerHTML = renderEvents(t.events, runnerName(t.agent)) || `<p class="empty">Waiting for output…</p>`;
     if (atEnd) feed.scrollTop = feed.scrollHeight;
@@ -2075,6 +2237,42 @@ function render() {
   PAGES[pg][0](arg);
 }
 
+let captureMode = "daily";
+function initCaptureAgent() {
+  const agentSel = $("#capture-agent");
+  if (!agentSel) return;
+  const runners = (S.runners || []).filter((r) => r.ready);
+  const cur = agentSel.value;
+  agentSel.innerHTML = (runners.length ? runners : S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("");
+  if (cur && (S.runners || []).some((r) => r.id === cur)) agentSel.value = cur;
+  agentSel.onchange = () => runOptions(false, "capture");
+  const modelSel = $("#capture-model");
+  if (modelSel) modelSel.onchange = () => runOptions(true, "capture");
+  runOptions(false, "capture");
+}
+function setCaptureMode(mode) {
+  captureMode = mode;
+  const isAgent = mode === "agent";
+  document.querySelectorAll(".capture-tabs button").forEach((b) => {
+    const on = b.dataset.tab === mode;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const p = $("#capture-agent-panel");
+  if (p) p.hidden = !isAgent;
+  const ta = $("#capture-text"), hint = $("#capture-hint"), btn = $("#capture-submit-btn");
+  if (isAgent) {
+    if (ta) ta.placeholder = "Topic or instructions for the agent… Enter dispatches.";
+    if (hint) hint.innerHTML = "Dispatches an agent to research and write a note in your vault.";
+    if (btn) btn.textContent = "Dispatch Agent";
+    initCaptureAgent();
+  } else {
+    if (ta) ta.placeholder = "An idea, a link, a question. Enter saves.";
+    if (hint) hint.innerHTML = `Goes to the daily note for <span id="capture-day">${esc(D?.today || "")}</span>. Your agent processes it later.`;
+    if (btn) btn.textContent = "Save";
+  }
+}
+
 const ACTIONS = {
   ...CAL_ACTIONS, ...IMG_ACTIONS,
   prev: () => move(-1), next: () => move(1), go: (el) => { idx = Number(el.dataset.i); place(); },
@@ -2321,6 +2519,54 @@ const ACTIONS = {
     orchSigs.clear();
     agentsBody();
   },
+  "orch-dismiss": async (el) => {
+    const kind = el.dataset.kind, id = el.dataset.id;
+    if (!kind || !id) return;
+    const targetKey = `${kind}:${id}`;
+    orchSelected.delete(targetKey);
+    updateSelectionUI();
+    orchLinks = orchLinks.filter((l) => l.a !== targetKey && l.b !== targetKey);
+    if (kind === "task") {
+      try { await api("/api/task/delete", { id }); } catch (e) { return toast(e.message); }
+      if (S?.tasks) S.tasks = S.tasks.filter((t) => t.id !== id);
+    } else if (kind === "agent") {
+      dismissedSessions.add(id);
+      saveDismissedSessions();
+    }
+    const wasInPanes = orchPanes.some((p) => paneKey(p) === targetKey);
+    if (wasInPanes) {
+      orchPanes = orchPanes.filter((p) => paneKey(p) !== targetKey);
+      const paneKeys = new Set(orchPanes.map(paneKey));
+      orchLinks = orchLinks.filter((l) => paneKeys.has(l.a) && paneKeys.has(l.b));
+      if (orchPanes.length === 0) {
+        const next = fleetItems().find((x) => paneKey(x) !== targetKey);
+        if (next) {
+          const item = { kind: next.kind, id: next.id };
+          if (orchMode === "free") ensurePaneRect(item, 0);
+          orchPanes = [item];
+          orchActive = paneKey(next);
+        } else {
+          const newId = String(++orchSeq);
+          const item = { kind: "new", id: newId, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd };
+          if (orchMode === "free") ensurePaneRect(item, 0);
+          orchPanes = [item];
+          orchActive = `new:${newId}`;
+        }
+      } else if (orchActive === targetKey) {
+        orchActive = paneKey(orchPanes[0]);
+      }
+      if (orchMax === targetKey) orchMax = "";
+      saveCanvas();
+    } else if (orchActive === targetKey) {
+      orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
+      if (orchMax === targetKey) orchMax = "";
+      saveCanvas();
+    }
+    try { S = await api("/api/system"); } catch {}
+    orchSigs.clear();
+    agentsBody();
+    toast("Chat dismissed");
+  },
   open: async (el) => {
     try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
   },
@@ -2341,16 +2587,58 @@ const ACTIONS = {
     [D, S] = await Promise.all([api("/api"), api("/api/system")]); render();
   },
   reload: () => { const f = $("#svcf"); f.src = f.src; },
-  capture: () => { $("#capture-day").textContent = D.today; $("#capture").showModal(); $("#capture-text").focus(); },
+  capture: () => {
+    setCaptureMode("daily");
+    initCaptureAgent();
+    $("#capture-day").textContent = D?.today || "";
+    $("#capture").showModal();
+    $("#capture-text").focus();
+  },
+  "capture-tab": (el) => setCaptureMode(el.dataset.tab),
   "capture-close": () => $("#capture").close(),
   "capture-save": async () => {
     const ta = $("#capture-text");
     const text = ta.value.trim();
     if (!text) return;
-    ta.value = ""; $("#capture").close();
-    await api("/api/capture", { text });
-    toast("Captured in the daily note");
-    D = await api("/api"); if (!route().pg) home(); topBar();
+    if (captureMode === "agent") {
+      const { agent, model, effort } = runChoice("capture");
+      ta.value = "";
+      $("#capture").close();
+      try {
+        const res = await api("/api/note/agent", { topic: text, agent, model, effort });
+        const taskId = res?.id || res?.taskId;
+        if (taskId) {
+          toast(`<a href="#/t/${esc(taskId)}">Agent dispatched: "${esc(text)}"</a>`);
+          if (route().pg === "agents") {
+            orchPanes.push({ kind: "task", id: taskId });
+            orchActive = `task:${taskId}`;
+            saveCanvas();
+            S = await api("/api/system");
+            agentsBody();
+            orchPaint(true);
+          } else {
+            location.hash = `#/t/${encodeURIComponent(taskId)}`;
+          }
+        } else {
+          toast(`Agent dispatched: "${text}"`);
+        }
+      } catch (e) {
+        toast(`Dispatch failed: ${e.message}`);
+      }
+    } else {
+      ta.value = "";
+      $("#capture").close();
+      await api("/api/capture", { text });
+      toast("Captured in the daily note");
+      D = await api("/api");
+      if (!route().pg) home();
+      topBar();
+    }
+  },
+  "quota-retry": (el) => retryTask(el.dataset.task, el.dataset.model, el.dataset.pane, { agent: el.dataset.agent, prompt: el.dataset.prompt, effort: el.dataset.effort }),
+  "quota-retry-sel": (el) => {
+    const sel = el.parentElement?.querySelector(".quota-model-sel");
+    retryTask(el.dataset.task, sel?.value, el.dataset.pane, { agent: el.dataset.agent, prompt: el.dataset.prompt, effort: el.dataset.effort });
   },
 };
 document.addEventListener("click", (e) => {
@@ -2404,8 +2692,8 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "h") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "pan" } }); return; }
     if (e.key === "s") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "select" } }); return; }
   }
-  if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }
-  if (e.key === "v") { e.preventDefault(); ACTIONS["ui-toggle"](); }
+  if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }
+  if (e.key === "v" || e.key === "V") { e.preventDefault(); ACTIONS["ui-toggle"](); }
   if (e.key === "/" && pg === "notes") { e.preventDefault(); $("#search").focus(); }
   if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
   if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }

@@ -125,8 +125,30 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appCss).toContain("@media (max-width: 640px)");
   expect(appCss).toContain("@media (max-width: 480px)");
   expect(appCss).toContain("--safe-bottom");
+  expect(appCss).toContain(".quota-alert");
+  expect(appCss).toContain(".quota-head");
+  expect(appCss).toContain(".quota-badge");
+  expect(appCss).toContain(".quota-countdown");
+  expect(appCss).toContain(".quota-actions");
+  expect(appCss).toContain(".capture-tabs");
+  expect(appCss).toContain(".capture-fields-row");
+  expect(appCss).toContain(".orch-item-actions");
+  expect(appCss).toContain(".orch-dismiss-btn");
   expect(appJs).toContain('"capture-close"');
   expect(appJs).toContain('"capture-save"');
+  expect(appJs).toContain('function detectQuota(');
+  expect(appJs).toContain('function renderQuotaBanner(');
+  expect(appJs).toContain('function retryTask(');
+  expect(appJs).toContain('"quota-retry"');
+  expect(appJs).toContain('"quota-retry-sel"');
+  expect(appJs).toContain('function setCaptureMode(');
+  expect(appJs).toContain('runOptions(false, "capture")');
+  expect(appJs).toContain('runChoice("capture")');
+  expect(appJs).toContain('"orch-dismiss"');
+  expect(appJs).toContain('"overlook:dismissed-sessions"');
+  expect(appJs).toContain('api("/api/note/agent"');
+  expect(appJs).toContain('api("/api/task/retry"');
+  expect(appJs).toContain('if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }');
   expect(appJs).toContain('e.pointerType === "touch"');
   expect(appJs).toContain("getBoundingClientRect");
   expect(appCss).toContain("touch-action: pan-y");
@@ -135,6 +157,51 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(html).toContain("viewport-fit=cover");
   expect(html).toContain('data-act="capture-close"');
   expect(html).toContain('data-act="capture-save"');
+  expect(html).toContain('id="capture"');
+  expect(html).toContain('class="seg capture-tabs" role="tablist"');
+  expect(html).toContain('data-act="capture-tab" data-tab="daily" role="tab"');
+  expect(html).toContain('data-act="capture-tab" data-tab="agent" role="tab"');
+  expect(html).toContain('id="capture-agent-panel" hidden');
+  expect(html).toContain('id="capture-agent"');
+  expect(html).toContain('id="capture-model"');
+  expect(html).toContain('id="capture-effort"');
+  expect(html).toContain('id="capture-hint"');
+  expect(html).toContain('id="capture-submit-btn"');
+});
+
+test("effort selection in capture modal and dismiss chat in fleet sidebar", () => {
+  const html = readFileSync(`${ROOT}/index.html`, "utf8");
+  expect(html).toContain('<select class="pick" id="capture-agent" aria-label="Agent"></select>');
+  expect(html).toContain('<select class="pick" id="capture-model" aria-label="Model" hidden></select>');
+  expect(html).toContain('<div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>');
+
+  expect(html).toContain('<div class="capture-agent-panel" id="capture-agent-panel" hidden>');
+  expect(html).toContain('<div class="capture-fields-row capture-agent-row">');
+  expect(html).toContain('<div class="capture-effort-row" id="capture-effort-row">');
+  expect(html).toContain('<span class="capture-effort-label">Effort</span>');
+
+  const css = readFileSync(`${ROOT}/app.css`, "utf8");
+  expect(css).toContain(".capture-fields-row");
+  expect(css).toContain(".capture-agent-panel");
+  expect(css).toContain(".capture-agent-row");
+  expect(css).toContain(".capture-effort-row");
+  expect(css).toContain(".capture-effort-label");
+  expect(css).toContain("grid-template-columns: 1fr 1fr;");
+  expect(css).toContain(".orch-item-actions");
+  expect(css).toContain(".orch-dismiss-btn");
+  expect(css).toContain("var(--bad)");
+  expect(css).toContain("min-width: 40px");
+  expect(css).toContain("min-height: 40px");
+
+  const js = readFileSync(`${ROOT}/app.js`, "utf8");
+  expect(js).toContain('data-act="orch-dismiss"');
+  expect(js).toContain('"orch-dismiss"');
+  expect(js).toContain('"overlook:dismissed-sessions"');
+  expect(js).toContain('dismissedSessions.has(');
+  expect(js).toContain('runOptions(false, "capture")');
+  expect(js).toContain('runChoice("capture")');
+  expect(js).toContain('api("/api/task/delete"');
+  expect(js).toContain('const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");');
 });
 
 test("agent CLI commands", () => {
@@ -150,11 +217,25 @@ async function fakeProvider(req: Request) {
   const body: any = await req.json(), path = new URL(req.url).pathname;
   seen.push({ path, beta: req.headers.get("anthropic-beta") ?? "", body });
   if (path === "/v1/chat/completions") {
+    if (body.messages?.some((m: any) => String(m.content).includes("trigger-quota"))) {
+      return new Response(JSON.stringify({ error: { message: "insufficient_quota. Resets in 15 minutes", code: "insufficient_quota" } }), { status: 429, headers: { "content-type": "application/json" } });
+    }
     const first = !body.messages.some((m: any) => m.role === "tool");
     const call = (id: string, name: string, args: unknown) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
     return Response.json({ choices: [{ message: first
       ? { role: "assistant", content: null, tool_calls: [call("a", "write_note", { path: "1 Inbox/From openai.md", content: "# From openai\n" }), call("b", "write_note", { path: "../escape.md", content: "x" })] }
       : { role: "assistant", content: "done" } }] });
+  }
+  if (path === "/v1/messages") {
+    if (body.messages?.some((m: any) => String(m.content).includes("trigger-quota"))) {
+      return new Response(JSON.stringify({
+        type: "error",
+        error: { type: "rate_limit_error", message: "rate_limit_error: Number of request tokens has exceeded your per-minute rate limit. Resets in 45s" }
+      }), {
+        status: 429,
+        headers: { "content-type": "application/json" }
+      });
+    }
   }
   const first = typeof body.messages.at(-1).content === "string";
   return Response.json({ id: "msg_1", type: "message", role: "assistant", model: body.model, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 },
@@ -216,6 +297,139 @@ test("a running task can be stopped", async () => {
   expect((await post("/api/task/stop", { id })).status).toBe(200);
   const t = await finished(id);
   expect(t.ok).toBe(false);
+});
+
+test("tasks can be deleted or dismissed while running or after finishing", async () => {
+  // Input validation
+  expect((await post("/api/task/delete", {})).status).toBe(400);
+  expect((await post("/api/task/delete", { id: 123 })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: "nonexistent" })).status).toBe(400);
+  expect((await post("/api/task/dismiss", { id: "nonexistent" })).status).toBe(400);
+
+  // Deleting a running task stops it and removes it from taskList()
+  const runId = await run("sleeper");
+  await Bun.sleep(200);
+  const tasksBefore = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(tasksBefore.some((t: any) => t.id === runId)).toBe(true);
+
+  const delRes = await post("/api/task/delete", { id: runId });
+  expect(delRes.status).toBe(200);
+  expect(await delRes.json()).toEqual({ ok: true });
+
+  // Ensure task is removed from getTask and taskList()
+  expect((await fetch(`${BASE}/api/task?id=${runId}`)).status).toBe(404);
+  const tasksAfter = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(tasksAfter.some((t: any) => t.id === runId)).toBe(false);
+
+  // Deleting again returns 400
+  expect((await post("/api/task/delete", { id: runId })).status).toBe(400);
+
+  // Deleting a finished task removes it from taskList()
+  const finishId = await run("echo", "done");
+  await finished(finishId);
+  const finishedTasksBefore = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(finishedTasksBefore.some((t: any) => t.id === finishId)).toBe(true);
+
+  const disRes = await post("/api/task/dismiss", { id: finishId });
+  expect(disRes.status).toBe(200);
+  expect(await disRes.json()).toEqual({ ok: true });
+
+  expect((await fetch(`${BASE}/api/task?id=${finishId}`)).status).toBe(404);
+  const finishedTasksAfter = (await (await fetch(`${BASE}/api/system`)).json()).tasks;
+  expect(finishedTasksAfter.some((t: any) => t.id === finishId)).toBe(false);
+  expect((await post("/api/task/dismiss", { id: finishId })).status).toBe(400);
+});
+
+test("task persistence across reload", async () => {
+  const cacheFile = `${ROOT}/cache/tasks.json`;
+
+  // 1. Run a task to completion
+  const taskId = await run("echo", "persist-test-run");
+  const finishedTask = await finished(taskId);
+  expect(finishedTask.ok).toBe(true);
+
+  // 2. Verify cache/tasks.json was written and contains the task without a stop function
+  expect(existsSync(cacheFile)).toBe(true);
+  let saved = JSON.parse(readFileSync(cacheFile, "utf8"));
+  expect(Array.isArray(saved)).toBe(true);
+  const found = saved.find((t: any) => t.id === taskId);
+  expect(found).toBeDefined();
+  expect(found.prompt).toBe("persist-test-run");
+  expect(found.ok).toBe(true);
+  expect(found.end).toBeDefined();
+  expect(found.stop).toBeUndefined();
+
+  // 3. Inject a simulated unfinished/zombie task (no end timestamp) into cache/tasks.json
+  const zombieId = "zombie-task-test";
+  saved.push({
+    id: zombieId,
+    agent: "echo",
+    model: "m1",
+    effort: "low",
+    cwd: ROOT,
+    prompt: "zombie task before restart",
+    start: new Date(Date.now() - 30000).toISOString(),
+    events: [],
+  });
+  writeFileSync(cacheFile, JSON.stringify(saved, null, 1));
+
+  // 4. Reload the server (restart process)
+  server.kill();
+  await server.exited;
+  server = Bun.spawn(["bun", "server.ts"], { cwd: ROOT, env: ENV, stdout: "ignore", stderr: "inherit" });
+  for (let i = 0; i < 100; i++) {
+    try { await fetch(BASE); break; } catch { await Bun.sleep(100); }
+  }
+
+  // 5. Verify the tasks after reload:
+  // - Completed task still present with ok = true
+  // - Zombie task recovered: marked with end timestamp and ok = false
+  const sys = await (await fetch(`${BASE}/api/system`)).json();
+  const reloadedTask = sys.tasks.find((t: any) => t.id === taskId);
+  expect(reloadedTask).toBeDefined();
+  expect(reloadedTask.ok).toBe(true);
+
+  const reloadedZombie = sys.tasks.find((t: any) => t.id === zombieId);
+  expect(reloadedZombie).toBeDefined();
+  expect(reloadedZombie.end).toBeDefined();
+  expect(reloadedZombie.ok).toBe(false);
+
+  const zombieDetail = await (await fetch(`${BASE}/api/task?id=${zombieId}`)).json();
+  expect(zombieDetail.ok).toBe(false);
+  expect(zombieDetail.end).toBeDefined();
+
+  // 6. Delete a task and verify it is removed from cache/tasks.json
+  const delRes = await post("/api/task/delete", { id: zombieId });
+  expect(delRes.status).toBe(200);
+  saved = JSON.parse(readFileSync(cacheFile, "utf8"));
+  expect(saved.some((t: any) => t.id === zombieId)).toBe(false);
+
+  // 7. Verify helper capping at last 50 tasks
+  const unitDir = `${ROOT}/unit-cap-test`;
+  mkdirSync(`${unitDir}/cache`, { recursive: true });
+  const lots = Array.from({ length: 60 }, (_, i) => ({
+    id: `lot-${i}`,
+    agent: "echo",
+    model: "m1",
+    effort: "low",
+    cwd: ROOT,
+    prompt: `task-${i}`,
+    start: new Date().toISOString(),
+    end: new Date().toISOString(),
+    ok: true,
+    events: [],
+  }));
+  writeFileSync(`${unitDir}/cache/tasks.json`, JSON.stringify(lots, null, 1));
+  const { loadTasks, saveTasks } = await import(`${ROOT}/tasks.ts`);
+  const loaded = loadTasks(unitDir);
+  expect(loaded.length).toBe(50);
+  expect(loaded[0].id).toBe("lot-10");
+  expect(loaded[49].id).toBe("lot-59");
+  saveTasks(unitDir);
+  const savedLots = JSON.parse(readFileSync(`${unitDir}/cache/tasks.json`, "utf8"));
+  expect(savedLots.length).toBe(50);
+  expect(savedLots[0].id).toBe("lot-10");
+  expect(savedLots[49].id).toBe("lot-59");
 });
 
 test("an OpenAI-compatible agent writes notes and cannot leave the vault", async () => {
@@ -443,4 +657,867 @@ test("stream-json events, cwd jailing, role presets, task continuation, and mult
 
   await post("/api/settings", { agents: init.agents });
 });
+
+test("quota error detection across CLI stream-json, raw JSON, stderr, Claude CLI, Anthropic SDK, and OpenAI", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  const quotaAgent = { id: "quota-agent", name: "Quota Agent", run: ["sh", "-c", "echo 'Individual quota reached. Resets in 2h 15m' >&2; exit 1"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" };
+  const streamQuotaAgent = { id: "stream-quota", name: "Stream Quota", run: ["sh", "-c", "echo '{\"event\":\"error\",\"error\":{\"message\":\"RESOURCE_EXHAUSTED: usage limit reached. Resets in 45m\"}}'; exit 1"] };
+  const rpcQuotaAgent = { id: "rpc-quota", name: "RPC Quota", run: ["sh", "-c", "echo '{\"error\":{\"code\":429,\"message\":\"Quota exceeded for metric. Resets at 2026-11-02T16:00:00Z\",\"status\":\"RESOURCE_EXHAUSTED\"}}'; exit 1"] };
+  const claudeCliQuotaAgent = { id: "claude-cli-quota", name: "Claude CLI Quota", run: ["sh", "-c", "echo 'Claude 429: Rate limit exceeded. Resets in 1h 30m'; exit 1"] };
+  await post("/api/settings", { agents: [...init.agents, quotaAgent, streamQuotaAgent, rpcQuotaAgent, claudeCliQuotaAgent] });
+
+  // 1. CLI stderr quota detection
+  const qTask = await finished(await run("quota-agent", "heavy work", { model: "m1", effort: "high" }));
+  expect(qTask.ok).toBe(false);
+  expect(qTask.quota?.exhausted).toBe(true);
+  expect(qTask.quota?.resetsIn).toBe("2h 15m");
+  expect(qTask.quota?.message).toContain("Individual quota reached");
+
+  // getTask returns quota metadata
+  const fetched = await (await fetch(`${BASE}/api/task?id=${qTask.id}`)).json();
+  expect(fetched.quota).toEqual(qTask.quota);
+
+  // 2. Stream-JSON event: "error" quota detection
+  const sqTask = await finished(await run("stream-quota", "stream work"));
+  expect(sqTask.ok).toBe(false);
+  expect(sqTask.quota?.exhausted).toBe(true);
+  expect(sqTask.quota?.resetsIn).toBe("45m");
+
+  // 3. Raw RPC error JSON without event field (e.g. Google Cloud / Antigravity format)
+  const rpcTask = await finished(await run("rpc-quota", "rpc work"));
+  expect(rpcTask.ok).toBe(false);
+  expect(rpcTask.quota?.exhausted).toBe(true);
+  expect(rpcTask.quota?.resetsIn).toBe("2026-11-02T16:00:00Z");
+
+  // 4. Claude CLI 429 stdout format
+  const ccTask = await finished(await run("claude-cli-quota", "cli work"));
+  expect(ccTask.ok).toBe(false);
+  expect(ccTask.quota?.exhausted).toBe(true);
+  expect(ccTask.quota?.resetsIn).toBe("1h 30m");
+
+  // 5. OpenAI API 429 quota detection
+  const apiTask = await finished(await run("fake-openai", "trigger-quota"));
+  expect(apiTask.ok).toBe(false);
+  expect(apiTask.quota?.exhausted).toBe(true);
+  expect(apiTask.quota?.resetsIn).toBe("15 minutes");
+  expect(apiTask.quota?.message).toContain("429");
+
+  // 6. Anthropic API 429 quota detection via SDK
+  const claudeApiTask = await finished(await run("fake-claude", "trigger-quota"));
+  expect(claudeApiTask.ok).toBe(false);
+  expect(claudeApiTask.quota?.exhausted).toBe(true);
+  expect(claudeApiTask.quota?.resetsIn).toBe("45s");
+  expect(claudeApiTask.quota?.message).toContain("429");
+
+  await post("/api/settings", { agents: init.agents });
+});
+
+test("task retry endpoint handles invalid input, missing models, single-model agents, nonexistent agents, task states, and session persistence", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  const multiAgent = { id: "multi-agent", name: "Multi Agent", run: ["echo", "got", "{prompt}", "{model}", "{effort}"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" };
+  const soloAgent = { id: "solo-agent", name: "Solo Agent", run: ["echo", "solo", "{prompt}", "{model}"], models: ["single"] };
+  const sessionAgent = { id: "session-agent", name: "Session Agent", run: ["echo", "sess:{session}"], open: { Log: ["true"] } };
+  const tempAgent = { id: "temp-agent", name: "Temp Agent", run: ["echo", "temp"] };
+  await post("/api/settings", { agents: [...init.agents, multiAgent, soloAgent, sessionAgent, tempAgent] });
+
+  // 1. Invalid IDs and bad JSON
+  expect((await post("/api/task/retry", { id: "non-existent" })).status).toBe(400);
+  expect((await post("/api/task/retry", {})).status).toBe(400);
+  expect((await post("/api/task/retry", { id: "" })).status).toBe(400);
+  expect((await post("/api/task/retry", { id: "   " })).status).toBe(400);
+  expect((await post("/api/task/retry", { id: 12345 })).status).toBe(400);
+  expect((await fetch(`${BASE}/api/task/retry`, { method: "POST", headers: { "content-type": "application/json" }, body: "{ invalid" })).status).toBe(400);
+
+  // 2. Retry a completed task vs a failed task
+  const completedTask = await finished(await run("multi-agent", "task completed", { model: "m1", effort: "high" }));
+  expect(completedTask.ok).toBe(true);
+  const retryCompletedRes = await post("/api/task/retry", { id: completedTask.id, model: "m2", effort: "low" });
+  expect(retryCompletedRes.status).toBe(200);
+  const retriedFromCompleted = await finished((await retryCompletedRes.json()).id);
+  expect(retriedFromCompleted.ok).toBe(true);
+  expect(retriedFromCompleted.model).toBe("m2");
+  expect(retriedFromCompleted.effort).toBe("low");
+  expect(retriedFromCompleted.prompt).toBe("task completed");
+
+  // 3. Retry without specifying model/effort reuses original model & effort
+  const retryDefaultRes = await post("/api/task/retry", { id: completedTask.id });
+  expect(retryDefaultRes.status).toBe(200);
+  const retriedWithDefaults = await finished((await retryDefaultRes.json()).id);
+  expect(retriedWithDefaults.model).toBe("m1");
+  expect(retriedWithDefaults.effort).toBe("high");
+
+  // 4. Retry with an invalid model
+  expect((await post("/api/task/retry", { id: completedTask.id, model: "unknown-model-xyz" })).status).toBe(400);
+
+  // 5. Retry a task that is still running returns 400
+  const runningTaskId = await run("sleeper");
+  await Bun.sleep(100);
+  const runningRetry = await post("/api/task/retry", { id: runningTaskId });
+  expect(runningRetry.status).toBe(400);
+  expect(await runningRetry.text()).toBe("task is still running");
+  await post("/api/task/stop", { id: runningTaskId });
+  await finished(runningTaskId);
+
+  // 6. Single-model agent edge case
+  const soloTask = await finished(await run("solo-agent", "work"));
+  expect(soloTask.model).toBe("single");
+  const soloRetryRes = await post("/api/task/retry", { id: soloTask.id });
+  expect(soloRetryRes.status).toBe(200);
+  const soloRetried = await finished((await soloRetryRes.json()).id);
+  expect(soloRetried.model).toBe("single");
+  expect((await post("/api/task/retry", { id: soloTask.id, model: "invalid-other" })).status).toBe(400);
+
+  // 7. Nonexistent agent (task created, then agent removed from configuration)
+  const tempTask = await finished(await run("temp-agent", "temp work"));
+  await post("/api/settings", { agents: init.agents }); // removes tempAgent
+  const tempRetry = await post("/api/task/retry", { id: tempTask.id });
+  expect(tempRetry.status).toBe(400);
+  expect(await tempRetry.text()).toContain("unknown agent");
+
+  // 8. Session persistence on retry
+  await post("/api/settings", { agents: [...init.agents, sessionAgent] });
+  const sessTask = await finished(await run("session-agent", "first run"));
+  expect(sessTask.session).toBeTruthy();
+  const sessRetryRes = await post("/api/task/retry", { id: sessTask.id });
+  expect(sessRetryRes.status).toBe(200);
+  const sessRetried = await finished((await sessRetryRes.json()).id);
+  // 9. Effort fallback when switching models on retry
+  const bigTask = await finished(await run("mixed", "x", { model: "big" }));
+  expect(bigTask.model).toBe("big");
+  expect(bigTask.effort).toBe("high");
+  // Retrying with model "small" (efforts: ["medium"]) without effort falls back to "medium"
+  const smallRetryRes = await post("/api/task/retry", { id: bigTask.id, model: "small" });
+  expect(smallRetryRes.status).toBe(200);
+  const smallRetried = await finished((await smallRetryRes.json()).id);
+  expect(smallRetried.model).toBe("small");
+  expect(smallRetried.effort).toBe("medium");
+  // Retrying with model "small" and explicitly invalid effort "high" returns 400
+  expect((await post("/api/task/retry", { id: bigTask.id, model: "small", effort: "high" })).status).toBe(400);
+
+  await post("/api/settings", { agents: init.agents });
+});
+
+test("note agent endpoint validates topic boundaries, layouts in pt and en, custom models, invalid JSON, and vault isolation", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+
+  // 1. Validation checks
+  expect((await post("/api/note/agent", { topic: "" })).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: "   \n\t " })).status).toBe(400);
+  expect((await post("/api/note/agent", {})).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: null })).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: 12345 })).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: "a".repeat(2001) })).status).toBe(400);
+
+  // Bad JSON in body returns 400
+  expect((await fetch(`${BASE}/api/note/agent`, { method: "POST", headers: { "content-type": "application/json" }, body: "{ bad: json" })).status).toBe(400);
+
+  // Boundary checks: exactly 1 char and exactly 2000 chars
+  const minTaskRes = await post("/api/note/agent", { topic: "A", agent: "echo" });
+  expect(minTaskRes.status).toBe(200);
+  const minTask = await finished((await minTaskRes.json()).id);
+  expect(minTask.prompt).toContain('"A"');
+
+  const maxTaskRes = await post("/api/note/agent", { topic: "X".repeat(2000), agent: "echo" });
+  expect(maxTaskRes.status).toBe(200);
+  const maxTask = await finished((await maxTaskRes.json()).id);
+  expect(maxTask.prompt).toContain(`"${"X".repeat(2000)}"`);
+
+  // 2. Custom model and effort
+  const customModelRes = await post("/api/note/agent", { topic: "Distributed Systems", agent: "echo", model: "m2", effort: "low" });
+  expect(customModelRes.status).toBe(200);
+  const customModelTask = await finished((await customModelRes.json()).id);
+  expect(customModelTask.model).toBe("m2");
+  expect(customModelTask.effort).toBe("low");
+  expect((await post("/api/note/agent", { topic: "Distributed Systems", agent: "echo", model: "invalid-model" })).status).toBe(400);
+
+  // 3. English prompt layout (default)
+  await post("/api/settings", { vaultLang: "en" });
+  const noteEnRes = await post("/api/note/agent", { topic: "Event-Driven Architecture", agent: "echo" });
+  expect(noteEnRes.status).toBe(200);
+  const noteEnTask = await finished((await noteEnRes.json()).id);
+  expect(noteEnTask.prompt).toBe(
+    'Create a note in the vault about: "Event-Driven Architecture". Follow AGENTS.md strictly: choose the right folder (e.g. 3 Concepts/ or 4 Ideas/), use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.'
+  );
+
+  // 4. Portuguese prompt layout when vaultLang is pt
+  await post("/api/settings", { vaultLang: "pt" });
+  const notePtRes = await post("/api/note/agent", { topic: "Arquitetura Orientada a Eventos", agent: "echo" });
+  expect(notePtRes.status).toBe(200);
+  const notePtTask = await finished((await notePtRes.json()).id);
+  expect(notePtTask.prompt).toBe(
+    'Crie uma nota no vault sobre: "Arquitetura Orientada a Eventos". Siga o AGENTS.md rigorosamente: decida a pasta correta (ex: 3 Conceitos/ ou 4 Ideias/), use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.'
+  );
+
+  // 5. Jail / Security: Prompt injection attempt with shell chars, quotes, and newlines
+  const injectionTopic = 'Malicious Topic "with quotes" \n; rm -rf / ; cat /etc/passwd # \0';
+  const injectRes = await post("/api/note/agent", { topic: injectionTopic, agent: "echo" });
+  expect(injectRes.status).toBe(200);
+  const injectTask = await finished((await injectRes.json()).id);
+  expect(injectTask.prompt).toContain(injectionTopic.trim());
+
+  // 6. Jail security: Agent write_note cannot escape vault
+  const escapeRes = await post("/api/note/agent", { topic: "Escape Attempt", agent: "fake-openai" });
+  expect(escapeRes.status).toBe(200);
+  const escapeTask = await finished((await escapeRes.json()).id);
+  expect(escapeTask.ok).toBe(true);
+  expect(existsSync(`${ROOT}/escape.md`)).toBe(false);
+
+  // Restore settings
+  await post("/api/settings", { vaultLang: "en", agents: init.agents });
+});
+
+test("adversarial verification: capture modal effort selection, dynamic model visibility, and backend validation", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+
+  const dynamicAgent = {
+    id: "dyn-agent",
+    name: "Dynamic Agent",
+    run: ["echo", "dyn", "{prompt}", "{model}", "{effort}"],
+    models: [
+      { id: "with-efforts", label: "Model With Efforts", efforts: ["low", "high"] },
+      { id: "no-efforts", label: "Model Without Efforts", efforts: [] },
+      { id: "inherited", label: "Model Inherited" },
+    ],
+    efforts: ["medium"],
+    effort: "medium",
+  };
+  const noModelsAgent = {
+    id: "no-models-agent",
+    name: "No Models Agent",
+    run: ["echo", "no-models", "{prompt}", "{effort}"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    effort: "high",
+  };
+  const bareAgent = { id: "bare-agent", name: "Bare Agent", run: ["echo", "bare"] };
+
+  await post("/api/settings", { agents: [...init.agents, dynamicAgent, noModelsAgent, bareAgent] });
+
+  // 1. Frontend simulation of runOptions and runChoice
+  const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
+  const runOptionsCode = appJs.match(/function runOptions[\s\S]*?^}/m)?.[0]!;
+  const runChoiceCode = appJs.match(/const runChoice = [\s\S]*?;/)?.[0]!;
+  const effortActionCode = appJs.match(/effort:\s*(\(el\)[\s\S]*?\)),/)?.[1]!;
+
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (c: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c as keyof typeof esc]);
+
+  function makeMockElement(tag: string, attrs: any = {}) {
+    const el: any = {
+      tagName: tag.toUpperCase(),
+      value: attrs.value || "",
+      hidden: attrs.hidden ?? false,
+      _html: "",
+      dataset: { ...attrs.dataset },
+      children: [] as any[],
+      classList: {
+        classes: new Set(attrs.className ? attrs.className.split(" ").filter(Boolean) : []),
+        contains(c: string) { return this.classes.has(c); },
+        toggle(c: string, force?: boolean) {
+          if (force === undefined) { if (this.classes.has(c)) this.classes.delete(c); else this.classes.add(c); }
+          else if (force) this.classes.add(c); else this.classes.delete(c);
+        },
+        add(c: string) { this.classes.add(c); },
+        delete(c: string) { this.classes.delete(c); },
+      },
+      setAttribute(name: string, val: any) { this[name] = String(val); },
+      getAttribute(name: string) { return this[name]; },
+      querySelectorAll(sel: string) {
+        if (sel === "button") return this.children.filter((c: any) => c.tagName === "BUTTON");
+        return [];
+      },
+      querySelector(sel: string) {
+        if (sel === ".on") return this.children.find((c: any) => c.classList.contains("on")) || null;
+        return null;
+      },
+    };
+    if (tag === "select") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          const matches = [...html.matchAll(/<option value="([^"]*)"/g)];
+          if (matches.length > 0) this.value = matches[0][1];
+          else this.value = "";
+        },
+        get() { return this._html; }
+      });
+    } else if (tag === "div") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          this.children = [];
+          const matches = [...html.matchAll(/<button([^>]*)>([^<]*)<\/button>/g)];
+          for (const [, attrsStr] of matches) {
+            const vMatch = attrsStr.match(/data-v="([^"]*)"/);
+            const classMatch = attrsStr.match(/class="([^"]*)"/);
+            const btn = makeMockElement("button", {
+              dataset: { v: vMatch ? vMatch[1] : "" },
+              className: classMatch ? classMatch[1] : "",
+            });
+            btn.parentElement = this;
+            this.children.push(btn);
+          }
+        },
+        get() { return this._html; }
+      });
+    }
+    return el;
+  }
+
+  const domElements = new Map<string, any>();
+  const $ = (sel: string) => {
+    if (sel.includes(" .on")) {
+      const parentSel = sel.split(" ")[0];
+      return domElements.get(parentSel)?.querySelector(".on") || null;
+    }
+    return domElements.get(sel) || null;
+  };
+
+  const sysRunners = (await (await fetch(`${BASE}/api/system`)).json()).runners;
+  const mockS = { runners: sysRunners };
+
+  const compiled = new Function("$", "esc", "S", `${runOptionsCode}\n${runChoiceCode}\nreturn { runOptions, runChoice };`);
+  const { runOptions, runChoice } = compiled($, esc, mockS);
+
+  const captureAgent = makeMockElement("select", { value: "dyn-agent" });
+  const captureModel = makeMockElement("select", { value: "with-efforts" });
+  const captureEffort = makeMockElement("div", { hidden: true });
+
+  domElements.set("#capture-agent", captureAgent);
+  domElements.set("#capture-model", captureModel);
+  domElements.set("#capture-effort", captureEffort);
+
+  // A. Model with specific efforts ["low", "high"]
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureModel.value).toBe("with-efforts");
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "high"]);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "with-efforts", effort: "low" });
+
+  // Simulate clicking second effort button "high"
+  const effortFn = new Function("el", `(${effortActionCode.replace(/^effort:\s*/, "").replace(/,\s*$/, "")})(el);`);
+  effortFn(captureEffort.children[1]);
+  expect(captureEffort.children[1].classList.contains("on")).toBe(true);
+  expect(captureEffort.children[0].classList.contains("on")).toBe(false);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "with-efforts", effort: "high" });
+
+  // B. Switch to model without efforts: efforts: [] -> #capture-effort hidden
+  captureModel.value = "no-efforts";
+  runOptions(true, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureEffort.hidden).toBe(true);
+  expect(captureEffort.children.length).toBe(0);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "no-efforts", effort: undefined });
+
+  // C. Switch to model with inherited efforts
+  captureModel.value = "inherited";
+  runOptions(true, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["medium"]);
+  expect(runChoice("capture")).toEqual({ agent: "dyn-agent", model: "inherited", effort: "medium" });
+
+  // D. Switch to agent without models but with efforts (no-models-agent)
+  captureAgent.value = "no-models-agent";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(true);
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(runChoice("capture")).toEqual({ agent: "no-models-agent", model: undefined, effort: "high" });
+
+  // E. Switch to agent with neither models nor efforts (bare-agent)
+  captureAgent.value = "bare-agent";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(true);
+  expect(captureEffort.hidden).toBe(true);
+  expect(runChoice("capture")).toEqual({ agent: "bare-agent", model: undefined, effort: undefined });
+
+  // 2. Backend validation via POST /api/note/agent & resolveRun
+  // A. Model with efforts: valid efforts low and high pass
+  const rLow = await post("/api/note/agent", { topic: "Low Effort Note", agent: "dyn-agent", model: "with-efforts", effort: "low" });
+  expect(rLow.status).toBe(200);
+  const tLow = await finished((await rLow.json()).id);
+  expect(tLow.model).toBe("with-efforts");
+  expect(tLow.effort).toBe("low");
+
+  const rHigh = await post("/api/note/agent", { topic: "High Effort Note", agent: "dyn-agent", model: "with-efforts", effort: "high" });
+  expect(rHigh.status).toBe(200);
+  const tHigh = await finished((await rHigh.json()).id);
+  expect(tHigh.model).toBe("with-efforts");
+  expect(tHigh.effort).toBe("high");
+
+  // Invalid effort for this model fails
+  const rInvalid = await post("/api/note/agent", { topic: "Invalid Effort", agent: "dyn-agent", model: "with-efforts", effort: "medium" });
+  expect(rInvalid.status).toBe(400);
+  expect(await rInvalid.text()).toContain('Dynamic Agent has no effort "medium" for Model With Efforts');
+
+  // B. Model with no efforts: any effort passed fails
+  const rNoEffortFail = await post("/api/note/agent", { topic: "No Effort Check", agent: "dyn-agent", model: "no-efforts", effort: "low" });
+  expect(rNoEffortFail.status).toBe(400);
+  expect(await rNoEffortFail.text()).toContain('Dynamic Agent has no effort "low" for Model Without Efforts');
+
+  // Model with no efforts and omitted effort succeeds
+  const rNoEffortOk = await post("/api/note/agent", { topic: "No Effort Ok", agent: "dyn-agent", model: "no-efforts" });
+  expect(rNoEffortOk.status).toBe(200);
+  const tNoEffortOk = await finished((await rNoEffortOk.json()).id);
+  expect(tNoEffortOk.model).toBe("no-efforts");
+  expect(tNoEffortOk.effort).toBe("");
+
+  // C. Non-string effort and model types are safely coerced by str()
+  const rNonStrEffort = await post("/api/note/agent", { topic: "Non string effort", agent: "dyn-agent", model: "with-efforts", effort: 9999 });
+  expect(rNonStrEffort.status).toBe(200);
+  const tNonStrEffort = await finished((await rNonStrEffort.json()).id);
+  expect(tNonStrEffort.effort).toBe("low"); // falls back to first/default effort
+
+  const rNonStrModel = await post("/api/note/agent", { topic: "Non string model", agent: "dyn-agent", model: { bad: true } });
+  expect(rNonStrModel.status).toBe(200);
+  const tNonStrModel = await finished((await rNonStrModel.json()).id);
+  expect(tNonStrModel.model).toBe("with-efforts"); // falls back to first model
+
+  // Restore settings
+  await post("/api/settings", { agents: init.agents });
+});
+
+test("adversarial verification: fleet sidebar chat dismissal, external session persistence, and canvas synchronization", async () => {
+  // 1. Backend task delete and alias dismiss edge cases
+  expect((await post("/api/task/delete", { id: "" })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: "   " })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: false })).status).toBe(400);
+  expect((await post("/api/task/delete", { id: ["t1"] })).status).toBe(400);
+  expect((await post("/api/task/dismiss", { id: "not-a-real-task" })).status).toBe(400);
+
+  // Active sleeper task abortion
+  const runId = await run("sleeper");
+  await Bun.sleep(150);
+  const delRunning = await post("/api/task/delete", { id: runId });
+  expect(delRunning.status).toBe(200);
+  expect(await delRunning.json()).toEqual({ ok: true });
+  expect((await fetch(`${BASE}/api/task?id=${runId}`)).status).toBe(404);
+  expect((await post("/api/task/delete", { id: runId })).status).toBe(400);
+
+  // Finished task dismissal via alias
+  const echoId = await run("echo", "dismiss-me");
+  await finished(echoId);
+  const disFinished = await post("/api/task/dismiss", { id: echoId });
+  expect(disFinished.status).toBe(200);
+  expect(await disFinished.json()).toEqual({ ok: true });
+  expect((await fetch(`${BASE}/api/task?id=${echoId}`)).status).toBe(404);
+  expect((await post("/api/task/dismiss", { id: echoId })).status).toBe(400);
+
+  // 2. External agent session dismissal & fleetItems exclusion & persistence
+  const storageMap = new Map<string, string>();
+  const mockLocalStorage = {
+    getItem: (k: string) => storageMap.get(k) || null,
+    setItem: (k: string, v: string) => storageMap.set(k, String(v)),
+    removeItem: (k: string) => storageMap.delete(k),
+  };
+
+  const DISMISSED_KEY = "overlook:dismissed-sessions";
+  // Corrupted localStorage handling
+  storageMap.set(DISMISSED_KEY, "{ broken-json: true");
+  let dismissedSessions = (() => {
+    try { return new Set(JSON.parse(mockLocalStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
+  })();
+  expect(dismissedSessions.size).toBe(0);
+
+  // Dismissing external sessions
+  dismissedSessions.add("c:sess-1");
+  dismissedSessions.add("bg:task-1");
+  mockLocalStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions]));
+
+  // Reload simulation
+  const reloaded = new Set(JSON.parse(mockLocalStorage.getItem(DISMISSED_KEY) || "[]"));
+  expect(reloaded.has("c:sess-1")).toBe(true);
+  expect(reloaded.has("bg:task-1")).toBe(true);
+
+  // Test fleetItems filtering logic
+  const mockS = {
+    tasks: [{ id: "t-1", prompt: "task 1", agent: "agy" }],
+    agents: [
+      { key: "c:sess-1", name: "claude", cwd: "/tmp", seconds: 10 },
+      { key: "c:sess-2", name: "claude", cwd: "/tmp", seconds: 20 },
+    ],
+    background: [
+      { key: "bg:task-1", title: "BG 1", cwd: "/tmp", state: "done", since: Date.now() },
+      { key: "bg:task-2", title: "BG 2", cwd: "/tmp", state: "done", since: Date.now() },
+    ],
+  };
+
+  const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
+  expect(appJs).toContain("dismissedSessions.has(a.key)");
+  expect(appJs).toContain("dismissedSessions.has(f.key)");
+
+  const items: any[] = [];
+  const seen = new Set();
+  for (const t of mockS.tasks) items.push({ kind: "task", id: t.id });
+  for (const a of mockS.agents) {
+    if (dismissedSessions.has(a.key)) continue;
+    seen.add(a.key);
+    items.push({ kind: "agent", id: a.key });
+  }
+  for (const f of mockS.background) {
+    if (seen.has(f.key) || dismissedSessions.has(f.key)) continue;
+    items.push({ kind: "agent", id: f.key });
+  }
+
+  expect(items.map((x) => `${x.kind}:${x.id}`)).toEqual(["task:t-1", "agent:c:sess-2", "agent:bg:task-2"]);
+
+  // 3. Canvas synchronization simulation from ACTIONS["orch-dismiss"]
+  let orchPanes = [{ kind: "task", id: "t1" }, { kind: "agent", id: "a1" }, { kind: "task", id: "t2" }];
+  let orchLinks = [
+    { a: "task:t1", b: "agent:a1" },
+    { a: "agent:a1", b: "task:t2" },
+  ];
+  let orchSelected = new Set(["task:t1", "agent:a1"]);
+  let orchActive = "task:t1";
+  let orchMax = "task:t1";
+  let orchSeq = 10;
+  const paneKey = (p: any) => `${p.kind}:${p.id}`;
+
+  const dismissSync = (kind: string, id: string, availableFleet: any[]) => {
+    const targetKey = `${kind}:${id}`;
+    orchSelected.delete(targetKey);
+    orchLinks = orchLinks.filter((l) => l.a !== targetKey && l.b !== targetKey);
+    if (kind === "agent") dismissedSessions.add(id);
+
+    const wasInPanes = orchPanes.some((p) => paneKey(p) === targetKey);
+    if (wasInPanes) {
+      orchPanes = orchPanes.filter((p) => paneKey(p) !== targetKey);
+      const paneKeys = new Set(orchPanes.map(paneKey));
+      orchLinks = orchLinks.filter((l) => paneKeys.has(l.a) && paneKeys.has(l.b));
+      if (orchPanes.length === 0) {
+        const next = availableFleet.find((x) => paneKey(x) !== targetKey);
+        if (next) {
+          orchPanes = [{ kind: next.kind, id: next.id }];
+          orchActive = paneKey(next);
+        } else {
+          const newId = String(++orchSeq);
+          orchPanes = [{ kind: "new", id: newId }];
+          orchActive = `new:${newId}`;
+        }
+      } else if (orchActive === targetKey) {
+        orchActive = paneKey(orchPanes[0]);
+      }
+      if (orchMax === targetKey) orchMax = "";
+    } else if (orchActive === targetKey) {
+      orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
+      if (orchMax === targetKey) orchMax = "";
+    }
+  };
+
+  // Step 1: Dismiss active & maximized pane task:t1
+  dismissSync("task", "t1", [{ kind: "task", id: "t2" }, { kind: "agent", id: "a1" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:a1", "task:t2"]);
+  expect(orchLinks).toEqual([{ a: "agent:a1", b: "task:t2" }]); // orphan link to t1 pruned
+  expect(orchSelected.has("task:t1")).toBe(false);
+  expect(orchSelected.has("agent:a1")).toBe(true);
+  expect(orchActive).toBe("agent:a1"); // shifted to remaining pane
+  expect(orchMax).toBe(""); // cleared
+
+  // Step 2: Dismiss non-pane sidebar item (wasInPanes: false)
+  dismissSync("task", "t99", [{ kind: "task", id: "t2" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:a1", "task:t2"]); // unchanged
+
+  // Step 3: Dismiss pane when other panes remain
+  dismissSync("task", "t2", [{ kind: "agent", id: "a1" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:a1"]);
+  expect(orchLinks).toEqual([]);
+
+  // Step 4: Dismiss the last remaining pane when fleet has fallback
+  dismissSync("agent", "a1", [{ kind: "agent", id: "a1" }, { kind: "agent", id: "fallback-fleet" }]);
+  expect(orchPanes.map(paneKey)).toEqual(["agent:fallback-fleet"]);
+  expect(orchActive).toBe("agent:fallback-fleet");
+
+  // Step 5: Dismiss the last remaining pane when fleet is EMPTY -> fallback to new prompt pane
+  dismissSync("agent", "fallback-fleet", [{ kind: "agent", id: "fallback-fleet" }]);
+  expect(orchPanes.length).toBe(1);
+  expect(orchPanes[0].kind).toBe("new");
+  expect(orchActive).toBe(`new:${orchSeq}`);
+});
+
+test("adversarial verification: capture modal 2-tier layout, effort switching, and mobile responsiveness", async () => {
+  const html = readFileSync(`${ROOT}/index.html`, "utf8");
+  const css = readFileSync(`${ROOT}/app.css`, "utf8");
+  const js = readFileSync(`${ROOT}/app.js`, "utf8");
+
+  // 1. Structure in index.html: Deterministic 2-tier layout
+  // Row 1: Agent & Model selects inside .capture-agent-row
+  expect(html).toContain('<div class="capture-agent-panel" id="capture-agent-panel" hidden>');
+  expect(html).toContain('<div class="capture-fields-row capture-agent-row">');
+  expect(html).toContain('<select class="pick" id="capture-agent" aria-label="Agent"></select>');
+  expect(html).toContain('<select class="pick" id="capture-model" aria-label="Model" hidden></select>');
+  // Row 2: Effort label + Segmented control inside #capture-effort-row
+  expect(html).toContain('<div class="capture-effort-row" id="capture-effort-row">');
+  expect(html).toContain('<span class="capture-effort-label">Effort</span>');
+  expect(html).toContain('<div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>');
+
+  // 2. CSS Desktop layout rules: standardized 2-tier layout with micro-labels and 100% width controls
+  expect(css).toContain(".capture-agent-panel,\n#capture-agent-panel {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  margin-bottom: 14px;\n  padding: 12px 14px;");
+  // Row 1: 2 equal columns (1fr 1fr), collapsing to 1fr when model is hidden
+  expect(css).toContain(".capture-agent-row,\n.capture-fields-row {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 10px;");
+  expect(css).toContain(".capture-agent-row:has(#capture-model[hidden]),\n.capture-fields-row:has(#capture-model[hidden]) {\n  grid-template-columns: 1fr;\n}");
+  expect(css).toContain(".capture-agent-row .pick,\n.capture-fields-row .pick {\n  width: 100%;\n  min-width: 0;\n}");
+  // Row 2: Standardized effort row with full-width segmented control and distributed buttons
+  expect(css).toContain(".capture-effort-row,\n#capture-effort-row {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;");
+  expect(css).toContain(".capture-effort-row:has(#capture-effort[hidden]),\n#capture-effort-row:has(#capture-effort[hidden]) {\n  display: none;\n}");
+  expect(css).toContain(".capture-effort-row .seg,\n#capture-effort-row .seg,\n.capture-effort-seg {\n  display: flex;\n  width: 100%;\n}");
+  expect(css).toContain(".capture-effort-row .seg button,\n#capture-effort-row .seg button,\n.capture-effort-seg button {\n  flex: 1;\n  min-width: 0;\n  text-align: center;\n  justify-content: center;");
+
+  // 3. CSS Mobile responsive behavior (@media max-width: 640px)
+  expect(css).toContain(".capture-agent-row,\n  .capture-fields-row {\n    grid-template-columns: 1fr;\n    gap: 8px;\n  }");
+  expect(css).toContain(".capture-effort-row,\n  #capture-effort-row {\n    flex-direction: column;\n    align-items: stretch;\n    gap: 6px;\n  }");
+  expect(css).toContain(".capture-effort-row .seg,\n  #capture-effort-row .seg {\n    display: flex;\n    width: 100%;\n  }");
+  expect(css).toContain(".capture-effort-row .seg button,\n  #capture-effort-row .seg button {\n    flex: 1;\n    min-width: 0;\n    text-align: center;\n    padding: 0 4px;\n    font-size: 11.5px;\n  }");
+
+  // 4. Switching between Antigravity (3 efforts) and Claude Code (5 efforts)
+  const runOptionsCode = js.match(/function runOptions[\s\S]*?^}/m)?.[0]!;
+  const runChoiceCode = js.match(/const runChoice = [\s\S]*?;/)?.[0]!;
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (c: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c as keyof typeof esc]);
+
+  function makeMockEl(tag: string, attrs: any = {}) {
+    const el: any = {
+      tagName: tag.toUpperCase(),
+      value: attrs.value || "",
+      hidden: attrs.hidden ?? false,
+      _html: "",
+      dataset: { ...attrs.dataset },
+      children: [] as any[],
+      classList: {
+        classes: new Set(attrs.className ? attrs.className.split(" ").filter(Boolean) : []),
+        contains(c: string) { return this.classes.has(c); },
+        add(c: string) { this.classes.add(c); },
+        remove(c: string) { this.classes.delete(c); },
+        toggle(c: string, force?: boolean) {
+          if (force === true) this.classes.add(c);
+          else if (force === false) this.classes.delete(c);
+          else if (this.classes.has(c)) this.classes.delete(c);
+          else this.classes.add(c);
+        }
+      },
+      querySelector(sel: string) {
+        if (sel === ".on") return this.children.find((c: any) => c.classList.contains("on")) || null;
+        return null;
+      }
+    };
+    if (tag === "select") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          const vals = [...html.matchAll(/value="([^"]*)"/g)].map((m) => m[1]);
+          if (vals.length && !vals.includes(this.value)) this.value = vals[0];
+        },
+        get() { return this._html; }
+      });
+    } else if (tag === "div") {
+      Object.defineProperty(el, "innerHTML", {
+        set(html: string) {
+          this._html = html;
+          this.children = [];
+          for (const [, attrsStr] of html.matchAll(/<button([^>]*)>([^<]*)<\/button>/g)) {
+            const vMatch = attrsStr.match(/data-v="([^"]*)"/);
+            const classMatch = attrsStr.match(/class="([^"]*)"/);
+            const btn = makeMockEl("button", {
+              dataset: { v: vMatch ? vMatch[1] : "" },
+              className: classMatch ? classMatch[1] : "",
+            });
+            btn.parentElement = this;
+            this.children.push(btn);
+          }
+        },
+        get() { return this._html; }
+      });
+    }
+    return el;
+  }
+
+  const dom = new Map<string, any>();
+  const $ = (sel: string) => dom.get(sel) || (sel.includes(" .on") ? dom.get(sel.split(" ")[0])?.querySelector(".on") : null);
+
+  const mockRunners = [
+    {
+      id: "agy",
+      name: "Antigravity",
+      effort: "medium",
+      models: [{ id: "agy-pro", label: "Antigravity Pro", efforts: ["low", "medium", "high"] }],
+    },
+    {
+      id: "claude",
+      name: "Claude Code",
+      effort: "high",
+      models: [{ id: "claude-sonnet", label: "Claude Sonnet", efforts: ["low", "medium", "high", "xhigh", "max"] }],
+    },
+    {
+      id: "single-model-no-effort",
+      name: "Simple Agent",
+      models: [],
+      efforts: [],
+    }
+  ];
+
+  const compiled = new Function("$", "esc", "S", `${runOptionsCode}\n${runChoiceCode}\nreturn { runOptions, runChoice };`);
+  const { runOptions, runChoice } = compiled($, esc, { runners: mockRunners });
+
+  const captureAgent = makeMockEl("select", { value: "agy" });
+  const captureModel = makeMockEl("select", { value: "agy-pro" });
+  const captureEffort = makeMockEl("div", { hidden: true });
+
+  dom.set("#capture-agent", captureAgent);
+  dom.set("#capture-model", captureModel);
+  dom.set("#capture-effort", captureEffort);
+
+  // A. Select Antigravity (3 efforts)
+  captureAgent.value = "agy";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureModel.value).toBe("agy-pro");
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "medium", "high"]);
+  expect(runChoice("capture")).toEqual({ agent: "agy", model: "agy-pro", effort: "medium" });
+
+  // B. Switch to Claude Code (5 efforts)
+  captureAgent.value = "claude";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(false);
+  expect(captureModel.value).toBe("claude-sonnet");
+  expect(captureEffort.hidden).toBe(false);
+  expect(captureEffort.children.map((b: any) => b.dataset.v)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(runChoice("capture")).toEqual({ agent: "claude", model: "claude-sonnet", effort: "high" });
+
+  // C. Switch to Agent with no models and no efforts
+  captureAgent.value = "single-model-no-effort";
+  runOptions(false, "capture");
+  expect(captureModel.hidden).toBe(true);
+  expect(captureEffort.hidden).toBe(true);
+  expect(captureEffort.children.length).toBe(0);
+  expect(runChoice("capture")).toEqual({ agent: "single-model-no-effort", model: undefined, effort: undefined });
+});
+
+test("adversarial verification: task persistence across reload, retryTask 404 recovery, and notes resilience", async () => {
+  const js = readFileSync(`${ROOT}/app.js`, "utf8");
+
+  // 1. retryTask 404 handling in Standalone Page Mode
+  const toastLogs: string[] = [];
+  const apiCalls: { endpoint: string; body: any }[] = [];
+  const mockApi = async (url: string, body?: any) => {
+    apiCalls.push({ endpoint: url, body });
+    if (url === "/api/task/retry") {
+      if (body?.id === "fail-dispatch") throw new Error("404: task not found");
+      if (body?.id === "500-error") throw new Error("500: internal server error");
+      throw new Error("404: task not found");
+    }
+    if (url === "/api/run") {
+      if (body?.agent === "fail-dispatch") throw new Error("Server out of resources");
+      return { id: "new-redispatched-task" };
+    }
+    if (url === "/api/system") return { runners: [], tasks: [] };
+    return {};
+  };
+
+  const mockToast = (msg: string) => { toastLogs.push(msg); };
+  const mockRoute = () => ({ pg: "t", arg: "expired-task-1" });
+  const mockLocation = { hash: "" };
+
+  const retryCode = js.match(/async function retryTask\([\s\S]*?\n\}/)?.[0];
+  expect(retryCode).toBeTruthy();
+
+  const retryFn = new Function(
+    "api", "toast", "route", "location", "S", "orchPanes", "$", "paneKey", "rekey", "orchSigs", "orchActive", "orchMax", "saveCanvas", "agentsBody", "orchPaint",
+    `return (${retryCode});`
+  )(
+    mockApi, mockToast, mockRoute, mockLocation,
+    { tasks: [{ id: "expired-task-1", agent: "claude", prompt: "write summary", model: "sonnet", effort: "high" }] },
+    [], () => null, (x: any) => `${x.kind}:${x.id}`, () => {}, new Set(), "", "", () => {}, () => {}, () => {}
+  );
+
+  // A. Standalone 404 re-dispatch test
+  await retryFn("expired-task-1", "opus", "");
+  expect(toastLogs).toContain("Task session expired. Re-dispatching as a new task…");
+  expect(apiCalls.some((c) => c.endpoint === "/api/run" && c.body.agent === "claude" && c.body.prompt === "write summary" && c.body.model === "opus" && c.body.effort === "high")).toBe(true);
+  expect(mockLocation.hash).toBe("#/t/new-redispatched-task");
+
+  // B. Canvas Tile 404 re-dispatch test (re-keys canvas tile in place)
+  let savedCanvas = false;
+  let paintedCanvas = false;
+  let rekeyedOld = "", rekeyedNew = "";
+  const mockPanes = [{ kind: "task", id: "tile-expired-task" }];
+  const mockSigs = new Set(["task:tile-expired-task"]);
+  let activePane = "task:tile-expired-task";
+
+  const tileRetryFn = new Function(
+    "api", "toast", "route", "location", "S", "orchPanes", "$", "paneKey", "rekey", "orchSigs", "orchActive", "orchMax", "saveCanvas", "agentsBody", "orchPaint",
+    `return (${retryCode});`
+  )(
+    mockApi, mockToast, () => ({ pg: "agents", arg: "" }), mockLocation,
+    { tasks: [{ id: "tile-expired-task", agent: "agy", prompt: "audit security", model: "agy-1", effort: "medium" }] },
+    mockPanes,
+    () => null,
+    (x: any) => `${x.kind}:${x.id}`,
+    (oldK: string, newK: string) => { rekeyedOld = oldK; rekeyedNew = newK; },
+    mockSigs,
+    activePane,
+    "",
+    () => { savedCanvas = true; },
+    () => {},
+    () => { paintedCanvas = true; }
+  );
+
+  await tileRetryFn("tile-expired-task", "agy-2", "task:tile-expired-task", { agent: "agy", prompt: "audit security", effort: "medium" });
+  expect(mockPanes[0].id).toBe("new-redispatched-task");
+  expect(rekeyedOld).toBe("task:tile-expired-task");
+  expect(rekeyedNew).toBe("task:new-redispatched-task");
+  expect(savedCanvas).toBe(true);
+  expect(paintedCanvas).toBe(true);
+  expect(toastLogs).toContain("Switched to agy-2 & retrying in tile");
+
+  // C. Re-dispatch failure recovery test
+  toastLogs.length = 0;
+  await retryFn("fail-dispatch", "m", "", { agent: "fail-dispatch", prompt: "boom" });
+  expect(toastLogs).toContain("Re-dispatch failed: Server out of resources");
+
+  // D. Generic non-404 error handling test
+  toastLogs.length = 0;
+  await retryFn("500-error", "m", "");
+  expect(toastLogs).toContain("Retry failed: 500: internal server error");
+
+  // 2. notes() resilience against missing/deleted or empty files during scan
+  const testGhostPath = `${VAULT}/1 Inbox/ghost-adversarial-test.md`;
+  const testZeroPath = `${VAULT}/1 Inbox/zero-adversarial-test.md`;
+  try {
+    writeFileSync(testGhostPath, "# Ghost Note\nTemporary note to be deleted.");
+    writeFileSync(testZeroPath, ""); // 0-byte empty file
+
+    const resBefore = await fetch(`${BASE}/api`);
+    expect(resBefore.status).toBe(200);
+    const dataBefore = await resBefore.json();
+    expect(dataBefore.notes.some((n: any) => n.path.includes("ghost-adversarial-test.md"))).toBe(true);
+    expect(dataBefore.notes.some((n: any) => n.path.includes("zero-adversarial-test.md"))).toBe(true);
+
+    // Delete the ghost file suddenly
+    rmSync(testGhostPath, { force: true });
+    expect(existsSync(testGhostPath)).toBe(false);
+
+    // Rapid successive requests should never throw or return 500
+    const [res1, res2, res3] = await Promise.all([
+      fetch(`${BASE}/api`),
+      fetch(`${BASE}/api`),
+      fetch(`${BASE}/api`)
+    ]);
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    expect(res3.status).toBe(200);
+
+    const dataAfter = await res1.json();
+    expect(dataAfter.notes.some((n: any) => n.path.includes("ghost-adversarial-test.md"))).toBe(false);
+    // 0-byte file handled safely with basename fallback
+    const zeroNote = dataAfter.notes.find((n: any) => n.path.includes("zero-adversarial-test.md"));
+    expect(zeroNote).toBeDefined();
+    expect(zeroNote.title).toBe("zero-adversarial-test");
+    expect(zeroNote.tags).toEqual([]);
+    expect(zeroNote.links).toEqual([]);
+  } finally {
+    rmSync(testGhostPath, { force: true });
+    rmSync(testZeroPath, { force: true });
+  }
+});
+
+
 

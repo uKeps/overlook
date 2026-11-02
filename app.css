@@ -439,6 +439,177 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); backdrop-filter: blur(4px); }
 #capture textarea:focus { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .capture-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .capture-foot small { color: var(--faint); flex: 1; }
+.capture-tabs { flex: none; }
+.capture-tabs button { padding: 0 13px; font-size: 12.5px; }
+.capture-agent-panel,
+#capture-agent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  border: 1px solid var(--line);
+}
+.capture-agent-row,
+.capture-fields-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+.capture-agent-row:has(#capture-model[hidden]),
+.capture-fields-row:has(#capture-model[hidden]) {
+  grid-template-columns: 1fr;
+}
+.capture-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.capture-field:has(#capture-model[hidden]),
+.capture-field:has(#capture-effort[hidden]) {
+  display: none;
+}
+.capture-field-label,
+.capture-effort-label,
+.capture-effort-row label,
+#capture-effort-row label {
+  font: 600 10.5px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted);
+  user-select: none;
+}
+.capture-agent-row .pick,
+.capture-fields-row .pick {
+  width: 100%;
+  min-width: 0;
+}
+.capture-effort-row,
+#capture-effort-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+.capture-effort-row:has(#capture-effort[hidden]),
+#capture-effort-row:has(#capture-effort[hidden]) {
+  display: none;
+}
+.capture-effort-row .seg,
+#capture-effort-row .seg,
+.capture-effort-seg {
+  display: flex;
+  width: 100%;
+}
+.capture-effort-row .seg button,
+#capture-effort-row .seg button,
+.capture-effort-seg button {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  justify-content: center;
+  padding: 0 4px;
+  text-transform: capitalize;
+}
+
+/* Quota Exhaustion Alert & Model Switch */
+.quota-alert {
+  border-radius: var(--r);
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, .25);
+}
+.orch-needs .quota-alert {
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+  padding: 10px 14px;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+}
+.quota-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.quota-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 42%, transparent);
+  color: var(--warn);
+  font: 600 11px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.quota-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+}
+.quota-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 500 12px var(--mono);
+  color: var(--muted);
+}
+.quota-msg {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.quota-msg code {
+  font: 12px var(--mono);
+  background: rgba(255, 255, 255, .08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.quota-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.quota-dropdown-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.quota-dropdown-wrap .pick {
+  height: 32px;
+  padding: 0 28px 0 12px;
+  font-size: 12px;
+}
+.quota-dropdown-wrap .btn {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+.quota-cta-btn {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+
 /* Embedded service: the app fills the page; status and actions live in the top bar, next to the name. */
 body.app .cal { display: none; }
 body.app .top, body.app main { max-width: 1680px; }
@@ -450,7 +621,8 @@ body.app .top, body.app main { max-width: 1680px; }
 .frame.phone { width: min(var(--w), 100%); margin: 0 auto; max-height: 940px; border-radius: 40px; border: 6px solid rgba(255, 255, 255, .07);
   box-shadow: 0 0 0 1px var(--line), 0 40px 120px rgba(0, 0, 0, .6), 0 0 160px -30px color-mix(in srgb, var(--accent) 25%, transparent); }
 .toast { position: fixed; bottom: 100px; left: 50%; translate: -50% 20px; padding: 10px 16px; border-radius: 12px; opacity: 0; transition: all .35s var(--ease); pointer-events: none; z-index: 20; background: color-mix(in srgb, var(--surface) 85%, transparent); }
-.toast.on { opacity: 1; translate: -50% 0; }
+.toast.on { opacity: 1; translate: -50% 0; pointer-events: auto; }
+.toast a { color: var(--accent); text-decoration: underline; font-weight: 500; }
 
 @media (max-width: 900px) {
   body { padding: 0 16px 120px; }
@@ -827,12 +999,27 @@ body.dock-float .orch-shell { height: calc(100dvh - 118px); }
 .orch-info b { font: 500 12.5px/1.35 var(--body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orch-info small { font: 400 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orch-need { font-size: 11px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-.orch-pin-btn {
+.orch-item-actions {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+}
+.orch-pin-btn,
+.orch-dismiss-btn {
   width: 30px; flex: none; display: grid; place-items: center; color: var(--faint);
   border-left: 1px solid transparent; transition: color .15s, background .15s;
 }
-.orch-item:hover .orch-pin-btn, .orch-pin-btn.on { color: var(--muted); border-left-color: var(--line); }
+.orch-item:hover .orch-pin-btn, .orch-pin-btn.on,
+.orch-item:hover .orch-dismiss-btn { color: var(--muted); border-left-color: var(--line); }
 .orch-pin-btn:hover, .orch-pin-btn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.orch-dismiss-btn:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+@media (pointer: coarse) {
+  .orch-pin-btn,
+  .orch-dismiss-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
 
 .orch-ledger { flex: none; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 25%, transparent); }
 .orch-ledger summary {
@@ -1339,6 +1526,86 @@ body.dock-float .orch-shell { height: calc(100dvh - 118px); }
   #capture {
     width: calc(100vw - 20px);
     max-width: 520px;
+  }
+  .capture-agent-row,
+  .capture-fields-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .capture-agent-row .pick,
+  .capture-fields-row .pick {
+    width: 100%;
+  }
+  .capture-effort-row,
+  #capture-effort-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .capture-effort-label,
+  .capture-effort-row label,
+  #capture-effort-row label,
+  .capture-effort-row .capture-effort-label,
+  #capture-effort-row .capture-effort-label {
+    font-size: 11.5px;
+  }
+  .capture-effort-row .seg,
+  #capture-effort-row .seg {
+    display: flex;
+    width: 100%;
+  }
+  .capture-effort-row .seg button,
+  #capture-effort-row .seg button {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    padding: 0 4px;
+    font-size: 11.5px;
+  }
+  .orch-pin-btn,
+  .orch-dismiss-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .capture-tabs button {
+    padding: 0 10px;
+    font-size: 11.5px;
+  }
+  .capture-foot {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .capture-foot small {
+    text-align: center;
+  }
+  .capture-foot button {
+    width: 100%;
+    justify-content: center;
+  }
+  .quota-alert {
+    padding: 12px;
+  }
+  .quota-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .quota-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .quota-dropdown-wrap {
+    width: 100%;
+    display: flex;
+  }
+  .quota-dropdown-wrap .pick {
+    flex: 1;
+  }
+  .quota-cta-btn {
+    width: 100%;
+    justify-content: center;
   }
   #picker {
     width: calc(100vw - 16px);
