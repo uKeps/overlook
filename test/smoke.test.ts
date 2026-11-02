@@ -1775,7 +1775,7 @@ test("adversarial verification: embedded canvas terminal, session management, cd
   expect(appCss).toContain(".orch-fleet-quick-act");
 });
 
-test("adversarial verification: canvas multiselect deletion via Backspace/Delete, traffic lights unpin, and edge handle isolation", async () => {
+test("adversarial verification: canvas multiselect deletion via Delete key, traffic lights unpin, and edge handle isolation", async () => {
   // 1. Verify terminal session create and close API contract
   const createRes = await post("/api/terminal/session/create", { id: "test_term_multisel", shell: "bash", cwd: REPO });
   expect(createRes.status).toBe(200);
@@ -1792,10 +1792,10 @@ test("adversarial verification: canvas multiselect deletion via Backspace/Delete
   const appJs = readFileSync(`${REPO}/app.js`, "utf8");
   const appCss = readFileSync(`${REPO}/app.css`, "utf8");
 
-  // Multiselect & Backspace/Delete handling
+  // Multiselect & Delete key handling
   expect(appJs).toContain("deleteSelectedPanes");
   expect(appJs).toContain('api("/api/terminal/session/close", { id: pane.id })');
-  expect(appJs).toContain('e.key === "Delete" || e.key === "Backspace"');
+  expect(appJs).toContain('e.key === "Delete" && orchSelected.size > 0');
   expect(appJs).toContain("isEditingText");
   expect(appJs).toContain("ghostty-cli-input");
 

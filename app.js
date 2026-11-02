@@ -790,8 +790,8 @@ function mountTerminalPane(card, p) {
     card.dataset.termBound = "1";
     window.addEventListener("keydown", (e) => {
       if (orchActive !== paneKey(p)) return;
-      if (orchSelected.size > 1) return;
-      if ((e.key === "Backspace" || e.key === "Delete") && orchSelected.size > 0) return;
+      if (orchSelected.size > 1 && e.key === "Delete") return;
+      if (e.key === "Delete" && orchSelected.size > 0) return;
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
       if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter")) {
@@ -3391,7 +3391,7 @@ document.addEventListener("keydown", (e) => {
     updateSelectionUI();
     return;
   }
-  if ((e.key === "Delete" || e.key === "Backspace") && orchSelected.size > 0 && route().pg === "agents" && !orchMax) {
+  if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax) {
     const isEditingText = e.target.closest("textarea, select, [contenteditable]") ||
       (e.target.closest("input") && !e.target.classList.contains("ghostty-cli-input")) ||
       (e.target.classList?.contains("ghostty-cli-input") && e.target.value.length > 0 && orchSelected.size <= 1);
