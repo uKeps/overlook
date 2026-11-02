@@ -964,6 +964,59 @@ body.dock-float .orch-shell { height: calc(100dvh - 98px); }
 html[data-ui="minimal"] .term-pop { background: var(--surface); border-color: var(--line); box-shadow: 0 12px 28px rgba(0, 0, 0, .4); }
 html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11px; }
 
+/* Embedded Terminal in Canvas & Split Pane */
+.orch-pane[data-kind="terminal"] {
+  display: flex; flex-direction: column; min-width: 320px; min-height: 240px;
+  background: color-mix(in srgb, var(--surface) 94%, #060709);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+}
+.orch-term-head-row { display: flex; align-items: center; gap: 6px; }
+.orch-term-cwd { font-family: var(--mono); color: var(--muted); font-size: 11px; }
+.orch-term-cwd code { color: var(--accent); }
+
+.orch-term-view {
+  flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: #090a0d; border-radius: 8px; margin: 6px 10px 8px;
+  border: 1px solid rgba(255, 255, 255, .06); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .4);
+}
+.orch-term-output {
+  flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 12px; margin: 0;
+  font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  color: #abb2bf; white-space: pre-wrap; word-break: break-all;
+}
+.orch-term-output::-webkit-scrollbar { width: 6px; }
+.orch-term-output::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 3px; }
+
+.orch-term-line { margin-bottom: 4px; }
+.orch-term-line.cmd { display: flex; align-items: flex-start; gap: 6px; color: #fff; font-weight: 500; }
+.orch-term-line.cmd .term-prompt { color: var(--accent); user-select: none; flex: none; }
+.orch-term-line.out { color: #abb2bf; }
+.orch-term-line.err { color: #e06c75; }
+.orch-term-line.system { color: #5c6370; font-style: italic; }
+
+.orch-term-input-bar {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  background: rgba(255, 255, 255, .03); border-top: 1px solid rgba(255, 255, 255, .06);
+  font: 12.5px ui-monospace, SFMono-Regular, monospace;
+}
+.orch-term-input-bar .orch-term-prompt {
+  color: var(--accent); font-weight: 600; white-space: nowrap; user-select: none;
+  font-size: 11.5px;
+}
+.orch-term-input {
+  flex: 1; min-width: 0; background: transparent; border: none; outline: none;
+  color: #fff; font: inherit; font-size: 12.5px; caret-color: var(--accent);
+}
+.orch-term-input::placeholder { color: rgba(255, 255, 255, .25); font-size: 11.5px; }
+.orch-term-ctrl-c { height: 24px; padding: 0 6px; font: 600 10.5px var(--mono); color: var(--muted); border-radius: 5px; }
+.orch-term-ctrl-c:hover { color: #e06c75; border-color: rgba(224, 108, 117, .4); }
+.orch-term-run-btn { height: 24px; padding: 0 8px; font-size: 11px; gap: 4px; border-radius: 5px; }
+
+/* Fleet sidebar quick action */
+.orch-fleet-quick-act { padding: 6px 10px 4px; }
+.orch-fleet-quick-act .btn { width: 100%; height: 28px; font-size: 11.5px; gap: 6px; justify-content: center; border-radius: 7px; }
+
+
 
 /* Interactive PC Folder Browser Popover (#cwd-pop) */
 .cwd-pop {

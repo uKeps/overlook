@@ -671,6 +671,231 @@ try {
 function saveCanvas() {
   try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode })); } catch {}
 }
+function ansiToHtml(str) {
+  if (!str) return "";
+  const colors = {
+    "30": "#5c6370", "31": "#e06c75", "32": "#98c379", "33": "#e5c07b",
+    "34": "#61afef", "35": "#c678dd", "36": "#56b6c2", "37": "#abb2bf",
+    "90": "#5c6370", "91": "#e06c75", "92": "#98c379", "93": "#e5c07b",
+    "94": "#61afef", "95": "#c678dd", "96": "#56b6c2", "97": "#ffffff"
+  };
+  const escaped = str.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] || c);
+  let openSpans = 0;
+  const formatted = escaped
+    .replace(/\u001b\[\?[\d;]*[a-zA-Z]/g, "")
+    .replace(/\u001b\][\s\S]*?\u0007/g, "")
+    .replace(/\u001b\[(\d+(?:;\d+)*)?m/g, (_, code) => {
+      if (!code || code === "0") {
+        const closing = "</span>".repeat(openSpans);
+        openSpans = 0;
+        return closing;
+      }
+      const parts = code.split(";");
+      const c = colors[parts.find((p) => colors[p])];
+      const bold = parts.includes("1") ? "font-weight:600;" : "";
+      if (c || bold) {
+        openSpans++;
+        return `<span style="${bold}${c ? `color:${c};` : ""}">`;
+      }
+      return "";
+    });
+  return formatted + "</span>".repeat(openSpans);
+}
+
+const termPanesState = new Map();
+
+function clearTerminal(id) {
+  const state = termPanesState.get(id);
+  const out = $(`#term-view-${id} .orch-term-output`);
+  if (out) out.innerHTML = "";
+  if (state) state.lines = [];
+}
+
+function interruptTerminal(id) {
+  const state = termPanesState.get(id);
+  if (state?.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: "kill" }));
+  } else {
+    api("/api/terminal/session/kill", { id }).catch(() => {});
+  }
+  const out = $(`#term-view-${id} .orch-term-output`);
+  if (out) {
+    const div = document.createElement("div");
+    div.className = "orch-term-line system";
+    div.textContent = "^C";
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+  }
+}
+
+function mountTerminalPane(card, p) {
+  const feed = card.querySelector(".orch-feed");
+  if (!feed) return;
+  const viewId = `term-view-${p.id}`;
+  let view = feed.querySelector(`#${viewId}`);
+  if (!view) {
+    feed.innerHTML = `
+      <div class="orch-term-view" id="${viewId}">
+        <pre class="orch-term-output"></pre>
+        <form class="orch-term-input-bar">
+          <span class="orch-term-prompt">${esc(cwdLabel(p.cwd))} ❯</span>
+          <input type="text" class="orch-term-input" placeholder="Type command… (Enter to run, ↑/↓ history, Ctrl+C interrupt)" autocomplete="off" spellcheck="false" />
+          <button type="button" class="btn glass orch-term-ctrl-c" data-act="term-interrupt" data-key="terminal:${p.id}" title="Interrupt (Ctrl+C)">^C</button>
+          <button type="submit" class="btn peach orch-term-run-btn" title="Run command">Run ${icon("play", 11)}</button>
+        </form>
+      </div>`;
+    view = feed.querySelector(`#${viewId}`);
+  }
+
+  const out = view.querySelector(".orch-term-output");
+  const form = view.querySelector(".orch-term-input-bar");
+  const input = view.querySelector(".orch-term-input");
+  const promptSpan = view.querySelector(".orch-term-prompt");
+
+  if (!termPanesState.has(p.id)) {
+    termPanesState.set(p.id, {
+      history: [],
+      historyIdx: 0,
+      lines: [`<div class="orch-term-line system">Overlook Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || ROOT)}</div><div class="orch-term-line system">Type commands, press Enter to run, ↑/↓ for history.</div>`],
+      ws: null,
+      running: false,
+    });
+  }
+
+  const state = termPanesState.get(p.id);
+  out.innerHTML = state.lines.join("");
+  out.scrollTop = out.scrollHeight;
+
+  if (!state.ws || state.ws.readyState > 1) {
+    try {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${proto}//${location.host}/ws/terminal?id=${encodeURIComponent(p.id)}&shell=${encodeURIComponent(p.shell || "")}&cwd=${encodeURIComponent(p.cwd || "")}`;
+      state.ws = new WebSocket(wsUrl);
+      state.ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "chunk") {
+            const lastLine = out.querySelector(".orch-term-line.active-chunk");
+            if (lastLine) {
+              lastLine.innerHTML += ansiToHtml(msg.data);
+            } else {
+              const div = document.createElement("div");
+              div.className = "orch-term-line out active-chunk";
+              div.innerHTML = ansiToHtml(msg.data);
+              out.appendChild(div);
+            }
+            out.scrollTop = out.scrollHeight;
+          } else if (msg.type === "exit") {
+            state.running = false;
+            const activeChunk = out.querySelector(".active-chunk");
+            if (activeChunk) activeChunk.classList.remove("active-chunk");
+            if (msg.output && !activeChunk) {
+              const div = document.createElement("div");
+              div.className = msg.code === 0 ? "orch-term-line out" : "orch-term-line err";
+              div.innerHTML = ansiToHtml(msg.output);
+              out.appendChild(div);
+            }
+            if (msg.newCwd && msg.newCwd !== p.cwd) {
+              p.cwd = msg.newCwd;
+              promptSpan.textContent = `${cwdLabel(p.cwd)} ❯`;
+              const cwdCode = card.querySelector(".orch-term-cwd code");
+              if (cwdCode) cwdCode.textContent = cwdLabel(p.cwd);
+              saveCanvas();
+            }
+            state.lines.push(out.innerHTML);
+            if (state.lines.length > 50) state.lines = [out.innerHTML];
+            out.scrollTop = out.scrollHeight;
+            input.disabled = false;
+            input.focus();
+          }
+        } catch {}
+      };
+      state.ws.onerror = () => {};
+    } catch {}
+  }
+
+  input.onkeydown = (e) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (state.history.length > 0 && state.historyIdx > 0) {
+        state.historyIdx--;
+        input.value = state.history[state.historyIdx] || "";
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (state.historyIdx < state.history.length - 1) {
+        state.historyIdx++;
+        input.value = state.history[state.historyIdx] || "";
+      } else {
+        state.historyIdx = state.history.length;
+        input.value = "";
+      }
+    } else if (e.key === "c" && (e.ctrlKey || e.metaKey)) {
+      if (!input.value) {
+        e.preventDefault();
+        interruptTerminal(p.id);
+      }
+    } else if (e.key === "l" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      clearTerminal(p.id);
+    }
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const cmd = input.value;
+    input.value = "";
+    if (!cmd.trim()) return;
+
+    state.history.push(cmd);
+    state.historyIdx = state.history.length;
+
+    if (cmd.trim() === "clear") {
+      clearTerminal(p.id);
+      return;
+    }
+
+    const cmdDiv = document.createElement("div");
+    cmdDiv.className = "orch-term-line cmd";
+    cmdDiv.innerHTML = `<span class="term-prompt">❯</span> <span>${esc(cmd)}</span>`;
+    out.appendChild(cmdDiv);
+    out.scrollTop = out.scrollHeight;
+
+    state.running = true;
+
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      input.disabled = true;
+      state.ws.send(JSON.stringify({ type: "run", cmd }));
+    } else {
+      input.disabled = true;
+      try {
+        const res = await api("/api/terminal/session/run", { id: p.id, cmd, shell: p.shell, cwd: p.cwd });
+        const outDiv = document.createElement("div");
+        outDiv.className = res.code === 0 ? "orch-term-line out" : "orch-term-line err";
+        outDiv.innerHTML = ansiToHtml(res.output);
+        out.appendChild(outDiv);
+        if (res.newCwd && res.newCwd !== p.cwd) {
+          p.cwd = res.newCwd;
+          promptSpan.textContent = `${cwdLabel(p.cwd)} ❯`;
+          const cwdCode = card.querySelector(".orch-term-cwd code");
+          if (cwdCode) cwdCode.textContent = cwdLabel(p.cwd);
+          saveCanvas();
+        }
+      } catch (err) {
+        const errDiv = document.createElement("div");
+        errDiv.className = "orch-term-line err";
+        errDiv.textContent = `Error: ${err.message}`;
+        out.appendChild(errDiv);
+      } finally {
+        state.running = false;
+        input.disabled = false;
+        input.focus();
+        out.scrollTop = out.scrollHeight;
+      }
+    }
+  };
+}
+
 let termList = [], shellList = [], prefTerm = "", prefShell = "", termPopOpen = false;
 try { prefTerm = localStorage.getItem("overlook.terminal") || ""; } catch {}
 try { prefShell = localStorage.getItem("overlook.shell") || ""; } catch {}
@@ -684,8 +909,7 @@ async function loadTerminals() {
     if (!prefShell && prefShell !== "") prefShell = data.defaultShell || "";
     const lbl = $("#orch-term-lbl");
     if (lbl) {
-      const cur = termList.find((t) => t.id === prefTerm);
-      lbl.textContent = cur?.name || "Terminal";
+      lbl.textContent = "Terminal";
     }
   } catch {}
 }
@@ -697,7 +921,7 @@ function paintTermPop() {
   const split = $("#orch-term-split");
   if (split) {
     const r = split.getBoundingClientRect();
-    pop.style.top = `${Math.min(window.innerHeight - 340, r.bottom + 6)}px`;
+    pop.style.top = `${Math.min(window.innerHeight - 380, r.bottom + 6)}px`;
     pop.style.left = `${Math.max(10, Math.min(window.innerWidth - 305, r.left - 60))}px`;
   }
   const cwd = $("#run-cwd")?.value || orchCwd || "~";
@@ -705,13 +929,9 @@ function paintTermPop() {
       <div class="term-pop-cwd"><span class="term-pop-tag">Folder</span><code>${esc(cwdLabel(cwd))}</code></div>
       <button type="button" class="btn glass orch-icon-btn" data-act="term-menu-close" title="Close">${icon("x", 12)}</button>
     </div>
-    <div class="term-pop-sec-title">Terminal Emulator</div>
-    <div class="term-pop-list">
-      ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
-        ${icon("terminal", 13)} <span>${esc(t.name)}</span>
-        ${t.id === prefTerm ? '<span class="term-badge default">active</span>' : ""}
-      </button>`).join("") || '<small class="empty">No terminal detected</small>'}
-    </div>
+    <button type="button" class="btn peach" style="width:100%;height:32px;justify-content:center;gap:6px;font-size:12px;margin:2px 0;" data-act="term-canvas-pop">
+      ${icon("terminal", 14)} Open Terminal in Canvas
+    </button>
     <div class="term-pop-sec-title">Shell</div>
     <div class="term-pop-list">
       <button type="button" class="term-pop-row ${!prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="">
@@ -723,9 +943,16 @@ function paintTermPop() {
         ${s.id === prefShell ? '<span class="term-badge default">active</span>' : ""}
       </button>`).join("")}
     </div>
+    <div class="term-pop-sec-title">External Window (Desktop)</div>
+    <div class="term-pop-list">
+      ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
+        ${icon("ext", 13)} <span>${esc(t.name)}</span>
+        ${t.id === prefTerm ? '<span class="term-badge default">selected</span>' : ""}
+      </button>`).join("") || '<small class="empty">No external emulator detected</small>'}
+    </div>
     <div class="term-pop-foot">
       <a class="term-pop-config" href="#/settings">${icon("settings", 12)} Settings</a>
-      <button type="button" class="btn peach" data-act="term-launch" title="Launch now">Launch ${icon("play", 11)}</button>
+      <button type="button" class="btn glass" data-act="term-launch" title="Launch external window">${icon("ext", 11)} Launch App</button>
     </div>`;
   pop.hidden = false;
   $("#orch-term-split")?.classList.add("open");
@@ -861,8 +1088,8 @@ function ensurePaneRect(p, idx = 0) {
     p.x = 24 + col * 580 + (idx > 3 ? (idx - 3) * 36 : 0);
     p.y = 20 + row * 430 + (idx > 3 ? (idx - 3) * 36 : 0);
   }
-  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : 580);
-  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : 430);
+  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 640 : 580);
+  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 420 : 430);
   return p;
 }
 function arrangeCanvasPanes() {
@@ -996,6 +1223,16 @@ function fleetItems() {
       badge: STATE[f.state] || f.state, peach: wait, needs: f.needs || "",
     });
   }
+  for (const p of orchPanes) {
+    if (p && p.kind === "terminal") {
+      items.push({
+        kind: "terminal", id: p.id, agent: "terminal", ic: "terminal",
+        title: p.title || `Terminal (${p.shell || "bash"})`,
+        sub: `${shortCwd(p.cwd || ROOT)} · terminal`,
+        group: "active", dot: "run", badge: p.shell || "shell", peach: true, needs: "",
+      });
+    }
+  }
   const rank = { waiting: 0, active: 1, done: 2 };
   return items.sort((a, b) => rank[a.group] - rank[b.group]);
 }
@@ -1032,8 +1269,8 @@ function agents() {
         </div>
         <div class="orch-cluster orch-cluster-act">
           <div class="orch-term-split" id="orch-term-split">
-            <button type="button" class="btn glass orch-term-main" data-act="term-quick" title="Launch terminal in active folder">
-              ${icon("terminal", 13)} <span class="orch-term-lbl" id="orch-term-lbl">${esc(termList.find((t) => t.id === prefTerm)?.name || "Terminal")}</span>
+            <button type="button" class="btn glass orch-term-main" data-act="term-canvas" title="Open terminal in Canvas">
+              ${icon("terminal", 13)} <span class="orch-term-lbl" id="orch-term-lbl">Terminal</span>
             </button>
             <button type="button" class="btn glass orch-term-drop" data-act="term-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Choose terminal emulator or shell">
               ${icon("fold", 11)}
@@ -1387,10 +1624,12 @@ function agentsBody() {
     active: all.filter((x) => x.group === "active").length,
     waiting: all.filter((x) => x.group === "waiting").length,
     done: all.filter((x) => x.group === "done").length,
+    notes: D.notes.length,
+    terminals: all.filter((x) => x.kind === "terminal").length,
   };
-  const list = all.filter((x) => orchFilter === "all" || x.group === orchFilter);
+  const list = all.filter((x) => orchFilter === "all" || x.group === orchFilter || (orchFilter === "terminals" && x.kind === "terminal"));
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   document.querySelector('[data-act="orch-rail"]')?.classList.toggle("on", orchRail);
   if (!orchPanes.length) {
     const first = list[0] || all[0];
@@ -1450,9 +1689,33 @@ function agentsBody() {
   if (fleetEl) fleetEl.classList.toggle("floating", orchRailMode === "float");
   const pinnedKeys = new Set(orchPanes.map(paneKey));
   counts.notes = D.notes.length;
-  $("#orch-tabs").innerHTML = [["all", "All"], ["active", "Active"], ["waiting", "Wait"], ["done", "Done"], ["notes", "Notes"]].map(([k, l]) =>
+  $("#orch-tabs").innerHTML = [["all", "All"], ["active", "Active"], ["waiting", "Wait"], ["done", "Done"], ["notes", "Notes"], ["terminals", "Terminals"]].map(([k, l]) =>
     `<button type="button" class="orch-tab ${orchFilter === k ? "on" : ""}" data-act="orch-tab" data-k="${k}">${l}<small>${counts[k]}</small></button>`).join("");
-  if (orchFilter === "notes") {
+  if (orchFilter === "terminals") {
+    const termItems = all.filter((x) => x.kind === "terminal");
+    $("#orch-list").innerHTML = `
+      <div class="orch-fleet-quick-act">
+        <button type="button" class="btn peach" data-act="term-new-pane">${icon("plus", 13)} New Terminal</button>
+      </div>
+      ${termItems.map((it) => {
+        const k = paneKey(it), isPin = pinnedKeys.has(k), isAct = orchActive === k;
+        return `<div class="orch-item ${isAct ? "on" : ""} ${isPin && orchPanes.length > 1 ? "pinned" : ""}" draggable="true" data-kind="${it.kind}" data-id="${esc(it.id)}" title="Drag onto the canvas">
+          <button type="button" class="orch-item-main" data-act="orch-sel" data-kind="${it.kind}" data-id="${esc(it.id)}">
+            <span class="live ${it.dot}"></span>
+            <span class="row-av">${icon("terminal", 18)}</span>
+            <span class="orch-info">
+              <b>${esc(it.title)}</b>
+              <small>${esc(it.sub)}</small>
+            </span>
+            <span class="pill peach">${esc(it.badge)}</span>
+          </button>
+          <div class="orch-item-actions">
+            <button type="button" class="orch-pin-btn ${isPin && orchPanes.length > 1 ? "on" : ""}" data-act="orch-pin" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${isPin && orchPanes.length > 1 ? "Remove from workspace" : "Add side-by-side to Split / Canvas"}">${icon(isPin && orchPanes.length > 1 ? "x" : "plus", 13)}</button>
+            <button type="button" class="orch-dismiss-btn" data-act="term-close-session" data-id="${esc(it.id)}" aria-label="Close terminal" title="Close terminal">${icon("x", 12)}</button>
+          </div>
+        </div>`;
+      }).join("") || '<p class="empty">No active terminals. Click "+ New Terminal" to open one in the canvas.</p>'}`;
+  } else if (orchFilter === "notes") {
     if (!$("#orch-nq")) {
       $("#orch-list").innerHTML = `<input id="orch-nq" class="orch-nq" type="search" placeholder="Search the vault… drag a note onto the canvas" autocomplete="off"><div id="orch-notes"></div>`;
       $("#orch-nq").value = orchNoteQ;
@@ -1691,7 +1954,7 @@ async function orchPaint(force) {
         <button type="button" class="fchip" data-act="orch-new" title="Open a new Agent Tile">${icon("plus", 12)} Agent</button>
         <button type="button" class="fchip" data-act="orch-add-sticky" title="Add a Sticky Note to Canvas">${icon("spark", 12)} Sticky</button>
         <button type="button" class="fchip" data-act="orch-tab" data-k="notes" title="Open Vault Notes list">${icon("notes", 12)} Notes</button>
-        <button type="button" class="fchip" data-act="term-quick" title="Launch terminal in active folder">${icon("terminal", 12)} Terminal</button>
+        <button type="button" class="fchip" data-act="term-canvas" title="Open terminal in Canvas">${icon("terminal", 12)} Terminal</button>
         <button type="button" class="fchip" data-act="orch-arrange" title="Auto-tile floating windows">Arrange</button>
         <button type="button" class="fchip" data-act="orch-fit" title="Fit all windows in view">Fit</button>
         <span class="orch-hud-sep"></span>
@@ -1772,7 +2035,7 @@ async function orchPaint(force) {
       ${orchPanes.length > 1 || isFree ? `<button type="button" class="btn glass orch-icon-btn ${orchMax === key ? "on" : ""}" data-act="orch-max" data-key="${esc(key)}" title="${orchMax === key ? "Restore Split / Canvas" : "Maximize pane"}">${icon("max", 13)}</button>` : ""}
       ${orchPanes.length > 1 || isFree ? `<button type="button" class="btn glass orch-icon-btn" data-act="orch-unpin" data-key="${esc(key)}" title="Close pane">${icon("x", 13)}</button>` : ""}`;
     const form = card.querySelector(".orch-talk");
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky") ? "none" : "";
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || p.kind === "terminal") ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;
@@ -1811,6 +2074,32 @@ async function orchPaint(force) {
         ta.value = p.text || "";
       }
       if (form) form.style.display = "none";
+      return;
+    }
+    if (p.kind === "terminal") {
+      p.w ??= 640; p.h ??= 420;
+      const sig = `terminal|${p.id}|${p.shell}|${p.cwd}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
+      orchSigs.set(key, sig);
+      const cwd = p.cwd || orchCwd || ROOT;
+      const shellName = p.shell || prefShell || "bash";
+      card.querySelector(".orch-head").innerHTML = `<div class="orch-title"><span class="h-av">${icon("terminal", 18)}</span>
+          <div>
+            <div class="orch-term-head-row">
+              <h4>${esc(p.title || `Terminal (${shellName})`)}</h4>
+              <span class="pill peach">${esc(shellName)}</span>
+            </div>
+            <small class="orch-term-cwd" title="${esc(cwd)}">📁 <code>${esc(cwdLabel(cwd))}</code></small>
+          </div>
+        </div>
+        <div class="orch-acts">
+          <button type="button" class="btn glass orch-icon-btn" data-act="term-clear" data-key="${esc(key)}" title="Clear screen">${icon("trash", 12)}</button>
+          <button type="button" class="btn glass orch-icon-btn" data-act="term-restart" data-key="${esc(key)}" title="Restart shell">${icon("reload", 12)}</button>
+          ${paneBtns}
+        </div>`;
+      card.querySelector(".orch-needs").innerHTML = "";
+      if (form) form.style.display = "none";
+      mountTerminalPane(card, p);
       return;
     }
     if (p.kind === "new") {
@@ -2530,6 +2819,63 @@ const ACTIONS = {
     } catch (e) {
       toast(e.message);
     }
+  },
+  "term-canvas": (el) => {
+    const cwd = el?.dataset?.cwd || $("#run-cwd")?.value || orchCwd || ROOT;
+    const shell = prefShell || (shellList[0]?.id || "bash");
+    const termId = `term_${Date.now()}`;
+    const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
+    addPane(p);
+    saveCanvas();
+    toast(`Terminal (${shell}) opened in Canvas`);
+  },
+  "term-canvas-pop": () => {
+    termPopOpen = false;
+    paintTermPop();
+    const cwd = $("#run-cwd")?.value || orchCwd || ROOT;
+    const shell = prefShell || (shellList[0]?.id || "bash");
+    const termId = `term_${Date.now()}`;
+    const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
+    addPane(p);
+    saveCanvas();
+    toast(`Terminal (${shell}) opened in Canvas`);
+  },
+  "term-new-pane": () => {
+    const cwd = $("#run-cwd")?.value || orchCwd || ROOT;
+    const shell = prefShell || (shellList[0]?.id || "bash");
+    const termId = `term_${Date.now()}`;
+    const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
+    addPane(p);
+    saveCanvas();
+    toast(`New Terminal (${shell}) created in Canvas`);
+  },
+  "term-clear": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (p) clearTerminal(p.id);
+  },
+  "term-restart": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (p) {
+      clearTerminal(p.id);
+      api("/api/terminal/session/create", { id: p.id, shell: p.shell, cwd: p.cwd }).catch(() => {});
+      toast(`Terminal (${p.shell}) restarted`);
+    }
+  },
+  "term-interrupt": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (p) interruptTerminal(p.id);
+  },
+  "term-close-session": async (el) => {
+    const id = el.dataset.id;
+    orchPanes = orchPanes.filter((p) => !(p.kind === "terminal" && p.id === id));
+    saveCanvas();
+    await api("/api/terminal/session/close", { id }).catch(() => {});
+    agentsBody();
+    orchPaint(true);
+    toast("Terminal closed");
   },
   "term-menu-toggle": () => {
     termPopOpen = !termPopOpen;

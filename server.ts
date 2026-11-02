@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, createTermSession, listTermSessions, getTermSession, closeTermSession, interruptTermSession, runInTermSession } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -593,6 +593,24 @@ async function handle(req: Request, port: number) {
       const r = spawnTerminal(str(b.terminal), str(b.shell), str(b.cwd) || ROOT);
       return typeof r === "string" ? new Response(r, { status: 400 }) : json(r);
     }
+    if (p === "/api/terminal/session/create") {
+      const s = createTermSession(str(b.shell), str(b.cwd), str(b.id));
+      return json({ ok: true, session: s });
+    }
+    if (p === "/api/terminal/session/run") {
+      if (typeof b.id !== "string" || !b.id.trim()) return new Response("missing id", { status: 400 });
+      if (typeof b.cmd !== "string") return new Response("missing cmd", { status: 400 });
+      const r = await runInTermSession(b.id.trim(), b.cmd);
+      return json(r);
+    }
+    if (p === "/api/terminal/session/kill") {
+      if (typeof b.id !== "string") return new Response("missing id", { status: 400 });
+      return json({ ok: interruptTermSession(b.id) });
+    }
+    if (p === "/api/terminal/session/close") {
+      if (typeof b.id !== "string") return new Response("missing id", { status: 400 });
+      return json({ ok: closeTermSession(b.id) });
+    }
     if (p === "/api/calendar" || p === "/api/calendar/delete") {
       const e = calItem(b);
       if (typeof e === "string") return new Response(e, { status: 400 });
@@ -611,6 +629,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/images") return json(imagesState());
   if (p === "/api/settings") return json(settings());
+  if (p === "/api/terminal/sessions") return json({ sessions: listTermSessions() });
   if (p === "/api/terminals") {
     const terminals = detectTerminals();
     const shells = detectShells();
@@ -645,7 +664,47 @@ async function handle(req: Request, port: number) {
   return new Response("404", { status: 404 });
 }
 
-Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: (req) => handle(req, PORT) });
+Bun.serve({
+  hostname: "127.0.0.1", port: PORT,
+  fetch(req, server) {
+    const url = new URL(req.url);
+    if (url.pathname === "/ws/terminal") {
+      const id = url.searchParams.get("id");
+      if (id && server.upgrade(req, { data: { id, shell: url.searchParams.get("shell"), cwd: url.searchParams.get("cwd") } })) {
+        return undefined;
+      }
+    }
+    return handle(req, PORT);
+  },
+  websocket: {
+    open(ws: any) {
+      const id = ws.data?.id;
+      if (!id) return;
+      let s = getTermSession(id);
+      if (!s) s = createTermSession(ws.data?.shell, ws.data?.cwd, id);
+      ws.send(JSON.stringify({ type: "init", session: { id: s.id, shell: s.shell, cwd: s.cwd } }));
+    },
+    async message(ws: any, message: string | Buffer) {
+      try {
+        const msg = JSON.parse(String(message));
+        const id = ws.data?.id;
+        if (!id) return;
+        if (msg.type === "run" && typeof msg.cmd === "string") {
+          const r = await runInTermSession(id, msg.cmd, (chunk) => {
+            try { ws.send(JSON.stringify({ type: "chunk", data: chunk })); } catch {}
+          });
+          ws.send(JSON.stringify({ type: "exit", code: r.code, output: r.output, newCwd: r.newCwd }));
+        } else if (msg.type === "kill") {
+          interruptTermSession(id);
+          ws.send(JSON.stringify({ type: "killed" }));
+        }
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
+    },
+    close() {}
+  }
+});
 console.log(`Overlook on http://127.0.0.1:${PORT}`);
 
 // A service that forbids iframes (X-Frame-Options DENY) gets a proxy that only allows Overlook as the frame.

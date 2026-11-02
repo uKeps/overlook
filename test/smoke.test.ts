@@ -1683,3 +1683,91 @@ test("adversarial verification: terminal & shell launcher, emulator detection, f
   expect(appJs).toContain("set-terminal");
 });
 
+test("adversarial verification: embedded canvas terminal, session management, cd tracking, and WebSocket streaming", async () => {
+  // 1. Session creation via POST /api/terminal/session/create
+  const createRes = await post("/api/terminal/session/create", { shell: "bash", cwd: ROOT, id: "test_term_1" });
+  expect(createRes.status).toBe(200);
+  const createData = await createRes.json();
+  expect(createData.ok).toBe(true);
+  expect(createData.session.id).toBe("test_term_1");
+  expect(createData.session.shell).toBe("bash");
+  expect(createData.session.cwd).toBe(ROOT);
+
+  // 2. GET /api/terminal/sessions lists the created session
+  const listRes = await (await fetch(`${BASE}/api/terminal/sessions`)).json();
+  expect(Array.isArray(listRes.sessions)).toBe(true);
+  expect(listRes.sessions.some((s: any) => s.id === "test_term_1")).toBe(true);
+
+  // 3. POST /api/terminal/session/run runs command and captures output
+  const runRes = await post("/api/terminal/session/run", { id: "test_term_1", cmd: "echo 'OVERLOOK_TERMINAL_EMBEDDED'" });
+  expect(runRes.status).toBe(200);
+  const runData = await runRes.json();
+  expect(runData.ok).toBe(true);
+  expect(runData.code).toBe(0);
+  expect(runData.output).toContain("OVERLOOK_TERMINAL_EMBEDDED");
+
+  // 4. Command changing directory updates session cwd
+  const cdRes = await post("/api/terminal/session/run", { id: "test_term_1", cmd: "cd /tmp && pwd" });
+  expect(cdRes.status).toBe(200);
+  const cdData = await cdRes.json();
+  expect(cdData.ok).toBe(true);
+  expect(cdData.newCwd).toBe("/tmp");
+
+  // 5. POST /api/terminal/session/kill and close
+  const killRes = await post("/api/terminal/session/kill", { id: "test_term_1" });
+  expect(killRes.status).toBe(200);
+
+  const closeRes = await post("/api/terminal/session/close", { id: "test_term_1" });
+  expect(closeRes.status).toBe(200);
+  const afterCloseList = await (await fetch(`${BASE}/api/terminal/sessions`)).json();
+  expect(afterCloseList.sessions.some((s: any) => s.id === "test_term_1")).toBe(false);
+
+  // 6. WebSocket streaming at /ws/terminal
+  const wsUrl = `ws://127.0.0.1:${PORT}/ws/terminal?id=test_term_ws&shell=bash&cwd=${encodeURIComponent(ROOT)}`;
+  const ws = new WebSocket(wsUrl);
+  const wsMessages: any[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("WS timeout")), 5000);
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(String(e.data));
+        wsMessages.push(msg);
+        if (msg.type === "init") {
+          ws.send(JSON.stringify({ type: "run", cmd: "echo 'WS_STREAM_OK'" }));
+        } else if (msg.type === "exit") {
+          clearTimeout(timeout);
+          ws.close();
+          resolve();
+        }
+      } catch (err) {
+        clearTimeout(timeout);
+        reject(err);
+      }
+    };
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    };
+  });
+  expect(wsMessages.some((m) => m.type === "init")).toBe(true);
+  expect(wsMessages.some((m) => m.type === "exit" && m.code === 0)).toBe(true);
+  const exitMsg = wsMessages.find((m) => m.type === "exit");
+  expect(exitMsg.output).toContain("WS_STREAM_OK");
+
+  // 7. Verify frontend canvas & sidebar terminal hooks
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+  expect(appJs).toContain("mountTerminalPane");
+  expect(appJs).toContain('"term-canvas"');
+  expect(appJs).toContain('"term-new-pane"');
+  expect(appJs).toContain('"term-close-session"');
+  expect(appJs).toContain('["terminals", "Terminals"]');
+  expect(appJs).toContain("ansiToHtml");
+  expect(appCss).toContain('.orch-pane[data-kind="terminal"]');
+  expect(appCss).toContain(".orch-term-view");
+  expect(appCss).toContain(".orch-term-input-bar");
+  expect(appCss).toContain(".orch-term-output");
+  expect(appCss).toContain(".orch-fleet-quick-act");
+});
+
+

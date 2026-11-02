@@ -500,6 +500,151 @@ export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: str
   }
 }
 
+export type TermSession = {
+  id: string;
+  shell: string;
+  cwd: string;
+  history: string[];
+  activeChild?: any;
+  createdAt: number;
+};
+
+const termSessions = new Map<string, TermSession>();
+
+export function createTermSession(shell?: string, cwd?: string, customId?: string): TermSession {
+  const id = customId || `term_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const shells = detectShells();
+  const defShell = process.env.DEFAULT_SHELL || (process.env.SHELL ? basename(process.env.SHELL) : "bash");
+  const chosenShell = shell && shells.find((s) => s.id === shell || s.path === shell)
+    ? (shells.find((s) => s.id === shell || s.path === shell)!.id)
+    : defShell;
+
+  let resolvedCwd = import.meta.dir;
+  if (cwd) {
+    try {
+      const p = resolve(cwd.replace(/^~/, homedir()));
+      if (existsSync(p) && statSync(p).isDirectory()) resolvedCwd = p;
+    } catch {}
+  }
+
+  const s: TermSession = {
+    id,
+    shell: chosenShell,
+    cwd: resolvedCwd,
+    history: [],
+    createdAt: Date.now(),
+  };
+  termSessions.set(id, s);
+  return s;
+}
+
+export function listTermSessions() {
+  return [...termSessions.values()].map((s) => ({
+    id: s.id,
+    shell: s.shell,
+    cwd: s.cwd,
+    createdAt: s.createdAt,
+    hasActiveChild: !!s.activeChild,
+    historyCount: s.history.length,
+  }));
+}
+
+export function getTermSession(id: string) {
+  return termSessions.get(id);
+}
+
+export function closeTermSession(id: string) {
+  const s = termSessions.get(id);
+  if (!s) return false;
+  if (s.activeChild) {
+    try { s.activeChild.kill(); } catch {}
+  }
+  return termSessions.delete(id);
+}
+
+export function interruptTermSession(id: string) {
+  const s = termSessions.get(id);
+  if (!s || !s.activeChild) return false;
+  try {
+    s.activeChild.kill(2); // SIGINT
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function runInTermSession(id: string, cmd: string, onChunk?: (chunk: string) => void): Promise<{ ok: boolean; output: string; code: number; newCwd: string }> {
+  let s = termSessions.get(id);
+  if (!s) {
+    s = createTermSession(undefined, undefined, id);
+  }
+  const trimmed = cmd.trim();
+  if (!trimmed) {
+    return { ok: true, output: "", code: 0, newCwd: s.cwd };
+  }
+  s.history.push(cmd);
+  if (s.history.length > 500) s.history.shift();
+
+  if (trimmed === "clear") {
+    return { ok: true, output: "\x1b[2J\x1b[H", code: 0, newCwd: s.cwd };
+  }
+
+  const shellBin = bin(s.shell) ?? (s.shell.startsWith("/") ? s.shell : "/bin/bash");
+  const script = `${cmd}\n__OVERLOOK_CODE=$?\necho "\n__OVERLOOK_CWD__=$(pwd)"\nexit $__OVERLOOK_CODE`;
+
+  try {
+    const p = Bun.spawn([shellBin, "-c", script], {
+      cwd: s.cwd,
+      env: { ...process.env, TERM: "xterm-256color", PAGER: "cat" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    s.activeChild = p;
+
+    let fullOut = "", fullErr = "";
+    const dec = new TextDecoder();
+
+    const readStream = async (stream: ReadableStream<Uint8Array>, isErr = false) => {
+      for await (const chunk of stream) {
+        const text = dec.decode(chunk, { stream: true });
+        if (isErr) fullErr += text;
+        else fullOut += text;
+        if (onChunk && !text.includes("__OVERLOOK_CWD__=")) {
+          onChunk(text);
+        }
+      }
+    };
+
+    await Promise.all([readStream(p.stdout), readStream(p.stderr, true)]);
+    const code = await p.exited;
+    s.activeChild = undefined;
+
+    const cwdMatch = fullOut.match(/\n__OVERLOOK_CWD__=(.+)\n?$/);
+    const cleanOut = cwdMatch ? fullOut.slice(0, cwdMatch.index) : fullOut;
+    if (cwdMatch && cwdMatch[1].trim()) {
+      const nextDir = cwdMatch[1].trim();
+      if (existsSync(nextDir)) s.cwd = nextDir;
+    }
+
+    const combinedOutput = cleanOut + (fullErr ? (cleanOut && !cleanOut.endsWith("\n") ? "\n" : "") + fullErr : "");
+    return {
+      ok: code === 0,
+      output: combinedOutput,
+      code,
+      newCwd: s.cwd,
+    };
+  } catch (err: any) {
+    s.activeChild = undefined;
+    return {
+      ok: false,
+      output: `Error executing command: ${err.message}`,
+      code: 1,
+      newCwd: s.cwd,
+    };
+  }
+}
+
+
 export const openers = (a: Agent) => Object.entries(a.open ?? {}).map(([label, cmd]) => ({ label, session: cmd.some((x) => x.includes("{session}")) }));
 // Launches detached; the caller has already validated session and cwd.
 export function openIn(a: Agent, label: string, cwd: string, session = "") {
