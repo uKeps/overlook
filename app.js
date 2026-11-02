@@ -709,8 +709,8 @@ const termPanesState = new Map();
 
 function clearTerminal(id) {
   const state = termPanesState.get(id);
-  const out = $(`#term-view-${id} .orch-term-output`);
-  if (out) out.innerHTML = "";
+  const buf = $(`#term-view-${id} .ghostty-buffer`);
+  if (buf) buf.innerHTML = "";
   if (state) state.lines = [];
 }
 
@@ -721,13 +721,12 @@ function interruptTerminal(id) {
   } else {
     api("/api/terminal/session/kill", { id }).catch(() => {});
   }
-  const out = $(`#term-view-${id} .orch-term-output`);
-  if (out) {
+  const buf = $(`#term-view-${id} .ghostty-buffer`);
+  if (buf) {
     const div = document.createElement("div");
     div.className = "orch-term-line system";
     div.textContent = "^C";
-    out.appendChild(div);
-    out.scrollTop = out.scrollHeight;
+    buf.appendChild(div);
   }
 }
 
@@ -736,25 +735,40 @@ function mountTerminalPane(card, p) {
   if (!feed) return;
   const viewId = `term-view-${p.id}`;
   let view = feed.querySelector(`#${viewId}`);
-  const emuName = (p.emulator || prefTerm) === "kitty" ? "Kitty" : "Ghostty";
+  const emu = (p.emulator || prefTerm || "ghostty").toLowerCase();
+  const isKitty = emu === "kitty";
+  const emuName = isKitty ? "Kitty" : "Ghostty";
+  card.classList.toggle("theme-kitty", isKitty);
+
   if (!view) {
     feed.innerHTML = `
-      <div class="orch-term-view" id="${viewId}" title="Click anywhere to type">
-        <pre class="orch-term-output" tabindex="0"></pre>
-        <form class="orch-term-input-bar">
-          <span class="orch-term-prompt">${esc(cwdLabel(p.cwd))} ❯</span>
-          <input type="text" class="orch-term-input" placeholder="Type command… (Enter to run, ↑/↓ history, Ctrl+C interrupt)" autocomplete="off" spellcheck="false" />
-          <button type="button" class="btn glass orch-term-ctrl-c" data-act="term-interrupt" data-key="terminal:${p.id}" title="Interrupt (Ctrl+C)">^C</button>
-          <button type="submit" class="btn peach orch-term-run-btn" title="Run command">Run ${icon("play", 11)}</button>
-        </form>
+      <div class="ghostty-screen orch-term-view" id="${viewId}" title="Click anywhere to type">
+        <div class="ghostty-buffer orch-term-output"></div>
+        <div class="ghostty-active-line orch-term-input-bar">
+          <span class="ghostty-prompt"></span>
+          <div class="ghostty-cli-wrap">
+            <span class="ghostty-cli-text"></span><span class="ghostty-cursor">█</span>
+            <input type="text" class="ghostty-cli-input" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
       </div>`;
     view = feed.querySelector(`#${viewId}`);
   }
 
-  const out = view.querySelector(".orch-term-output");
-  const form = view.querySelector(".orch-term-input-bar");
-  const input = view.querySelector(".orch-term-input");
-  const promptSpan = view.querySelector(".orch-term-prompt");
+  const buffer = view.querySelector(".ghostty-buffer");
+  const promptEl = view.querySelector(".ghostty-prompt");
+  const cliText = view.querySelector(".ghostty-cli-text");
+  const input = view.querySelector(".ghostty-cli-input");
+
+  const getPromptHtml = (cwd) => {
+    const pCwd = cwdLabel(cwd);
+    if (isKitty) {
+      return `<span class="p-user">keps@cachyos</span>:<span class="p-path">${esc(pCwd)}</span><span class="p-sym">$</span>`;
+    }
+    return `<span class="p-user">ghostty</span> <span class="p-sym">❯</span> <span class="p-path">${esc(pCwd)}</span> <span class="p-sym">❯</span>`;
+  };
+
+  promptEl.innerHTML = getPromptHtml(p.cwd);
 
   const focusInput = () => {
     if (!input) return;
@@ -762,12 +776,14 @@ function mountTerminalPane(card, p) {
     input.focus();
   };
 
-  view.onclick = (e) => {
-    if (!e.target.closest("button, a")) focusInput();
+  input.oninput = () => {
+    cliText.textContent = input.value;
+    view.scrollTop = view.scrollHeight;
   };
-  out.onclick = () => focusInput();
+
+  view.onclick = () => focusInput();
   card.onclick = (e) => {
-    if (!e.target.closest("button, a, select, textarea, .orch-resize, .orch-port")) focusInput();
+    if (!e.target.closest("button, a, select, textarea, .dot, .orch-resize, .orch-port")) focusInput();
   };
 
   if (!card.dataset.termBound) {
@@ -786,15 +802,15 @@ function mountTerminalPane(card, p) {
     termPanesState.set(p.id, {
       history: [],
       historyIdx: 0,
-      lines: [`<div class="orch-term-line system">${esc(emuName)} Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || orchCwd || "~")}</div><div class="orch-term-line system">Click anywhere to type · Press Enter to run · ↑/↓ for history</div>`],
+      lines: [`<div class="orch-term-line system">${esc(emuName)} Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || orchCwd || "~")}</div><div class="orch-term-line system">Click anywhere to type · Press Enter to run · ↑/↓ history</div>`],
       ws: null,
       running: false,
     });
   }
 
   const state = termPanesState.get(p.id);
-  out.innerHTML = state.lines.join("");
-  out.scrollTop = out.scrollHeight;
+  buffer.innerHTML = state.lines.join("");
+  view.scrollTop = view.scrollHeight;
   setTimeout(focusInput, 30);
 
   if (!state.ws || state.ws.readyState > 1) {
@@ -806,35 +822,35 @@ function mountTerminalPane(card, p) {
         try {
           const msg = JSON.parse(e.data);
           if (msg.type === "chunk") {
-            const lastLine = out.querySelector(".orch-term-line.active-chunk");
+            const lastLine = buffer.querySelector(".orch-term-line.active-chunk");
             if (lastLine) {
               lastLine.innerHTML += ansiToHtml(msg.data);
             } else {
               const div = document.createElement("div");
               div.className = "orch-term-line out active-chunk";
               div.innerHTML = ansiToHtml(msg.data);
-              out.appendChild(div);
+              buffer.appendChild(div);
             }
-            out.scrollTop = out.scrollHeight;
+            view.scrollTop = view.scrollHeight;
           } else if (msg.type === "exit") {
             state.running = false;
-            const activeChunk = out.querySelector(".active-chunk");
+            const activeChunk = buffer.querySelector(".active-chunk");
             if (activeChunk) activeChunk.classList.remove("active-chunk");
             if (msg.output && !activeChunk) {
               const div = document.createElement("div");
               div.className = msg.code === 0 ? "orch-term-line out" : "orch-term-line err";
               div.innerHTML = ansiToHtml(msg.output);
-              out.appendChild(div);
+              buffer.appendChild(div);
             }
             if (msg.newCwd && msg.newCwd !== p.cwd) {
               p.cwd = msg.newCwd;
-              promptSpan.textContent = `${cwdLabel(p.cwd)} ❯`;
-              const cwdCode = card.querySelector(".orch-term-cwd code");
-              if (cwdCode) cwdCode.textContent = cwdLabel(p.cwd);
+              promptEl.innerHTML = getPromptHtml(p.cwd);
+              const tabTitle = card.querySelector(".ghostty-tab-title");
+              if (tabTitle) tabTitle.textContent = shortCwd(p.cwd);
               saveCanvas();
             }
-            state.lines = [out.innerHTML];
-            out.scrollTop = out.scrollHeight;
+            state.lines = [buffer.innerHTML];
+            view.scrollTop = view.scrollHeight;
             focusInput();
           }
         } catch {}
@@ -843,85 +859,105 @@ function mountTerminalPane(card, p) {
     } catch {}
   }
 
-  input.onkeydown = (e) => {
-    if (e.key === "ArrowUp") {
+  input.onkeydown = async (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const cmd = input.value;
+      input.value = "";
+      cliText.textContent = "";
+
+      if (!cmd.trim()) {
+        const line = document.createElement("div");
+        line.className = "orch-term-line cmd";
+        line.innerHTML = `${getPromptHtml(p.cwd)} <span></span>`;
+        buffer.appendChild(line);
+        view.scrollTop = view.scrollHeight;
+        return;
+      }
+
+      state.history.push(cmd);
+      state.historyIdx = state.history.length;
+
+      if (cmd.trim() === "clear") {
+        buffer.innerHTML = "";
+        state.lines = [];
+        focusInput();
+        return;
+      }
+
+      const cmdLine = document.createElement("div");
+      cmdLine.className = "orch-term-line cmd";
+      cmdLine.innerHTML = `${getPromptHtml(p.cwd)} <span class="cmd-txt">${esc(cmd)}</span>`;
+      buffer.appendChild(cmdLine);
+      view.scrollTop = view.scrollHeight;
+
+      state.running = true;
+      input.disabled = true;
+
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: "run", cmd }));
+      } else {
+        try {
+          const res = await api("/api/terminal/session/run", { id: p.id, cmd, shell: p.shell, cwd: p.cwd });
+          const outDiv = document.createElement("div");
+          outDiv.className = res.code === 0 ? "orch-term-line out" : "orch-term-line err";
+          outDiv.innerHTML = ansiToHtml(res.output);
+          buffer.appendChild(outDiv);
+          if (res.newCwd && res.newCwd !== p.cwd) {
+            p.cwd = res.newCwd;
+            promptEl.innerHTML = getPromptHtml(p.cwd);
+            const tabTitle = card.querySelector(".ghostty-tab-title");
+            if (tabTitle) tabTitle.textContent = shortCwd(p.cwd);
+            saveCanvas();
+          }
+        } catch (err) {
+          const errDiv = document.createElement("div");
+          errDiv.className = "orch-term-line err";
+          errDiv.textContent = `Error: ${err.message}`;
+          buffer.appendChild(errDiv);
+        } finally {
+          state.running = false;
+          input.disabled = false;
+          focusInput();
+          view.scrollTop = view.scrollHeight;
+        }
+      }
+    } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (state.history.length > 0 && state.historyIdx > 0) {
         state.historyIdx--;
         input.value = state.history[state.historyIdx] || "";
+        cliText.textContent = input.value;
       }
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       if (state.historyIdx < state.history.length - 1) {
         state.historyIdx++;
         input.value = state.history[state.historyIdx] || "";
+        cliText.textContent = input.value;
       } else {
         state.historyIdx = state.history.length;
         input.value = "";
+        cliText.textContent = "";
       }
     } else if (e.key === "c" && (e.ctrlKey || e.metaKey)) {
       if (!input.value) {
         e.preventDefault();
         interruptTerminal(p.id);
+        const line = document.createElement("div");
+        line.className = "orch-term-line system";
+        line.textContent = "^C";
+        buffer.appendChild(line);
+        view.scrollTop = view.scrollHeight;
+      } else {
+        input.value = "";
+        cliText.textContent = "";
       }
     } else if (e.key === "l" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      clearTerminal(p.id);
-    }
-  };
-
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    const cmd = input.value;
-    input.value = "";
-    if (!cmd.trim()) return;
-
-    state.history.push(cmd);
-    state.historyIdx = state.history.length;
-
-    if (cmd.trim() === "clear") {
-      clearTerminal(p.id);
+      buffer.innerHTML = "";
+      state.lines = [];
       focusInput();
-      return;
-    }
-
-    const cmdDiv = document.createElement("div");
-    cmdDiv.className = "orch-term-line cmd";
-    cmdDiv.innerHTML = `<span class="term-prompt">❯</span> <span>${esc(cmd)}</span>`;
-    out.appendChild(cmdDiv);
-    out.scrollTop = out.scrollHeight;
-
-    state.running = true;
-
-    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-      input.disabled = true;
-      state.ws.send(JSON.stringify({ type: "run", cmd }));
-    } else {
-      input.disabled = true;
-      try {
-        const res = await api("/api/terminal/session/run", { id: p.id, cmd, shell: p.shell, cwd: p.cwd });
-        const outDiv = document.createElement("div");
-        outDiv.className = res.code === 0 ? "orch-term-line out" : "orch-term-line err";
-        outDiv.innerHTML = ansiToHtml(res.output);
-        out.appendChild(outDiv);
-        if (res.newCwd && res.newCwd !== p.cwd) {
-          p.cwd = res.newCwd;
-          promptSpan.textContent = `${cwdLabel(p.cwd)} ❯`;
-          const cwdCode = card.querySelector(".orch-term-cwd code");
-          if (cwdCode) cwdCode.textContent = cwdLabel(p.cwd);
-          saveCanvas();
-        }
-      } catch (err) {
-        const errDiv = document.createElement("div");
-        errDiv.className = "orch-term-line err";
-        errDiv.textContent = `Error: ${err.message}`;
-        out.appendChild(errDiv);
-      } finally {
-        state.running = false;
-        input.disabled = false;
-        input.focus();
-        out.scrollTop = out.scrollHeight;
-      }
     }
   };
 }
@@ -2113,27 +2149,27 @@ async function orchPaint(force) {
     }
     if (p.kind === "terminal") {
       p.w ??= 640; p.h ??= 420;
-      const sig = `terminal|${p.id}|${p.shell}|${p.cwd}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      const sig = `terminal|${p.id}|${p.shell}|${p.cwd}|${p.emulator}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
       if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
       orchSigs.set(key, sig);
       const cwd = p.cwd || orchCwd || "";
       const emuName = (p.emulator || prefTerm) === "kitty" ? "Kitty" : "Ghostty";
       const shellName = p.shell || prefShell || "bash";
-      card.querySelector(".orch-head").innerHTML = `<div class="orch-title"><span class="h-av">${icon("terminal", 18)}</span>
-          <div>
-            <div class="orch-term-head-row">
-              <h4>${esc(p.title || `${emuName} (${shellName})`)}</h4>
-              <span class="pill peach">${esc(emuName)}</span>
-              <span class="pill">${esc(shellName)}</span>
-            </div>
-            <small class="orch-term-cwd" title="${esc(cwd)}">📁 <code>${esc(cwdLabel(cwd))}</code></small>
-          </div>
+      card.querySelector(".orch-head").innerHTML = `
+        <div class="ghostty-traffic-lights">
+          <span class="dot close" data-act="orch-unpin" data-key="${esc(key)}" title="Close terminal (⌘W)"></span>
+          <span class="dot min" data-act="orch-swap" data-key="${esc(key)}" title="Minimize / Swap order"></span>
+          <span class="dot max" data-act="orch-max" data-key="${esc(key)}" title="${orchMax === key ? "Restore Split / Canvas" : "Maximize Fullscreen"}"></span>
         </div>
-        <div class="orch-acts">
+        <div class="ghostty-tab-pill" title="${esc(cwd)}">
+          <span class="ghostty-tab-ic">${icon("terminal", 13)}</span>
+          <span class="ghostty-tab-title">${esc(cwdLabel(cwd))}</span>
+          <span class="ghostty-tab-proc">${esc(shellName)}</span>
+        </div>
+        <div class="ghostty-acts">
+          <button type="button" class="ghostty-theme-toggle" data-act="term-toggle-theme" data-key="${esc(key)}" title="Toggle Ghostty / Kitty UI theme">${esc(emuName)}</button>
           <button type="button" class="btn glass orch-icon-btn" data-act="term-launch-app" data-key="${esc(key)}" title="Open in native ${esc(emuName)} window (Desktop)">${icon("ext", 12)}</button>
-          <button type="button" class="btn glass orch-icon-btn" data-act="term-clear" data-key="${esc(key)}" title="Clear screen">${icon("trash", 12)}</button>
-          <button type="button" class="btn glass orch-icon-btn" data-act="term-restart" data-key="${esc(key)}" title="Restart shell">${icon("reload", 12)}</button>
-          ${paneBtns}
+          <button type="button" class="btn glass orch-icon-btn" data-act="term-clear" data-key="${esc(key)}" title="Clear screen (Ctrl+L)">${icon("trash", 12)}</button>
         </div>`;
       card.querySelector(".orch-needs").innerHTML = "";
       if (form) form.style.display = "none";
@@ -2932,6 +2968,24 @@ const ACTIONS = {
     agentsBody();
     orchPaint(true);
     toast("Terminal closed");
+  },
+  "term-toggle-theme": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (!p) return;
+    const current = (p.emulator || prefTerm || "ghostty").toLowerCase();
+    const next = current === "kitty" ? "ghostty" : "kitty";
+    p.emulator = next;
+    prefTerm = next;
+    try {
+      const conf = JSON.parse(localStorage.getItem("overlook.terminal") || "{}");
+      conf.terminal = next;
+      localStorage.setItem("overlook.terminal", JSON.stringify(conf));
+    } catch {}
+    saveCanvas();
+    orchSigs.delete(key);
+    orchPaint(true);
+    toast(`Switched theme to ${next === "kitty" ? "Kitty" : "Ghostty"}`);
   },
   "term-menu-toggle": () => {
     termPopOpen = !termPopOpen;
