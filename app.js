@@ -636,7 +636,7 @@ const shortCwd = (c) => String(c || "").replace(/^\/home\/[^/]+/, "~");
 
 let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "tile", orchDir = "cols", orchRatio = 50,
   orchPanX = 24, orchPanY = 20, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
-  orchRail = true, orchDeckOpen = false, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
+  orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
 let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdData = null, cwdPaneKey = "";
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
@@ -649,11 +649,26 @@ function saveDismissedSessions() {
   try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions])); } catch {}
 }
 try {
+  orchRailMode = localStorage.getItem("overlook.rail-mode") || "float";
+} catch {}
+function saveRailMode() {
+  try { localStorage.setItem("overlook.rail-mode", orchRailMode); } catch {}
+}
+try {
   const c = JSON.parse(localStorage.getItem(CANVAS_KEY) || "null");
-  if (c) { orchPanes = c.panes || []; orchLinks = c.links || []; orchMode = c.mode || "tile"; orchPanX = c.panX ?? 24; orchPanY = c.panY ?? 20; orchZoom = c.zoom || 1; orchSeq = c.seq || 1; }
+  if (c) {
+    orchPanes = c.panes || [];
+    orchLinks = c.links || [];
+    orchMode = c.mode || "tile";
+    orchPanX = c.panX ?? 24;
+    orchPanY = c.panY ?? 20;
+    orchZoom = c.zoom || 1;
+    orchSeq = c.seq || 1;
+    if (c.railMode) orchRailMode = c.railMode;
+  }
 } catch {}
 function saveCanvas() {
-  try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq })); } catch {}
+  try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode })); } catch {}
 }
 const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
 const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
@@ -786,8 +801,8 @@ function ensurePaneRect(p, idx = 0) {
     p.x = 24 + col * 580 + (idx > 3 ? (idx - 3) * 36 : 0);
     p.y = 20 + row * 430 + (idx > 3 ? (idx - 3) * 36 : 0);
   }
-  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 440 : 556);
-  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 420 : 410);
+  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : 580);
+  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : 430);
   return p;
 }
 function arrangeCanvasPanes() {
@@ -827,7 +842,7 @@ function applyCanvasTransform() {
 function addPane(item, x, y) {
   const k = paneKey(item), have = orchPanes.find((p) => paneKey(p) === k), p = have || item;
   if (!have) {
-    if (orchPanes.length >= 12) orchPanes.shift();
+    if (orchPanes.length >= (orchMode === "free" ? 18 : 6)) orchPanes.shift();
     ensurePaneRect(p, orchPanes.length);
     orchPanes.push(p);
   }
@@ -934,23 +949,31 @@ function agents() {
   main.innerHTML = `<div class="orch-shell">
     <form class="task glass orch-deck ${orchDeckOpen ? "open" : ""}" id="run">
       <div class="orch-bar">
-        <button type="button" class="btn glass orch-rail-btn ${orchRail ? "on" : ""}" data-act="orch-rail" title="Toggle Fleet sidebar">${icon("cols", 14)} <span id="orch-rail-lbl">Fleet</span></button>
-        <div class="seg orch-mode-seg" role="radiogroup" aria-label="Workspace mode">
-          <button type="button" class="${orchMode === "tile" ? "on" : ""}" data-act="orch-mode" data-m="tile" title="Snapped Split &amp; Resizable Grid">${icon("split", 13)} Split</button>
-          <button type="button" class="${orchMode === "free" ? "on" : ""}" data-act="orch-mode" data-m="free" title="Free 2D Maestri Canvas (Drag, Resize, Pan &amp; Zoom)">${icon("grid", 13)} Canvas</button>
+        <div class="orch-cluster orch-cluster-nav">
+          <button type="button" class="btn glass orch-rail-btn ${orchRail ? "on" : ""}" data-act="orch-rail" title="Toggle Fleet sidebar">${icon("cols", 14)} <span id="orch-rail-lbl">Fleet</span></button>
+          <div class="seg orch-mode-seg" role="radiogroup" aria-label="Workspace mode">
+            <button type="button" class="${orchMode === "tile" ? "on" : ""}" data-act="orch-mode" data-m="tile" title="Snapped Split &amp; Resizable Grid">${icon("split", 13)} Split</button>
+            <button type="button" class="${orchMode === "free" ? "on" : ""}" data-act="orch-mode" data-m="free" title="Free 2D Maestri Canvas (Drag, Resize, Pan &amp; Zoom)">${icon("grid", 13)} Canvas</button>
+          </div>
+          <button type="button" class="btn glass orch-split-btn ${orchPanes.length > 1 ? "on" : ""}" id="orch-split-btn" data-act="orch-split" title="Toggle 2-pane split view" ${orchMode === "tile" ? "" : "hidden"}>${icon("split", 13)} <span id="orch-split-lbl">${orchPanes.length > 1 ? `Panes (${orchPanes.length})` : "2x"}</span></button>
+          <button type="button" class="btn glass" id="orch-dir-btn" data-act="orch-dir" title="Switch Split between Columns and Rows" ${orchMode === "tile" && orchPanes.length === 2 && !orchMax ? "" : "hidden"}>${orchDir === "rows" ? "═ Rows" : "|| Cols"}</button>
+          <button type="button" class="btn glass orch-new-btn" data-act="orch-new" title="Add a new Agent Tile to Split / Canvas">${icon("plus", 13)} Tile</button>
         </div>
-        <button type="button" class="btn glass orch-split-btn ${orchPanes.length > 1 ? "on" : ""}" id="orch-split-btn" data-act="orch-split" title="Toggle 2-pane split view">${icon("split", 13)} <span id="orch-split-lbl">${orchPanes.length > 1 ? `Panes (${orchPanes.length})` : "2x"}</span></button>
-        <button type="button" class="btn glass" id="orch-dir-btn" data-act="orch-dir" title="Switch Split between Columns and Rows" ${orchMode === "tile" && orchPanes.length === 2 && !orchMax ? "" : "hidden"}>${orchDir === "rows" ? "═ Rows" : "|| Cols"}</button>
-        <button type="button" class="btn glass" data-act="orch-new" title="Add a new Agent Tile to Split / Canvas">${icon("plus", 13)} Tile</button>
-        <textarea id="run-prompt" rows="1" placeholder="${esc(roleRow[2])}" aria-label="Task for the agent"></textarea>
-        <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
-        <input type="hidden" id="run-cwd" value="${esc(orchCwd)}">
-        <button type="button" class="btn glass orch-cwd-btn" id="run-cwd-btn" data-act="cwd-open" title="Browse &amp; select any folder on your PC">
-          ${icon("folder", 14)} <span id="run-cwd-lbl">${esc(cwdLabel(orchCwd))}</span> ${icon("fold", 12)}
-        </button>
-        <div class="orch-multi" id="run-multi"></div>
-        <button type="button" class="btn glass orch-more-btn" data-act="orch-deck-toggle" title="Toggle Role presets, Model &amp; Routines">${icon("fold", 13)} Options</button>
-        <button class="btn peach" id="run-submit" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+        <div class="orch-cluster orch-cluster-prompt">
+          <textarea id="run-prompt" rows="1" placeholder="${esc(roleRow[2])}" aria-label="Task for the agent"></textarea>
+          <div class="orch-ctx-group">
+            <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
+            <input type="hidden" id="run-cwd" value="${esc(orchCwd)}">
+            <button type="button" class="btn glass orch-cwd-btn" id="run-cwd-btn" data-act="cwd-open" title="Browse &amp; select any folder on your PC">
+              ${icon("folder", 14)} <span id="run-cwd-lbl">${esc(cwdLabel(orchCwd))}</span> ${icon("fold", 12)}
+            </button>
+          </div>
+          <div class="orch-multi" id="run-multi"></div>
+        </div>
+        <div class="orch-cluster orch-cluster-act">
+          <button type="button" class="btn glass orch-more-btn" data-act="orch-deck-toggle" title="Toggle Role presets, Model &amp; Routines">${icon("fold", 13)} Options</button>
+          <button class="btn peach" id="run-submit" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+        </div>
       </div>
       <div class="orch-presets">
         <div class="orch-roles" role="radiogroup" aria-label="Role preset">
@@ -968,7 +991,7 @@ function agents() {
       ${ready.length ? "" : "<small>No agent is set up yet: see README › Agents.</small>"}
       <div class="cwd-pop glass" id="cwd-pop" hidden></div>
     </form>
-    <div class="orch-work ${orchRail ? "" : "rail-shut"}" id="agents-body"></div>
+    <div class="orch-work ${orchRail ? "" : "rail-shut"} ${orchRail && orchRailMode === "float" ? "rail-float" : ""}" id="agents-body"></div>
   </div>`;
   $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
   $("#run-agent").onchange = () => { orchExtra.delete($("#run-agent").value); runOptions(); renderMultiChips(); };
@@ -1189,13 +1212,13 @@ function bindPaneDragResize(card, p) {
   }
   const oldBare = card.querySelector(".orch-resize:not([data-corner])");
   if (oldBare) oldBare.remove();
-  ["nw", "ne", "sw", "se"].forEach((c) => {
+  ["nw", "ne", "sw", "se", "n", "s", "e", "w"].forEach((c) => {
     let r = card.querySelector(`.orch-resize.${c}`);
     if (!r) {
       r = document.createElement("div");
       r.className = `orch-resize ${c}`;
       r.dataset.corner = c;
-      r.title = "Drag corner to resize";
+      r.title = c.length === 1 ? "Drag edge to resize" : "Drag corner to resize";
       card.appendChild(r);
     }
     r.addEventListener("pointerdown", (e) => {
@@ -1212,17 +1235,17 @@ function bindPaneDragResize(card, p) {
         let nextW = startW, nextH = startH, nextX = startX, nextY = startY;
 
         if (corner.includes("e")) {
-          nextW = Math.max(280, Math.min(1600, Math.round(startW + dx)));
+          nextW = Math.max(280, Math.min(2600, Math.round(startW + dx)));
         } else if (corner.includes("w")) {
-          const clampedW = Math.max(280, Math.min(1600, Math.round(startW - dx)));
+          const clampedW = Math.max(280, Math.min(2600, Math.round(startW - dx)));
           nextX = Math.round(startX + (startW - clampedW));
           nextW = clampedW;
         }
 
         if (corner.includes("s")) {
-          nextH = Math.max(180, Math.min(1200, Math.round(startH + dy)));
+          nextH = Math.max(180, Math.min(1800, Math.round(startH + dy)));
         } else if (corner.includes("n")) {
-          const clampedH = Math.max(180, Math.min(1200, Math.round(startH - dy)));
+          const clampedH = Math.max(180, Math.min(1800, Math.round(startH - dy)));
           nextY = Math.round(startY + (startH - clampedH));
           nextH = clampedH;
         }
@@ -1287,6 +1310,7 @@ function agentsBody() {
   const el = $("#agents-body");
   if (!el) return;
   el.classList.toggle("rail-shut", !orchRail);
+  el.classList.toggle("rail-float", orchRail && orchRailMode === "float");
   const all = fleetItems();
   const counts = {
     all: all.length,
@@ -1312,7 +1336,10 @@ function agentsBody() {
   if (orchMax && !orchPanes.some((p) => paneKey(p) === orchMax)) orchMax = "";
   const rLbl = $("#orch-rail-lbl"), sBtn = $("#orch-split-btn"), sLbl = $("#orch-split-lbl"), dBtn = $("#orch-dir-btn");
   if (rLbl) rLbl.textContent = `Fleet (${counts.all})`;
-  if (sBtn) sBtn.classList.toggle("on", orchPanes.length > 1);
+  if (sBtn) {
+    sBtn.classList.toggle("on", orchPanes.length > 1);
+    sBtn.hidden = orchMode === "free";
+  }
   if (sLbl) sLbl.textContent = orchPanes.length > 1 ? `Panes (${orchPanes.length})` : "2x";
   if (dBtn) {
     dBtn.hidden = !(orchMode === "tile" && orchPanes.length === 2 && !orchMax);
@@ -1320,20 +1347,37 @@ function agentsBody() {
   }
   document.querySelectorAll("[data-act='orch-mode']").forEach((b) => b.classList.toggle("on", b.dataset.m === orchMode));
   if (!el.querySelector(".orch-canvas")) {
-    el.innerHTML = `<aside class="orch-fleet glass">
-        <div class="orch-tabs" id="orch-tabs"></div>
-        <div class="orch-list" id="orch-list"></div>
-        <details class="orch-ledger" id="orch-ledger">
-          <summary id="orch-ledger-sum"></summary>
-          <div class="orch-ledger-cols" id="orch-ledger-cols"></div>
-        </details>
-      </aside>
+    el.innerHTML = `<div class="orch-fleet-wrap ${orchRailMode === "float" ? "float" : ""}" id="orch-fleet-wrap">
+        <button type="button" class="orch-fleet-pill glass" data-act="orch-rail-open" title="Open Fleet sidebar">${icon("cols", 13)} <span>Fleet <small id="orch-fleet-pill-cnt"></small></span></button>
+        <aside class="orch-fleet glass ${orchRailMode === "float" ? "floating" : ""}">
+          <div class="orch-fleet-head">
+            <div class="orch-fleet-title">
+              ${icon("cols", 14)} <span>Fleet</span> <span class="pill" id="orch-fleet-badge"></span>
+            </div>
+            <div class="orch-fleet-acts">
+              <button type="button" class="btn glass orch-icon-btn ${orchRailMode === "float" ? "on" : ""}" data-act="orch-rail-mode" title="${orchRailMode === "float" ? "Dock sidebar to side" : "Float sidebar over canvas"}">${icon(orchRailMode === "float" ? "ext" : "split", 12)}</button>
+              <button type="button" class="btn glass orch-icon-btn" data-act="orch-rail" title="Hide Fleet sidebar">${icon("x", 12)}</button>
+            </div>
+          </div>
+          <div class="orch-tabs" id="orch-tabs"></div>
+          <div class="orch-list" id="orch-list"></div>
+          <details class="orch-ledger" id="orch-ledger">
+            <summary id="orch-ledger-sum"></summary>
+            <div class="orch-ledger-cols" id="orch-ledger-cols"></div>
+          </details>
+        </aside>
+      </div>
       <div class="orch-canvas" id="orch-canvas">
         <div class="orch-plane" id="orch-plane"></div>
         <div class="orch-hud glass" id="orch-hud"></div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
   }
+  const fleetBadge = $("#orch-fleet-badge"), fleetPillCnt = $("#orch-fleet-pill-cnt"), pill = el.querySelector(".orch-fleet-pill"), fleetEl = el.querySelector(".orch-fleet"), fleetWrap = $("#orch-fleet-wrap");
+  if (fleetBadge) fleetBadge.textContent = counts.all;
+  if (fleetPillCnt) fleetPillCnt.textContent = counts.all;
+  if (fleetWrap) fleetWrap.classList.toggle("float", orchRailMode === "float");
+  if (fleetEl) fleetEl.classList.toggle("floating", orchRailMode === "float");
   const pinnedKeys = new Set(orchPanes.map(paneKey));
   counts.notes = D.notes.length;
   $("#orch-tabs").innerHTML = [["all", "All"], ["active", "Active"], ["waiting", "Wait"], ["done", "Done"], ["notes", "Notes"]].map(([k, l]) =>
@@ -1629,6 +1673,14 @@ async function orchPaint(force) {
       const form = card.querySelector(".orch-talk"), msg = card.querySelector(".orch-msg");
       form.onsubmit = (e) => { e.preventDefault(); orchSend(p, card); };
       msg.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); orchSend(p, card); } };
+      const head = card.querySelector(".orch-head");
+      head.addEventListener("dblclick", (e) => {
+        if (e.target.closest("button, a, select, input, textarea")) return;
+        orchMax = orchMax === key ? "" : key;
+        orchActive = key;
+        orchSigs.clear();
+        agentsBody();
+      });
       bindPaneDragResize(card, p);
       plane.appendChild(card);
     }
@@ -2322,9 +2374,35 @@ const ACTIONS = {
     renderMultiChips();
   },
   "orch-rail": (el) => {
+    if (el?.closest?.(".orch-fleet-wrap.float")) {
+      $("#orch-fleet-wrap")?.classList.remove("open");
+      return;
+    }
     orchRail = !orchRail;
-    el.classList.toggle("on", orchRail);
+    document.querySelectorAll('[data-act="orch-rail"]').forEach((b) => b.classList.toggle("on", orchRail));
     $("#agents-body")?.classList.toggle("rail-shut", !orchRail);
+    $("#agents-body")?.classList.toggle("rail-float", orchRail && orchRailMode === "float");
+  },
+  "orch-rail-open": () => {
+    $("#orch-fleet-wrap")?.classList.toggle("open");
+  },
+  "orch-rail-mode": () => {
+    orchRailMode = orchRailMode === "float" ? "dock" : "float";
+    saveRailMode();
+    saveCanvas();
+    const wrap = $("#orch-fleet-wrap");
+    if (wrap) wrap.classList.toggle("float", orchRailMode === "float");
+    const body = $("#agents-body");
+    if (body) body.classList.toggle("rail-float", orchRail && orchRailMode === "float");
+    const fleet = document.querySelector(".orch-fleet");
+    if (fleet) fleet.classList.toggle("floating", orchRailMode === "float");
+    const btn = document.querySelector('[data-act="orch-rail-mode"]');
+    if (btn) {
+      btn.classList.toggle("on", orchRailMode === "float");
+      btn.title = orchRailMode === "float" ? "Dock sidebar to side" : "Float sidebar over canvas";
+      btn.innerHTML = icon(orchRailMode === "float" ? "ext" : "split", 12);
+    }
+    toast(orchRailMode === "float" ? "Fleet sidebar is now floating" : "Fleet sidebar is now docked");
   },
   "orch-deck-toggle": (el) => {
     orchDeckOpen = !orchDeckOpen;
@@ -2343,7 +2421,7 @@ const ACTIONS = {
   },
   "orch-new": () => {
     orchMax = "";
-    if (orchPanes.length >= 6) orchPanes.shift();
+    if (orchPanes.length >= (orchMode === "free" ? 18 : 6)) orchPanes.shift();
     const id = String(++orchSeq);
     const p = { kind: "new", id, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd };
     if (orchMode === "free") ensurePaneRect(p, orchPanes.length);
@@ -2495,7 +2573,7 @@ const ACTIONS = {
         if (orchActive === k) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
       }
     } else {
-      if (orchPanes.length >= 6) orchPanes.shift();
+      if (orchPanes.length >= (orchMode === "free" ? 18 : 6)) orchPanes.shift();
       if (orchMode === "free") ensurePaneRect(item, orchPanes.length);
       orchPanes.push(item);
       orchActive = k;
@@ -2647,6 +2725,7 @@ document.addEventListener("click", (e) => {
     cwdOpen = false; cwdPaneKey = ""; paintCwdPop();
   }
   if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
+  if (!e.target.closest("#orch-fleet-wrap")) $("#orch-fleet-wrap")?.classList.remove("open");
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const res = e.target.closest(".ev.result");

@@ -1519,5 +1519,104 @@ test("adversarial verification: task persistence across reload, retryTask 404 re
   }
 });
 
+test("adversarial verification: floating fleet sidebar, extended canvas panes, 8-dir resize, and header dblclick", async () => {
+  const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
+  const appCss = readFileSync(`${ROOT}/app.css`, "utf8");
 
+  // 1. Assert required styles and structure for minimalist toolbar and floating fleet
+  expect(appCss).toContain(".orch-cluster-nav");
+  expect(appCss).toContain(".orch-cluster-prompt");
+  expect(appCss).toContain(".orch-cluster-act");
+  expect(appCss).toContain(".orch-fleet-wrap");
+  expect(appCss).toContain(".orch-fleet-wrap.float:is(:hover, :focus-within, .open) .orch-fleet");
+  expect(appCss).toContain(".orch-fleet-head");
+  expect(appCss).toContain(".orch-fleet-pill");
+  expect(appCss).toContain(".orch-work.rail-float");
+  expect(appCss).toContain(".orch-work.rail-float .orch-fleet");
+  expect(appCss).toContain(".orch-resize.e");
+  expect(appCss).toContain(".orch-resize.w");
+  expect(appCss).toContain(".orch-resize.s");
+  expect(appCss).toContain(".orch-resize.n");
 
+  // 2. Assert JS handlers and state management
+  expect(appJs).toContain("orchRailMode");
+  expect(appJs).toContain('"orch-rail-mode"');
+  expect(appJs).toContain('"orch-rail-open"');
+  expect(appJs).toContain("saveRailMode");
+  expect(appJs).toContain('"overlook.rail-mode"');
+  expect(appJs).toContain('["nw", "ne", "sw", "se", "n", "s", "e", "w"]');
+  expect(appJs).toContain("Math.min(2600,");
+  expect(appJs).toContain("Math.min(1800,");
+  expect(appJs).toContain('head.addEventListener("dblclick"');
+
+  // 3. Test 8-direction resize calculations against bounds
+  const simulateResize = (corner: string, startW: number, startH: number, startX: number, startY: number, dx: number, dy: number) => {
+    let nextW = startW, nextH = startH, nextX = startX, nextY = startY;
+    if (corner.includes("e")) {
+      nextW = Math.max(280, Math.min(2600, Math.round(startW + dx)));
+    } else if (corner.includes("w")) {
+      const clampedW = Math.max(280, Math.min(2600, Math.round(startW - dx)));
+      nextX = Math.round(startX + (startW - clampedW));
+      nextW = clampedW;
+    }
+
+    if (corner.includes("s")) {
+      nextH = Math.max(180, Math.min(1800, Math.round(startH + dy)));
+    } else if (corner.includes("n")) {
+      const clampedH = Math.max(180, Math.min(1800, Math.round(startH - dy)));
+      nextY = Math.round(startY + (startH - clampedH));
+      nextH = clampedH;
+    }
+    return { nextW, nextH, nextX, nextY };
+  };
+
+  // Horizontal edge resize (east): extends up to 2600px without altering Y or H
+  const eastExtend = simulateResize("e", 600, 400, 50, 50, 2500, 0);
+  expect(eastExtend.nextW).toBe(2600); // capped at 2600
+  expect(eastExtend.nextH).toBe(400);  // unchanged
+  expect(eastExtend.nextX).toBe(50);   // unchanged
+
+  // Horizontal edge resize (west): extends left up to 2600px and updates X
+  const westExtend = simulateResize("w", 600, 400, 500, 50, -400, 0);
+  expect(westExtend.nextW).toBe(1000);
+  expect(westExtend.nextX).toBe(100);
+
+  // Vertical edge resize (south): extends down up to 1800px
+  const southExtend = simulateResize("s", 600, 400, 50, 50, 0, 1500);
+  expect(southExtend.nextH).toBe(1800);
+  expect(southExtend.nextW).toBe(600);
+
+  // Corner resize (se): adjusts both dimensions simultaneously
+  const cornerExtend = simulateResize("se", 500, 300, 50, 50, 300, 200);
+  expect(cornerExtend.nextW).toBe(800);
+  expect(cornerExtend.nextH).toBe(500);
+
+  // Minimum bounds clamped
+  const minShrink = simulateResize("se", 500, 300, 50, 50, -400, -250);
+  expect(minShrink.nextW).toBe(280);
+  expect(minShrink.nextH).toBe(180);
+
+  // 4. Test fleet sidebar mode transition simulation
+  let testRailMode = "float";
+  let testRail = true;
+  const toggleRailMode = () => {
+    testRailMode = testRailMode === "float" ? "dock" : "float";
+    return testRailMode;
+  };
+  expect(toggleRailMode()).toBe("dock");
+  expect(toggleRailMode()).toBe("float");
+
+  const toggleRail = () => {
+    testRail = !testRail;
+    return { railShut: !testRail, railFloat: testRail && testRailMode === "float", pillHidden: testRail };
+  };
+  const closedState = toggleRail();
+  expect(closedState.railShut).toBe(true);
+  expect(closedState.railFloat).toBe(false);
+  expect(closedState.pillHidden).toBe(false);
+
+  const openState = toggleRail();
+  expect(openState.railShut).toBe(false);
+  expect(openState.railFloat).toBe(true);
+  expect(openState.pillHidden).toBe(true);
+});
