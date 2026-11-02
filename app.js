@@ -634,6 +634,9 @@ const avatar = (key, ic = "agents", size = 20) => {
 const taskStatus = (t) => (!t.end ? "running" : t.ok ? "finished" : "failed");
 const liveClass = (t) => (!t.end ? "run" : t.ok ? "" : "off");
 const shortCwd = (c) => String(c || "").replace(/^\/home\/[^/]+/, "~");
+const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
+const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
+const cwdLabel = (c) => (c ? shortCwd(c) : `Vault (${D?.vault || "vault"})`);
 
 let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "tile", orchDir = "cols", orchRatio = 50,
   orchPanX = 24, orchPanY = 20, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
@@ -756,7 +759,7 @@ function mountTerminalPane(card, p) {
     termPanesState.set(p.id, {
       history: [],
       historyIdx: 0,
-      lines: [`<div class="orch-term-line system">Overlook Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || ROOT)}</div><div class="orch-term-line system">Type commands, press Enter to run, ↑/↓ for history.</div>`],
+      lines: [`<div class="orch-term-line system">Overlook Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || orchCwd || "")}</div><div class="orch-term-line system">Type commands, press Enter to run, ↑/↓ for history.</div>`],
       ws: null,
       running: false,
     });
@@ -957,8 +960,7 @@ function paintTermPop() {
   pop.hidden = false;
   $("#orch-term-split")?.classList.add("open");
 }
-const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
-const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
+
 function updateSelectionUI() {
   const plane = $("#orch-plane");
   if (plane) {
@@ -985,7 +987,7 @@ function deleteSelectedPanes() {
   orchSigs.clear();
   orchPaint(true);
 }
-const cwdLabel = (c) => (c ? shortCwd(c) : `Vault (${D?.vault || "vault"})`);
+
 
 async function loadCwdBrowser(path = cwdBrowse) {
   cwdBrowse = path || "~/dev";
@@ -1228,7 +1230,7 @@ function fleetItems() {
       items.push({
         kind: "terminal", id: p.id, agent: "terminal", ic: "terminal",
         title: p.title || `Terminal (${p.shell || "bash"})`,
-        sub: `${shortCwd(p.cwd || ROOT)} · terminal`,
+        sub: `${shortCwd(p.cwd || orchCwd || "")} · terminal`,
         group: "active", dot: "run", badge: p.shell || "shell", peach: true, needs: "",
       });
     }
@@ -1973,6 +1975,7 @@ async function orchPaint(force) {
       card = document.createElement("section");
       card.className = "orch-pane glass";
       card.dataset.key = key;
+      card.dataset.kind = p.kind;
       card.innerHTML = `<div class="orch-head"></div>
         <div class="feed list orch-feed"><p class="empty">Loading…</p></div>
         <div class="orch-needs"></div>
@@ -2020,6 +2023,7 @@ async function orchPaint(force) {
     }
     card.classList.toggle("active", key === orchActive);
     card.classList.toggle("selected", orchSelected.has(key));
+    card.dataset.kind = p.kind;
     if (isFree) {
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`;
       card.style.width = `${p.w}px`; card.style.height = `${p.h}px`;
@@ -2081,7 +2085,7 @@ async function orchPaint(force) {
       const sig = `terminal|${p.id}|${p.shell}|${p.cwd}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
       if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
       orchSigs.set(key, sig);
-      const cwd = p.cwd || orchCwd || ROOT;
+      const cwd = p.cwd || orchCwd || "";
       const shellName = p.shell || prefShell || "bash";
       card.querySelector(".orch-head").innerHTML = `<div class="orch-title"><span class="h-av">${icon("terminal", 18)}</span>
           <div>
@@ -2821,7 +2825,7 @@ const ACTIONS = {
     }
   },
   "term-canvas": (el) => {
-    const cwd = el?.dataset?.cwd || $("#run-cwd")?.value || orchCwd || ROOT;
+    const cwd = el?.dataset?.cwd || $("#run-cwd")?.value || orchCwd || "";
     const shell = prefShell || (shellList[0]?.id || "bash");
     const termId = `term_${Date.now()}`;
     const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
@@ -2832,7 +2836,7 @@ const ACTIONS = {
   "term-canvas-pop": () => {
     termPopOpen = false;
     paintTermPop();
-    const cwd = $("#run-cwd")?.value || orchCwd || ROOT;
+    const cwd = $("#run-cwd")?.value || orchCwd || "";
     const shell = prefShell || (shellList[0]?.id || "bash");
     const termId = `term_${Date.now()}`;
     const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };
@@ -2841,7 +2845,7 @@ const ACTIONS = {
     toast(`Terminal (${shell}) opened in Canvas`);
   },
   "term-new-pane": () => {
-    const cwd = $("#run-cwd")?.value || orchCwd || ROOT;
+    const cwd = $("#run-cwd")?.value || orchCwd || "";
     const shell = prefShell || (shellList[0]?.id || "bash");
     const termId = `term_${Date.now()}`;
     const p = { kind: "terminal", id: termId, shell, cwd, title: `Terminal (${shell})` };

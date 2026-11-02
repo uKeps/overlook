@@ -1763,6 +1763,9 @@ test("adversarial verification: embedded canvas terminal, session management, cd
   expect(appJs).toContain('"term-close-session"');
   expect(appJs).toContain('["terminals", "Terminals"]');
   expect(appJs).toContain("ansiToHtml");
+  expect(appJs).not.toMatch(/\bROOT\b/);
+  expect(appJs.indexOf("const cwdLabel =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));
+  expect(appJs.indexOf("const paneKey =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));
   expect(appCss).toContain('.orch-pane[data-kind="terminal"]');
   expect(appCss).toContain(".orch-term-view");
   expect(appCss).toContain(".orch-term-input-bar");

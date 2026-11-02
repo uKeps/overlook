@@ -970,6 +970,9 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
   background: color-mix(in srgb, var(--surface) 94%, #060709);
   border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
 }
+.orch-pane[data-kind="terminal"] .orch-feed {
+  padding: 0; overflow: hidden; display: flex; flex-direction: column; flex: 1;
+}
 .orch-term-head-row { display: flex; align-items: center; gap: 6px; }
 .orch-term-cwd { font-family: var(--mono); color: var(--muted); font-size: 11px; }
 .orch-term-cwd code { color: var(--accent); }
