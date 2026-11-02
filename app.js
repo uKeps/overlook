@@ -1348,7 +1348,7 @@ function agents() {
           <div class="orch-ctx-group">
             <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
             <input type="hidden" id="run-cwd" value="${esc(orchCwd)}">
-            <button type="button" class="btn glass orch-cwd-btn" id="run-cwd-btn" data-act="cwd-open" title="Browse &amp; select any folder on your PC">
+            <button type="button" class="orch-cwd-btn" id="run-cwd-btn" data-act="cwd-open" title="Browse &amp; select any folder on your PC">
               ${icon("folder", 14)} <span id="run-cwd-lbl">${esc(cwdLabel(orchCwd))}</span> ${icon("fold", 12)}
             </button>
           </div>
@@ -2060,7 +2060,7 @@ async function orchPaint(force) {
     let card = plane.querySelector(`.orch-pane[data-key="${CSS.escape(key)}"]`);
     if (!card) {
       card = document.createElement("section");
-      card.className = "orch-pane glass";
+      card.className = "orch-pane";
       card.dataset.key = key;
       card.dataset.kind = p.kind;
       card.innerHTML = `<div class="orch-head"></div>

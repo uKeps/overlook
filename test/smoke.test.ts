@@ -1825,7 +1825,8 @@ test("adversarial verification: canvas high-contrast contours, split terminal bu
   // 2. High-contrast dual-layer contours in CSS
   const appCss = readFileSync(`${REPO}/app.css`, "utf8");
   expect(appCss).toContain(".orch-plane.free .orch-pane");
-  expect(appCss).toContain("box-shadow: 0 0 0 1px rgba(0, 0, 0, .8), 0 20px 52px rgba(0, 0, 0, .6)");
+  expect(appCss).toContain("box-shadow: 0 0 0 1px rgba(0, 0, 0, .85), 0 20px 52px rgba(0, 0, 0, .6) !important");
+  expect(appCss).toContain("html[data-ui=\"minimal\"] .orch-pane");
   expect(appCss).toContain(".orch-deck");
   expect(appCss).toContain("box-shadow: 0 4px 20px rgba(0, 0, 0, .4), 0 0 0 1px rgba(0, 0, 0, .5)");
   expect(appCss).toContain(".orch-head");
@@ -1833,9 +1834,13 @@ test("adversarial verification: canvas high-contrast contours, split terminal bu
   expect(appCss).toContain(".orch-talk");
   expect(appCss).toContain("border-top: 1px solid rgba(255, 255, 255, .15)");
   expect(appCss).toContain(".ghostty-tab-pill");
+  expect(appCss).toContain(".orch-ctx-group > select.pick");
+  expect(appCss).toContain(".orch-ctx-group .orch-cwd-btn");
 
   // 3. Seamless split button & popover structure in JS
   const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  expect(appJs).toContain('card.className = "orch-pane";');
+  expect(appJs).toContain('<button type="button" class="orch-cwd-btn"');
   expect(appJs).toContain('<button type="button" class="orch-term-main"');
   expect(appJs).toContain('<button type="button" class="orch-term-drop"');
   expect(appJs).not.toContain('class="btn glass orch-term-main"');
