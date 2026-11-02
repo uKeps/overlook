@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -34,6 +34,7 @@ const LAYOUTS = {
     memo: (title: string, file: string, text: string) => `---\ntags: [voice-memo]\n---\n\n# ${title}\n\n> [!abstract]\n> Automatic transcript of "${file}", not processed yet.\n\n${text}\n`,
     voice: (path: string) => `Process ${path}: the automatic transcript of a voice memo. File it following AGENTS.md, as anything I hand you to note: fix obvious recognition errors, never add what wasn't said.`,
     voiceFailed: (name: string, err: string) => `Voice memo "${name}" was not noted: ${err}`,
+    noteAgent: (topic: string) => `Create a note in the vault about: "${topic}". Follow AGENTS.md strictly: choose the right folder (e.g. 3 Concepts/ or 4 Ideas/), use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.`,
   },
   pt: {
     daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
@@ -43,6 +44,7 @@ const LAYOUTS = {
     memo: (title: string, file: string, text: string) => `---\ntags: [memo-de-voz]\n---\n\n# ${title}\n\n> [!abstract] Em uma frase\n> Transcrição automática de "${file}", ainda não processada.\n\n${text}\n`,
     voice: (path: string) => `Processe ${path}: é a transcrição automática de um memo de voz. Siga a rotina inbox do AGENTS.md só para este arquivo: corrija erros óbvios de reconhecimento, nunca acrescente o que não foi dito.`,
     voiceFailed: (name: string, err: string) => `Memo de voz "${name}" não foi anotado: ${err}`,
+    noteAgent: (topic: string) => `Crie uma nota no vault sobre: "${topic}". Siga o AGENTS.md rigorosamente: decida a pasta correta (ex: 3 Conceitos/ ou 4 Ideias/), use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.`,
   },
 };
 let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
@@ -523,7 +525,8 @@ async function handle(req: Request, port: number) {
     // Against other sites posting to localhost: JSON forces a preflight (no CORS here) and Host blocks DNS rebinding.
     if (req.headers.get("content-type") !== "application/json" || !hostOk(req.headers.get("host") ?? "", port))
       return new Response("forbidden", { status: 403 });
-    const b = await req.json();
+    let b: any;
+    try { b = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
     if (p === "/api/trash") return json(typeof b.path === "string" && (await trash(b.path)) && { ok: true });
     if (p === "/api/review") return json(typeof b.path === "string" && (await review(b.path, !!b.remembered)));
     if (p === "/api/capture" && typeof b.text === "string" && b.text.trim()) { await capture(b.text.slice(0, 2000)); return json({ ok: true }); }
@@ -556,6 +559,16 @@ async function handle(req: Request, port: number) {
     if (p === "/api/task/talk") {
       const txt = (str(b.prompt) ?? str(b.text) ?? "").trim().slice(0, 8000);
       return typeof b.id === "string" && txt ? started(continueTask(ROOT, import.meta.dir, b.id, txt)) : new Response("missing text", { status: 400 });
+    }
+    if (p === "/api/task/retry") {
+      if (typeof b.id !== "string" || !b.id.trim()) return new Response("missing id", { status: 400 });
+      return started(retryTask(ROOT, import.meta.dir, b.id.trim(), { model: str(b.model), effort: str(b.effort) }));
+    }
+    if (p === "/api/note/agent") {
+      const topic = typeof b.topic === "string" ? b.topic.trim() : "";
+      if (!topic || topic.length > 2000) return new Response("topic must be 1 to 2000 characters", { status: 400 });
+      const prompt = L.noteAgent(topic);
+      return started(runTask(ROOT, import.meta.dir, str(b.agent) || "agy", prompt, { model: str(b.model), effort: str(b.effort) }));
     }
     if (p === "/api/voice") return !process.env.TRANSCRIBE ? new Response("set TRANSCRIBE in .env", { status: 400 }) : typeof b.audio === "string" && b.audio ? (voice(b, process.env.TRANSCRIBE), json({ ok: true })) : new Response("missing audio", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));

@@ -29,13 +29,22 @@
 
 <dialog id="capture" class="glass">
   <div class="dialog-head">
-    <label for="capture-text">Capture to the daily note</label>
+    <div class="seg capture-tabs" role="tablist" aria-label="Capture mode">
+      <button type="button" class="on" data-act="capture-tab" data-tab="daily" role="tab" aria-selected="true">Daily Note</button>
+      <button type="button" data-act="capture-tab" data-tab="agent" role="tab" aria-selected="false">Note with Agent</button>
+    </div>
     <button type="button" class="dialog-close" data-act="capture-close" aria-label="Close">✕</button>
   </div>
-  <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question. Enter saves."></textarea>
+  <div id="capture-agent-panel" hidden>
+    <div class="capture-fields-row">
+      <select class="pick" id="capture-agent-sel" aria-label="Agent"></select>
+      <select class="pick" id="capture-model-sel" aria-label="Model"></select>
+    </div>
+  </div>
+  <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question. Enter saves." aria-label="Capture text"></textarea>
   <div class="capture-foot">
-    <small>Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
-    <button type="button" class="btn peach" data-act="capture-save">Save</button>
+    <small id="capture-hint">Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
+    <button type="button" class="btn peach" id="capture-submit-btn" data-act="capture-save">Save</button>
   </div>
 </dialog>
 <dialog id="picker" class="glass" aria-label="Choose an image"></dialog>

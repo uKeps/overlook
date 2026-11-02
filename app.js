@@ -43,6 +43,7 @@ const I = {
   trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
@@ -53,8 +54,10 @@ async function api(p, body) {
 }
 function toast(msg) {
   const t = $("#toast");
-  t.textContent = msg; t.classList.add("on");
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 2600);
+  if (typeof msg === "string" && msg.includes("<")) t.innerHTML = msg;
+  else t.textContent = msg;
+  t.classList.add("on");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 3600);
 }
 // Opened over Tailscale (phone): embedded apps use the tailnet links, built from the current host.
 const remote = location.hostname.endsWith(".ts.net");
@@ -1397,6 +1400,114 @@ function bindSplitResizer(plane) {
     plane.style.gridTemplateColumns = `minmax(0, ${orchRatio}fr) 10px minmax(0, ${100 - orchRatio}fr)`;
   }
 }
+function detectQuota(t) {
+  if (!t) return null;
+  if (t.quota?.exhausted) {
+    let resetsIn = t.quota.resetsIn || t.quota.resetIn;
+    if (!resetsIn && t.quota.resetAt) {
+      const ms = Math.max(0, new Date(t.quota.resetAt).getTime() - Date.now());
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
+      resetsIn = `${h}h${m}m${s}s`;
+    } else if (resetsIn && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(resetsIn)) {
+      const ms = Math.max(0, new Date(resetsIn).getTime() - Date.now());
+      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+      resetsIn = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    return {
+      exhausted: true,
+      message: t.quota.message || "Individual quota reached for this model.",
+      resetsIn: resetsIn || "",
+      model: t.quota.model || t.model,
+      agent: t.agent,
+    };
+  }
+  const evs = t.events || [];
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const e = evs[i], txt = e?.txt || "";
+    if (/RESOURCE_EXHAUSTED|429|Individual quota reached|quota exceeded|rate limit exceeded/i.test(txt)) {
+      const resetMatch = txt.match(/resets in\s+([0-9a-z\s]+?)(?:\.|\n|$)/i);
+      const resetsIn = resetMatch ? resetMatch[1].trim() : "";
+      return {
+        exhausted: true,
+        message: txt.length > 200 ? txt.slice(0, 200) + "…" : txt,
+        resetsIn,
+        model: t.model,
+        agent: t.agent,
+      };
+    }
+  }
+  return null;
+}
+
+function renderQuotaBanner(t, paneKeyStr) {
+  const q = detectQuota(t);
+  if (!q) return "";
+  const runner = (S.runners || []).find((r) => r.id === t.agent);
+  const ms = (runner?.models || []).map((m) => typeof m === "string" ? { id: m, label: m } : { id: m.id, label: m.label || m.id });
+  const otherModels = ms.filter((m) => m.id !== (t.model || q.model));
+  const suggested = otherModels.find((m) => /flash/i.test(m.id) || /flash/i.test(m.label))
+    || otherModels.find((m) => /haiku/i.test(m.id) || /haiku/i.test(m.label))
+    || otherModels.find((m) => /sonnet/i.test(m.id) || /sonnet/i.test(m.label))
+    || otherModels[0];
+  
+  let actionsHtml = "";
+  if (suggested) {
+    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(suggested.id)}" data-pane="${esc(paneKeyStr || "")}">Switch to ${esc(suggested.label)} &amp; Retry</button>`;
+    if (otherModels.length > 1) {
+      actionsHtml += `<div class="quota-dropdown-wrap">
+        <select class="pick quota-model-sel" aria-label="Select alternate model">
+          ${otherModels.map((m) => `<option value="${esc(m.id)}" ${m.id === suggested.id ? "selected" : ""}>${esc(m.label)}</option>`).join("")}
+        </select>
+        <button type="button" class="btn glass quota-custom-btn" data-act="quota-retry-sel" data-task="${esc(t.id)}" data-pane="${esc(paneKeyStr || "")}">Retry</button>
+      </div>`;
+    }
+  } else {
+    actionsHtml = `<button type="button" class="btn peach quota-cta-btn" data-act="quota-retry" data-task="${esc(t.id)}" data-model="${esc(t.model || "")}" data-pane="${esc(paneKeyStr || "")}">Retry</button>`;
+  }
+
+  return `<div class="quota-alert glass" data-task-id="${esc(t.id)}">
+    <div class="quota-head">
+      <span class="quota-badge"><span class="quota-badge-dot"></span> Quota Exhausted</span>
+      ${q.resetsIn ? `<span class="quota-countdown">${icon("clock", 13)} Resets in ${esc(q.resetsIn)}</span>` : ""}
+    </div>
+    <div class="quota-msg">${fmt(q.message)}</div>
+    <div class="quota-actions">${actionsHtml}</div>
+  </div>`;
+}
+
+async function retryTask(taskId, model, paneKeyStr) {
+  try {
+    toast(`Switching to ${model || "alternate model"} & retrying…`);
+    const res = await api("/api/task/retry", { id: taskId, model });
+    if (!res || !res.id) throw new Error("Retry did not return a valid task ID");
+    
+    if (paneKeyStr || (route().pg === "agents" && orchPanes.some((x) => x.kind === "task" && x.id === taskId))) {
+      const p = orchPanes.find((x) => (paneKeyStr && paneKey(x) === paneKeyStr) || (x.kind === "task" && x.id === taskId));
+      if (p) {
+        const oldKey = paneKey(p);
+        p.id = res.id;
+        const newKey = paneKey(p);
+        rekey(oldKey, newKey);
+        orchSigs.delete(oldKey);
+        orchSigs.delete(newKey);
+        if (orchActive === oldKey) orchActive = newKey;
+        if (orchMax === oldKey) orchMax = newKey;
+        saveCanvas();
+      }
+      S = await api("/api/system");
+      agentsBody();
+      orchPaint(true);
+      toast(`Switched to ${model} & retrying in tile`);
+      return;
+    }
+    
+    toast(`Switched to ${model} & retrying`);
+    location.hash = `#/t/${encodeURIComponent(res.id)}`;
+  } catch (err) {
+    toast(`Retry failed: ${err.message}`);
+  }
+}
+
 async function orchPaint(force) {
   const canvas = $("#orch-canvas"), plane = $("#orch-plane"), hud = $("#orch-hud");
   if (!canvas || !plane) return;
@@ -1581,7 +1692,9 @@ async function orchPaint(force) {
     if (p.kind === "task") {
       const t = await api(`/api/task?id=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!t || !card.isConnected) return;
-      const sig = `${t.end}|${t.ok}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      const qInfo = detectQuota(t);
+      const qSig = qInfo ? `${qInfo.exhausted}|${qInfo.model}|${qInfo.resetsIn}` : "";
+      const sig = `${t.end}|${t.ok}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${qSig}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
       if (!force && orchSigs.get(key) === sig) return;
       orchSigs.set(key, sig);
       const folder = t.cwd ? shortCwd(t.cwd) : "";
@@ -1593,7 +1706,7 @@ async function orchPaint(force) {
           ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}
           <a class="btn glass orch-icon-btn" href="#/t/${esc(t.id)}" title="Open dedicated page">${icon("ext", 13)}</a>
           ${paneBtns}</div>`;
-      card.querySelector(".orch-needs").innerHTML = "";
+      card.querySelector(".orch-needs").innerHTML = renderQuotaBanner(t, key);
       card.querySelector(".orch-msg").placeholder = !t.end ? "Running — wait or Stop to send a follow-up…" : "Send a follow-up in this workspace… Enter sends";
       const feed = card.querySelector(".orch-feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 90;
       feed.innerHTML = renderEvents(t.events, runnerName(t.agent)) || `<p class="empty">Waiting for output…</p>`;
@@ -1718,19 +1831,22 @@ async function runPrompt() {
 let taskTimer = null, taskLast = "";
 async function taskPage(id) {
   clearInterval(taskTimer); taskLast = "";
-  main.innerHTML = `<div class="ph" id="task-head"></div><div class="feed list glass" id="feed"><p class="empty">Loading…</p></div>
+  main.innerHTML = `<div class="ph" id="task-head"></div><div id="task-needs"></div><div class="feed list glass" id="feed"><p class="empty">Loading…</p></div>
     <form class="talk glass" id="task-talk"><textarea id="task-msg" rows="2" placeholder="Send a follow-up prompt… Enter sends, Shift+Enter adds a line" aria-label="Follow-up prompt"></textarea>
       <button class="btn peach" type="submit">Continue ${icon("r", 14)}</button><small id="task-hint">Continues this task session in the same workspace.</small></form>`;
   const paint = async () => {
     if (route().pg !== "t" || route().arg !== id) return clearInterval(taskTimer);
     const t = await api(`/api/task?id=${encodeURIComponent(id)}`).catch(() => null);
     if (!t) { main.innerHTML = `<div class="ph"><h1>Task not found</h1><p>Tasks live in memory and are gone after a restart.</p></div><a class="btn glass" href="#/agents">Back to Agents</a>`; return clearInterval(taskTimer); }
-    const signature = `${t.end}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}`;
+    const qInfo = detectQuota(t);
+    const qSig = qInfo ? `${qInfo.exhausted}|${qInfo.model}|${qInfo.resetsIn}` : "";
+    const signature = `${t.end}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${qSig}`;
     if (signature === taskLast) return;
     taskLast = signature;
     $("#task-head").innerHTML = `<h1><span class="h-av">${avatar(t.agent, "agents", 30)}</span>${esc(t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : "Task")}</h1><p>${esc([taskMeta(t), t.cwd ? shortCwd(t.cwd) : "", `started ${ago(Date.parse(t.start))}`].filter(Boolean).join(" · "))}</p>
       <div class="r"><span class="live ${liveClass(t)}"></span><small style="color:var(--muted)">${taskStatus(t)}</small>${t.end ? "" : `<button class="btn glass" data-act="stop" data-id="${esc(t.id)}">Stop</button>`}
         ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}</div>`;
+    $("#task-needs").innerHTML = renderQuotaBanner(t, "");
     const feed = $("#feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
     feed.innerHTML = renderEvents(t.events, runnerName(t.agent)) || `<p class="empty">Waiting for output…</p>`;
     if (atEnd) feed.scrollTop = feed.scrollHeight;
@@ -2075,6 +2191,58 @@ function render() {
   PAGES[pg][0](arg);
 }
 
+let captureMode = "daily";
+function populateCaptureAgentOptions() {
+  const agentSel = $("#capture-agent-sel"), modelSel = $("#capture-model-sel");
+  if (!agentSel || !modelSel) return;
+  const runners = (S.runners || []).filter((r) => r.ready);
+  if (!runners.length) {
+    agentSel.innerHTML = '<option value="">No agents ready</option>';
+    modelSel.hidden = true;
+    return;
+  }
+  const cur = agentSel.value;
+  agentSel.innerHTML = runners.map((r) => `<option value="${esc(r.id)}" ${r.id === cur ? "selected" : ""}>${esc(r.name)}</option>`).join("");
+  if (!runners.some((r) => r.id === agentSel.value)) agentSel.value = runners[0].id;
+  updateCaptureModelOptions();
+  agentSel.onchange = updateCaptureModelOptions;
+}
+function updateCaptureModelOptions() {
+  const agentSel = $("#capture-agent-sel"), modelSel = $("#capture-model-sel");
+  if (!agentSel || !modelSel) return;
+  const r = (S.runners || []).find((x) => x.id === agentSel.value) || {};
+  const ms = r.models || [];
+  if (!ms.length) {
+    modelSel.hidden = true;
+    modelSel.innerHTML = "";
+  } else {
+    modelSel.hidden = false;
+    modelSel.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.label || m.id)}</option>`).join("");
+  }
+}
+function setCaptureMode(mode) {
+  captureMode = mode;
+  const isAgent = mode === "agent";
+  document.querySelectorAll(".capture-tabs button").forEach((b) => {
+    const on = b.dataset.tab === mode;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const p = $("#capture-agent-panel");
+  if (p) p.hidden = !isAgent;
+  const ta = $("#capture-text"), hint = $("#capture-hint"), btn = $("#capture-submit-btn");
+  if (isAgent) {
+    if (ta) ta.placeholder = "Topic or instructions for the agent… Enter dispatches.";
+    if (hint) hint.innerHTML = "Dispatches an agent to research and write a note in your vault.";
+    if (btn) btn.textContent = "Dispatch Agent";
+    populateCaptureAgentOptions();
+  } else {
+    if (ta) ta.placeholder = "An idea, a link, a question. Enter saves.";
+    if (hint) hint.innerHTML = `Goes to the daily note for <span id="capture-day">${esc(D?.today || "")}</span>. Your agent processes it later.`;
+    if (btn) btn.textContent = "Save";
+  }
+}
+
 const ACTIONS = {
   ...CAL_ACTIONS, ...IMG_ACTIONS,
   prev: () => move(-1), next: () => move(1), go: (el) => { idx = Number(el.dataset.i); place(); },
@@ -2341,16 +2509,58 @@ const ACTIONS = {
     [D, S] = await Promise.all([api("/api"), api("/api/system")]); render();
   },
   reload: () => { const f = $("#svcf"); f.src = f.src; },
-  capture: () => { $("#capture-day").textContent = D.today; $("#capture").showModal(); $("#capture-text").focus(); },
+  capture: () => {
+    setCaptureMode("daily");
+    $("#capture-day").textContent = D?.today || "";
+    $("#capture").showModal();
+    $("#capture-text").focus();
+  },
+  "capture-tab": (el) => setCaptureMode(el.dataset.tab),
   "capture-close": () => $("#capture").close(),
   "capture-save": async () => {
     const ta = $("#capture-text");
     const text = ta.value.trim();
     if (!text) return;
-    ta.value = ""; $("#capture").close();
-    await api("/api/capture", { text });
-    toast("Captured in the daily note");
-    D = await api("/api"); if (!route().pg) home(); topBar();
+    if (captureMode === "agent") {
+      const agent = $("#capture-agent-sel")?.value;
+      const model = $("#capture-model-sel")?.hidden ? undefined : $("#capture-model-sel")?.value;
+      ta.value = "";
+      $("#capture").close();
+      try {
+        const res = await api("/api/note/agent", { topic: text, agent, model });
+        const taskId = res?.id || res?.taskId;
+        if (taskId) {
+          toast(`<a href="#/t/${esc(taskId)}">Agent dispatched: "${esc(text)}"</a>`);
+          if (route().pg === "agents") {
+            orchPanes.push({ kind: "task", id: taskId });
+            orchActive = `task:${taskId}`;
+            saveCanvas();
+            S = await api("/api/system");
+            agentsBody();
+            orchPaint(true);
+          } else {
+            location.hash = `#/t/${encodeURIComponent(taskId)}`;
+          }
+        } else {
+          toast(`Agent dispatched: "${text}"`);
+        }
+      } catch (e) {
+        toast(`Dispatch failed: ${e.message}`);
+      }
+    } else {
+      ta.value = "";
+      $("#capture").close();
+      await api("/api/capture", { text });
+      toast("Captured in the daily note");
+      D = await api("/api");
+      if (!route().pg) home();
+      topBar();
+    }
+  },
+  "quota-retry": (el) => retryTask(el.dataset.task, el.dataset.model, el.dataset.pane),
+  "quota-retry-sel": (el) => {
+    const sel = el.parentElement?.querySelector(".quota-model-sel");
+    retryTask(el.dataset.task, sel?.value, el.dataset.pane);
   },
 };
 document.addEventListener("click", (e) => {
@@ -2404,8 +2614,8 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "h") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "pan" } }); return; }
     if (e.key === "s") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "select" } }); return; }
   }
-  if (e.key === "c") { e.preventDefault(); ACTIONS.capture(); }
-  if (e.key === "v") { e.preventDefault(); ACTIONS["ui-toggle"](); }
+  if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }
+  if (e.key === "v" || e.key === "V") { e.preventDefault(); ACTIONS["ui-toggle"](); }
   if (e.key === "/" && pg === "notes") { e.preventDefault(); $("#search").focus(); }
   if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
   if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }

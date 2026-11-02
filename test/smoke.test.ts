@@ -125,8 +125,25 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appCss).toContain("@media (max-width: 640px)");
   expect(appCss).toContain("@media (max-width: 480px)");
   expect(appCss).toContain("--safe-bottom");
+  expect(appCss).toContain(".quota-alert");
+  expect(appCss).toContain(".quota-head");
+  expect(appCss).toContain(".quota-badge");
+  expect(appCss).toContain(".quota-countdown");
+  expect(appCss).toContain(".quota-actions");
+  expect(appCss).toContain(".capture-tabs");
   expect(appJs).toContain('"capture-close"');
   expect(appJs).toContain('"capture-save"');
+  expect(appJs).toContain('function detectQuota(');
+  expect(appJs).toContain('function renderQuotaBanner(');
+  expect(appJs).toContain('function retryTask(');
+  expect(appJs).toContain('"quota-retry"');
+  expect(appJs).toContain('"quota-retry-sel"');
+  expect(appJs).toContain('function setCaptureMode(');
+  expect(appJs).toContain('function populateCaptureAgentOptions(');
+  expect(appJs).toContain('function updateCaptureModelOptions(');
+  expect(appJs).toContain('api("/api/note/agent"');
+  expect(appJs).toContain('api("/api/task/retry"');
+  expect(appJs).toContain('if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }');
   expect(appJs).toContain('e.pointerType === "touch"');
   expect(appJs).toContain("getBoundingClientRect");
   expect(appCss).toContain("touch-action: pan-y");
@@ -135,6 +152,15 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(html).toContain("viewport-fit=cover");
   expect(html).toContain('data-act="capture-close"');
   expect(html).toContain('data-act="capture-save"');
+  expect(html).toContain('id="capture"');
+  expect(html).toContain('class="seg capture-tabs" role="tablist"');
+  expect(html).toContain('data-act="capture-tab" data-tab="daily" role="tab"');
+  expect(html).toContain('data-act="capture-tab" data-tab="agent" role="tab"');
+  expect(html).toContain('id="capture-agent-panel" hidden');
+  expect(html).toContain('id="capture-agent-sel"');
+  expect(html).toContain('id="capture-model-sel"');
+  expect(html).toContain('id="capture-hint"');
+  expect(html).toContain('id="capture-submit-btn"');
 });
 
 test("agent CLI commands", () => {
@@ -150,11 +176,25 @@ async function fakeProvider(req: Request) {
   const body: any = await req.json(), path = new URL(req.url).pathname;
   seen.push({ path, beta: req.headers.get("anthropic-beta") ?? "", body });
   if (path === "/v1/chat/completions") {
+    if (body.messages?.some((m: any) => String(m.content).includes("trigger-quota"))) {
+      return new Response(JSON.stringify({ error: { message: "insufficient_quota. Resets in 15 minutes", code: "insufficient_quota" } }), { status: 429, headers: { "content-type": "application/json" } });
+    }
     const first = !body.messages.some((m: any) => m.role === "tool");
     const call = (id: string, name: string, args: unknown) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
     return Response.json({ choices: [{ message: first
       ? { role: "assistant", content: null, tool_calls: [call("a", "write_note", { path: "1 Inbox/From openai.md", content: "# From openai\n" }), call("b", "write_note", { path: "../escape.md", content: "x" })] }
       : { role: "assistant", content: "done" } }] });
+  }
+  if (path === "/v1/messages") {
+    if (body.messages?.some((m: any) => String(m.content).includes("trigger-quota"))) {
+      return new Response(JSON.stringify({
+        type: "error",
+        error: { type: "rate_limit_error", message: "rate_limit_error: Number of request tokens has exceeded your per-minute rate limit. Resets in 45s" }
+      }), {
+        status: 429,
+        headers: { "content-type": "application/json" }
+      });
+    }
   }
   const first = typeof body.messages.at(-1).content === "string";
   return Response.json({ id: "msg_1", type: "message", role: "assistant", model: body.model, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 },
@@ -442,5 +482,202 @@ test("stream-json events, cwd jailing, role presets, task continuation, and mult
   for (const id of batch.ids) expect((await finished(id)).ok).toBe(true);
 
   await post("/api/settings", { agents: init.agents });
+});
+
+test("quota error detection across CLI stream-json, raw JSON, stderr, Claude CLI, Anthropic SDK, and OpenAI", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  const quotaAgent = { id: "quota-agent", name: "Quota Agent", run: ["sh", "-c", "echo 'Individual quota reached. Resets in 2h 15m' >&2; exit 1"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" };
+  const streamQuotaAgent = { id: "stream-quota", name: "Stream Quota", run: ["sh", "-c", "echo '{\"event\":\"error\",\"error\":{\"message\":\"RESOURCE_EXHAUSTED: usage limit reached. Resets in 45m\"}}'; exit 1"] };
+  const rpcQuotaAgent = { id: "rpc-quota", name: "RPC Quota", run: ["sh", "-c", "echo '{\"error\":{\"code\":429,\"message\":\"Quota exceeded for metric. Resets at 2026-11-02T16:00:00Z\",\"status\":\"RESOURCE_EXHAUSTED\"}}'; exit 1"] };
+  const claudeCliQuotaAgent = { id: "claude-cli-quota", name: "Claude CLI Quota", run: ["sh", "-c", "echo 'Claude 429: Rate limit exceeded. Resets in 1h 30m'; exit 1"] };
+  await post("/api/settings", { agents: [...init.agents, quotaAgent, streamQuotaAgent, rpcQuotaAgent, claudeCliQuotaAgent] });
+
+  // 1. CLI stderr quota detection
+  const qTask = await finished(await run("quota-agent", "heavy work", { model: "m1", effort: "high" }));
+  expect(qTask.ok).toBe(false);
+  expect(qTask.quota?.exhausted).toBe(true);
+  expect(qTask.quota?.resetsIn).toBe("2h 15m");
+  expect(qTask.quota?.message).toContain("Individual quota reached");
+
+  // getTask returns quota metadata
+  const fetched = await (await fetch(`${BASE}/api/task?id=${qTask.id}`)).json();
+  expect(fetched.quota).toEqual(qTask.quota);
+
+  // 2. Stream-JSON event: "error" quota detection
+  const sqTask = await finished(await run("stream-quota", "stream work"));
+  expect(sqTask.ok).toBe(false);
+  expect(sqTask.quota?.exhausted).toBe(true);
+  expect(sqTask.quota?.resetsIn).toBe("45m");
+
+  // 3. Raw RPC error JSON without event field (e.g. Google Cloud / Antigravity format)
+  const rpcTask = await finished(await run("rpc-quota", "rpc work"));
+  expect(rpcTask.ok).toBe(false);
+  expect(rpcTask.quota?.exhausted).toBe(true);
+  expect(rpcTask.quota?.resetsIn).toBe("2026-11-02T16:00:00Z");
+
+  // 4. Claude CLI 429 stdout format
+  const ccTask = await finished(await run("claude-cli-quota", "cli work"));
+  expect(ccTask.ok).toBe(false);
+  expect(ccTask.quota?.exhausted).toBe(true);
+  expect(ccTask.quota?.resetsIn).toBe("1h 30m");
+
+  // 5. OpenAI API 429 quota detection
+  const apiTask = await finished(await run("fake-openai", "trigger-quota"));
+  expect(apiTask.ok).toBe(false);
+  expect(apiTask.quota?.exhausted).toBe(true);
+  expect(apiTask.quota?.resetsIn).toBe("15 minutes");
+  expect(apiTask.quota?.message).toContain("429");
+
+  // 6. Anthropic API 429 quota detection via SDK
+  const claudeApiTask = await finished(await run("fake-claude", "trigger-quota"));
+  expect(claudeApiTask.ok).toBe(false);
+  expect(claudeApiTask.quota?.exhausted).toBe(true);
+  expect(claudeApiTask.quota?.resetsIn).toBe("45s");
+  expect(claudeApiTask.quota?.message).toContain("429");
+
+  await post("/api/settings", { agents: init.agents });
+});
+
+test("task retry endpoint handles invalid input, missing models, single-model agents, nonexistent agents, task states, and session persistence", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  const multiAgent = { id: "multi-agent", name: "Multi Agent", run: ["echo", "got", "{prompt}", "{model}", "{effort}"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" };
+  const soloAgent = { id: "solo-agent", name: "Solo Agent", run: ["echo", "solo", "{prompt}", "{model}"], models: ["single"] };
+  const sessionAgent = { id: "session-agent", name: "Session Agent", run: ["echo", "sess:{session}"], open: { Log: ["true"] } };
+  const tempAgent = { id: "temp-agent", name: "Temp Agent", run: ["echo", "temp"] };
+  await post("/api/settings", { agents: [...init.agents, multiAgent, soloAgent, sessionAgent, tempAgent] });
+
+  // 1. Invalid IDs and bad JSON
+  expect((await post("/api/task/retry", { id: "non-existent" })).status).toBe(400);
+  expect((await post("/api/task/retry", {})).status).toBe(400);
+  expect((await post("/api/task/retry", { id: "" })).status).toBe(400);
+  expect((await post("/api/task/retry", { id: "   " })).status).toBe(400);
+  expect((await post("/api/task/retry", { id: 12345 })).status).toBe(400);
+  expect((await fetch(`${BASE}/api/task/retry`, { method: "POST", headers: { "content-type": "application/json" }, body: "{ invalid" })).status).toBe(400);
+
+  // 2. Retry a completed task vs a failed task
+  const completedTask = await finished(await run("multi-agent", "task completed", { model: "m1", effort: "high" }));
+  expect(completedTask.ok).toBe(true);
+  const retryCompletedRes = await post("/api/task/retry", { id: completedTask.id, model: "m2", effort: "low" });
+  expect(retryCompletedRes.status).toBe(200);
+  const retriedFromCompleted = await finished((await retryCompletedRes.json()).id);
+  expect(retriedFromCompleted.ok).toBe(true);
+  expect(retriedFromCompleted.model).toBe("m2");
+  expect(retriedFromCompleted.effort).toBe("low");
+  expect(retriedFromCompleted.prompt).toBe("task completed");
+
+  // 3. Retry without specifying model/effort reuses original model & effort
+  const retryDefaultRes = await post("/api/task/retry", { id: completedTask.id });
+  expect(retryDefaultRes.status).toBe(200);
+  const retriedWithDefaults = await finished((await retryDefaultRes.json()).id);
+  expect(retriedWithDefaults.model).toBe("m1");
+  expect(retriedWithDefaults.effort).toBe("high");
+
+  // 4. Retry with an invalid model
+  expect((await post("/api/task/retry", { id: completedTask.id, model: "unknown-model-xyz" })).status).toBe(400);
+
+  // 5. Retry a task that is still running returns 400
+  const runningTaskId = await run("sleeper");
+  await Bun.sleep(100);
+  const runningRetry = await post("/api/task/retry", { id: runningTaskId });
+  expect(runningRetry.status).toBe(400);
+  expect(await runningRetry.text()).toBe("task is still running");
+  await post("/api/task/stop", { id: runningTaskId });
+  await finished(runningTaskId);
+
+  // 6. Single-model agent edge case
+  const soloTask = await finished(await run("solo-agent", "work"));
+  expect(soloTask.model).toBe("single");
+  const soloRetryRes = await post("/api/task/retry", { id: soloTask.id });
+  expect(soloRetryRes.status).toBe(200);
+  const soloRetried = await finished((await soloRetryRes.json()).id);
+  expect(soloRetried.model).toBe("single");
+  expect((await post("/api/task/retry", { id: soloTask.id, model: "invalid-other" })).status).toBe(400);
+
+  // 7. Nonexistent agent (task created, then agent removed from configuration)
+  const tempTask = await finished(await run("temp-agent", "temp work"));
+  await post("/api/settings", { agents: init.agents }); // removes tempAgent
+  const tempRetry = await post("/api/task/retry", { id: tempTask.id });
+  expect(tempRetry.status).toBe(400);
+  expect(await tempRetry.text()).toContain("unknown agent");
+
+  // 8. Session persistence on retry
+  await post("/api/settings", { agents: [...init.agents, sessionAgent] });
+  const sessTask = await finished(await run("session-agent", "first run"));
+  expect(sessTask.session).toBeTruthy();
+  const sessRetryRes = await post("/api/task/retry", { id: sessTask.id });
+  expect(sessRetryRes.status).toBe(200);
+  const sessRetried = await finished((await sessRetryRes.json()).id);
+  expect(sessRetried.session).toBe(sessTask.session);
+
+  await post("/api/settings", { agents: init.agents });
+});
+
+test("note agent endpoint validates topic boundaries, layouts in pt and en, custom models, invalid JSON, and vault isolation", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+
+  // 1. Validation checks
+  expect((await post("/api/note/agent", { topic: "" })).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: "   \n\t " })).status).toBe(400);
+  expect((await post("/api/note/agent", {})).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: null })).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: 12345 })).status).toBe(400);
+  expect((await post("/api/note/agent", { topic: "a".repeat(2001) })).status).toBe(400);
+
+  // Bad JSON in body returns 400
+  expect((await fetch(`${BASE}/api/note/agent`, { method: "POST", headers: { "content-type": "application/json" }, body: "{ bad: json" })).status).toBe(400);
+
+  // Boundary checks: exactly 1 char and exactly 2000 chars
+  const minTaskRes = await post("/api/note/agent", { topic: "A", agent: "echo" });
+  expect(minTaskRes.status).toBe(200);
+  const minTask = await finished((await minTaskRes.json()).id);
+  expect(minTask.prompt).toContain('"A"');
+
+  const maxTaskRes = await post("/api/note/agent", { topic: "X".repeat(2000), agent: "echo" });
+  expect(maxTaskRes.status).toBe(200);
+  const maxTask = await finished((await maxTaskRes.json()).id);
+  expect(maxTask.prompt).toContain(`"${"X".repeat(2000)}"`);
+
+  // 2. Custom model and effort
+  const customModelRes = await post("/api/note/agent", { topic: "Distributed Systems", agent: "echo", model: "m2", effort: "low" });
+  expect(customModelRes.status).toBe(200);
+  const customModelTask = await finished((await customModelRes.json()).id);
+  expect(customModelTask.model).toBe("m2");
+  expect(customModelTask.effort).toBe("low");
+  expect((await post("/api/note/agent", { topic: "Distributed Systems", agent: "echo", model: "invalid-model" })).status).toBe(400);
+
+  // 3. English prompt layout (default)
+  await post("/api/settings", { vaultLang: "en" });
+  const noteEnRes = await post("/api/note/agent", { topic: "Event-Driven Architecture", agent: "echo" });
+  expect(noteEnRes.status).toBe(200);
+  const noteEnTask = await finished((await noteEnRes.json()).id);
+  expect(noteEnTask.prompt).toBe(
+    'Create a note in the vault about: "Event-Driven Architecture". Follow AGENTS.md strictly: choose the right folder (e.g. 3 Concepts/ or 4 Ideas/), use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.'
+  );
+
+  // 4. Portuguese prompt layout when vaultLang is pt
+  await post("/api/settings", { vaultLang: "pt" });
+  const notePtRes = await post("/api/note/agent", { topic: "Arquitetura Orientada a Eventos", agent: "echo" });
+  expect(notePtRes.status).toBe(200);
+  const notePtTask = await finished((await notePtRes.json()).id);
+  expect(notePtTask.prompt).toBe(
+    'Crie uma nota no vault sobre: "Arquitetura Orientada a Eventos". Siga o AGENTS.md rigorosamente: decida a pasta correta (ex: 3 Conceitos/ ou 4 Ideias/), use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.'
+  );
+
+  // 5. Jail / Security: Prompt injection attempt with shell chars, quotes, and newlines
+  const injectionTopic = 'Malicious Topic "with quotes" \n; rm -rf / ; cat /etc/passwd # \0';
+  const injectRes = await post("/api/note/agent", { topic: injectionTopic, agent: "echo" });
+  expect(injectRes.status).toBe(200);
+  const injectTask = await finished((await injectRes.json()).id);
+  expect(injectTask.prompt).toContain(injectionTopic.trim());
+
+  // 6. Jail security: Agent write_note cannot escape vault
+  const escapeRes = await post("/api/note/agent", { topic: "Escape Attempt", agent: "fake-openai" });
+  expect(escapeRes.status).toBe(200);
+  const escapeTask = await finished((await escapeRes.json()).id);
+  expect(escapeTask.ok).toBe(true);
+  expect(existsSync(`${ROOT}/escape.md`)).toBe(false);
+
+  // Restore settings
+  await post("/api/settings", { vaultLang: "en", agents: init.agents });
 });
 

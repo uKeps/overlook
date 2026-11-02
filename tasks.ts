@@ -14,8 +14,8 @@ export type Agent = {
   model?: string; models?: (string | Model)[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>;
 };
 type Model = { id: string; label?: string; efforts?: string[] };
-type Event = { t: "you" | "text" | "tool" | "result" | "error"; txt: string; name?: string; at: string };
-type Task = { id: string; agent: string; model: string; effort: string; session?: string; cwd: string; role?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void };
+export type QuotaInfo = { exhausted: boolean; resetsIn?: string; message: string };
+type Task = { id: string; agent: string; model: string; effort: string; session?: string; cwd: string; role?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void; quota?: QuotaInfo };
 
 // Without agents.json: the CLIs Overlook always knew about. A CLI shows up as runnable only when it is on the PATH.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -117,6 +117,34 @@ function resolveRun(root: string, dir: string, agentId: string, opts: RunOpts) {
   return { a, model: m?.id ?? "", effort: opts.effort || (es.includes(defaultEffort(a)) ? defaultEffort(a) : es[0] ?? ""), cwd, role };
 }
 
+const QUOTA_RE = /RESOURCE_EXHAUSTED|\b429\b|Individual quota reached|[Rr]esets in|usage limit reached|insufficient_quota|rate_limit_exceeded|rate_limit_error|quota exceeded/i;
+function checkQuota(task: Task, textOrErr: unknown) {
+  if (!textOrErr) return;
+  let text = typeof textOrErr === "string" ? textOrErr : String((textOrErr as any)?.message ?? textOrErr);
+  const status = (textOrErr as any)?.status;
+  if (status === 429 && !text.includes("429")) text = `429 ${text}`;
+  if (!QUOTA_RE.test(text)) return;
+  let resetsIn: string | undefined;
+  const mReset = text.match(/[Rr]esets (?:in|at)\s+((?:[0-9]+\s*(?:hours?|minutes?|seconds?|[dhms])\b(?:\s+and\s+|\s*,?\s*)?)+|(?=[0-9]*[dhms])[0-9dhms]+)/i);
+  if (mReset) {
+    resetsIn = mReset[1].trim();
+  } else {
+    const mIso = text.match(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\b/);
+    if (mIso) resetsIn = mIso[0];
+  }
+  if (!resetsIn && (textOrErr as any)?.headers) {
+    const h = (textOrErr as any).headers;
+    const rAt = typeof h.get === "function" ? (h.get("anthropic-ratelimit-unified-resets-at") || h.get("retry-after")) : (h["anthropic-ratelimit-unified-resets-at"] || h["retry-after"]);
+    if (rAt) resetsIn = /^\d+$/.test(rAt) ? `${rAt}s` : rAt;
+  }
+  task.quota = {
+    exhausted: true,
+    resetsIn: resetsIn ?? task.quota?.resetsIn,
+    message: clip(text.trim(), 300),
+  };
+  task.ok = false;
+}
+
 function execTask(a: Agent, task: Task, prompt: string, resumed: boolean) {
   log(task, { t: "you", txt: prompt });
   task.end = undefined; task.ok = undefined; task.stop = undefined;
@@ -124,7 +152,12 @@ function execTask(a: Agent, task: Task, prompt: string, resumed: boolean) {
   const timer = setTimeout(() => { log(task, { t: "error", txt: "timed out after 30 min" }); task.stop?.(); }, TIMEOUT);
   const work = a.run ? cli(a, task.cwd, task, prompt, resumed, ctrl) : a.api === "anthropic" ? anthropic(a, task.cwd, task, prompt, ctrl.signal) : openai(a, task.cwd, task, prompt, ctrl.signal);
   task.stop ??= () => ctrl.abort();
-  work.then((ok) => (task.ok = ok), (e) => { task.ok = false; log(task, { t: "error", txt: ctrl.signal.aborted ? "stopped" : String(e?.message ?? e) }); })
+  work.then((ok) => (task.ok = task.quota ? false : ok), (e) => {
+    task.ok = false;
+    const txt = ctrl.signal.aborted ? "stopped" : String(e?.message ?? e);
+    checkQuota(task, e);
+    log(task, { t: "error", txt });
+  })
     .finally(() => { task.end = now(); clearTimeout(timer); });
 }
 
@@ -150,8 +183,22 @@ export function continueTask(root: string, dir: string, id: string, prompt: stri
   return task;
 }
 
+export function retryTask(root: string, dir: string, id: string, opts: { model?: string; effort?: string } = {}) {
+  const task = tasks.get(id);
+  if (!task) return "task not found";
+  if (!task.end) return "task is still running";
+  return runTask(root, dir, task.agent, task.prompt, {
+    model: opts.model || task.model || undefined,
+    effort: opts.effort || task.effort || undefined,
+    cwd: task.cwd,
+    session: task.session,
+    role: task.role,
+  });
+}
+
 // ---------------------------------------------------------------- CLI agents
 function onCliLine(task: Task, l: string) {
+  checkQuota(task, l);
   if (l.startsWith("{")) {
     try {
       const j = JSON.parse(l);
@@ -172,8 +219,15 @@ function onCliLine(task: Task, l: string) {
             else log(task, { t: "text", txt: clip(s.text_delta, MESSAGE) });
           }
         } else if (j.event === "error" && j.error) {
-          log(task, { t: "error", txt: clip(String(j.error?.message ?? j.error), 400) });
+          const msg = String(j.error?.message ?? j.error);
+          checkQuota(task, msg);
+          log(task, { t: "error", txt: clip(msg, 400) });
         }
+        return;
+      } else if (j?.error) {
+        const msg = String(j.error?.message ?? (typeof j.error === "string" ? j.error : JSON.stringify(j.error)));
+        checkQuota(task, msg);
+        log(task, { t: "error", txt: clip(msg, 400) });
         return;
       }
     } catch {}
@@ -198,11 +252,11 @@ async function cli(a: Agent, cwd: string, task: Task, prompt: string, resumed: b
   task.stop = () => { ctrl.abort(); p.kill(); };
   await Promise.all([
     lines(p.stdout, (l) => onCliLine(task, l)),
-    lines(p.stderr, (l) => log(task, { t: "result", txt: clip(l, 400) })),
+    lines(p.stderr, (l) => { checkQuota(task, l); log(task, { t: task.quota ? "error" : "result", txt: clip(l, 400) }); }),
   ]);
   const code = await p.exited;
   if (ctrl.signal.aborted) throw new Error("stopped");
-  return code === 0;
+  return code === 0 && !task.quota;
 }
 // ---------------------------------------------------------------- Scheduled tasks
 // schedule.json is personal (not in git): agent tasks that run at a local date and time, once or on repeat.
@@ -373,7 +427,7 @@ function system(root: string, role?: string) {
 async function anthropic(a: Agent, root: string, task: Task, prompt: string, signal: AbortSignal) {
   // Loaded on first use: the rest of Overlook runs without `bun install`.
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: process.env[a.key!], ...(a.url ? { baseURL: a.url } : {}) });
+  const client = new Anthropic({ apiKey: process.env[a.key!], ...(a.url ? { baseURL: a.url } : {}), maxRetries: 0 });
   const model = task.model;
   const fallback = FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {};
   const tools = TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema as any, strict: true }));
