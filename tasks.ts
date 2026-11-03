@@ -461,6 +461,10 @@ export function buildTerminalArgs(termId: string, cwd: string, cmdArgs: string[]
 }
 
 export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: string): { ok: boolean; terminal: string; shell?: string; cwd: string; fallback?: boolean } | string {
+  if (shellId && !bin(shellId)) {
+    return `shell "${shellId}" is not installed`;
+  }
+
   const terms = detectTerminals();
   if (!terms.length) return "no terminal emulator found: install ghostty, kitty or xdg-terminal-exec";
 
@@ -474,14 +478,12 @@ export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: str
 
   let chosenTerm = termId ? terms.find((t) => t.id === termId) : null;
   if (!chosenTerm) {
+    if (termId && !bin(termId)) return `terminal "${termId}" is not installed`;
     const envPref = process.env.DEFAULT_TERMINAL;
     chosenTerm = terms.find((t) => t.id === envPref) || terms.find((t) => t.id === "ghostty") || terms[0];
   }
 
   let shellCmd = shellId ? (bin(shellId) ?? shellId) : null;
-  if (shellId && !bin(shellId)) {
-    return `shell "${shellId}" is not installed`;
-  }
 
   const cmdArgs = shellCmd ? [shellCmd] : [];
   try {
