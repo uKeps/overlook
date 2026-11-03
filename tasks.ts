@@ -1,7 +1,7 @@
 // Agents Overlook can put to work on the vault. CLI agents (claude, agy, codex...) are spawned in the vault folder;
 // API agents (Anthropic, or any OpenAI-compatible endpoint) work through four tools jailed to the vault's notes.
 // Tasks persist to cache/tasks.json (last 50 tasks). On startup, unfinished tasks are marked ended.
-import { resolve, dirname, relative, isAbsolute, sep, join } from "node:path";
+import { resolve, dirname, relative, isAbsolute, sep, join, basename } from "node:path";
 import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 
@@ -374,8 +374,284 @@ export function startScheduler(root: string, dir: string) {
   setInterval(() => tick(root, dir), 30_000);
 }
 
-// ---------------------------------------------------------------- Open in…
-const terminal = () => { const x = bin("xdg-terminal-exec"); return x ? [x] : process.env.TERMINAL ? [process.env.TERMINAL, "-e"] : null; };
+// ---------------------------------------------------------------- Open in… & Terminal Launcher
+export type TerminalInfo = { id: string; name: string; path: string; isDefault?: boolean };
+export type ShellInfo = { id: string; name: string; path: string; isDefault?: boolean };
+
+// Detect supported terminal emulators in heuristic order (Ghostty, Kitty, etc.)
+export function detectTerminals(): TerminalInfo[] {
+  const candidates = [
+    { id: "ghostty", name: "Ghostty" },
+    { id: "kitty", name: "Kitty" },
+    { id: "alacritty", name: "Alacritty" },
+    { id: "wezterm", name: "WezTerm" },
+    { id: "foot", name: "Foot" },
+    { id: "gnome-terminal", name: "GNOME Terminal" },
+    { id: "konsole", name: "Konsole" },
+    { id: "xfce4-terminal", name: "XFCE Terminal" },
+    { id: "xterm", name: "XTerm" },
+    { id: "xdg-terminal-exec", name: "System Default (xdg-terminal-exec)" },
+  ];
+  const list: TerminalInfo[] = [];
+  for (const c of candidates) {
+    const p = bin(c.id);
+    if (p) list.push({ id: c.id, name: c.name, path: p });
+  }
+  return list;
+}
+
+// Detect installed shells (/etc/shells and common PATH binaries)
+export function detectShells(): ShellInfo[] {
+  const common = [
+    { id: "bash", name: "Bash" },
+    { id: "zsh", name: "Zsh" },
+    { id: "fish", name: "Fish" },
+    { id: "pwsh", name: "PowerShell (pwsh)" },
+    { id: "powershell", name: "PowerShell" },
+    { id: "sh", name: "POSIX Shell (sh)" },
+  ];
+  const found = new Map<string, ShellInfo>();
+  try {
+    const lines = readFileSync("/etc/shells", "utf8").split("\n");
+    for (const l of lines) {
+      const s = l.trim();
+      if (!s || s.startsWith("#")) continue;
+      const bName = s.split("/").pop() || "";
+      if (["git-shell", "rbash", "systemd-home-fallback-shell", "nologin", "false", "sync"].includes(bName)) continue;
+      const match = common.find((c) => c.id === bName);
+      if (existsSync(s)) {
+        found.set(bName, { id: bName, name: match?.name || bName, path: s });
+      }
+    }
+  } catch {}
+  for (const c of common) {
+    if (!found.has(c.id)) {
+      const p = bin(c.id);
+      if (p) found.set(c.id, { id: c.id, name: c.name, path: p });
+    }
+  }
+  const priority = ["bash", "zsh", "fish", "pwsh", "powershell", "sh"];
+  return [...found.values()].sort((a, b) => {
+    const ia = priority.indexOf(a.id), ib = priority.indexOf(b.id);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+}
+
+export function buildTerminalArgs(termId: string, cwd: string, cmdArgs: string[] = []): string[] {
+  switch (termId) {
+    case "ghostty":
+      return ["ghostty", `--working-directory=${cwd}`, ...(cmdArgs.length ? ["-e", ...cmdArgs] : [])];
+    case "kitty":
+      return ["kitty", `--directory=${cwd}`, ...cmdArgs];
+    case "xdg-terminal-exec":
+      return ["xdg-terminal-exec", `--dir=${cwd}`, ...(cmdArgs.length ? ["--", ...cmdArgs] : [])];
+    case "alacritty":
+      return ["alacritty", "--working-directory", cwd, ...(cmdArgs.length ? ["-e", ...cmdArgs] : [])];
+    case "wezterm":
+      return ["wezterm", "start", "--cwd", cwd, ...(cmdArgs.length ? ["--", ...cmdArgs] : [])];
+    case "foot":
+      return ["foot", "-D", cwd, ...cmdArgs];
+    case "gnome-terminal":
+      return ["gnome-terminal", `--working-directory=${cwd}`, ...(cmdArgs.length ? ["--", ...cmdArgs] : [])];
+    case "konsole":
+      return ["konsole", "--workdir", cwd, ...(cmdArgs.length ? ["-e", ...cmdArgs] : [])];
+    default:
+      return [bin(termId) ?? termId, ...(cmdArgs.length ? ["-e", ...cmdArgs] : [])];
+  }
+}
+
+export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: string): { ok: boolean; terminal: string; shell?: string; cwd: string; fallback?: boolean } | string {
+  if (shellId && !bin(shellId)) {
+    return `shell "${shellId}" is not installed`;
+  }
+
+  const terms = detectTerminals();
+  if (!terms.length) return "no terminal emulator found: install ghostty, kitty or xdg-terminal-exec";
+
+  let cwd = targetCwd ? targetCwd.replace(/^~/, homedir()) : import.meta.dir;
+  try {
+    cwd = resolve(cwd);
+    if (!existsSync(cwd) || !statSync(cwd).isDirectory()) cwd = import.meta.dir;
+  } catch {
+    cwd = import.meta.dir;
+  }
+
+  let chosenTerm = termId ? terms.find((t) => t.id === termId) : null;
+  if (!chosenTerm) {
+    if (termId && !bin(termId)) return `terminal "${termId}" is not installed`;
+    const envPref = process.env.DEFAULT_TERMINAL;
+    chosenTerm = terms.find((t) => t.id === envPref) || terms.find((t) => t.id === "ghostty") || terms[0];
+  }
+
+  let shellCmd = shellId ? (bin(shellId) ?? shellId) : null;
+
+  const cmdArgs = shellCmd ? [shellCmd] : [];
+  try {
+    const args = buildTerminalArgs(chosenTerm.id, cwd, cmdArgs);
+    Bun.spawn(args, { cwd, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+    return { ok: true, terminal: chosenTerm.id, shell: shellId, cwd, fallback: false };
+  } catch (err: any) {
+    // Attempt fallback (e.g. ghostty fails -> fallback to kitty)
+    const fallbackId = process.env.TERMINAL_FALLBACK || (chosenTerm.id === "ghostty" ? "kitty" : "ghostty");
+    const fallbackTerm = terms.find((t) => t.id === fallbackId && t.id !== chosenTerm!.id);
+    if (fallbackTerm) {
+      try {
+        const fbArgs = buildTerminalArgs(fallbackTerm.id, cwd, cmdArgs);
+        Bun.spawn(fbArgs, { cwd, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+        return { ok: true, terminal: fallbackTerm.id, shell: shellId, cwd, fallback: true };
+      } catch (fbErr: any) {
+        return `failed to launch ${chosenTerm.id} and fallback ${fallbackTerm.id}: ${fbErr.message}`;
+      }
+    }
+    return `failed to launch ${chosenTerm.id}: ${err.message}`;
+  }
+}
+
+export type TermSession = {
+  id: string;
+  shell: string;
+  cwd: string;
+  history: string[];
+  activeChild?: any;
+  createdAt: number;
+};
+
+const termSessions = new Map<string, TermSession>();
+
+export function createTermSession(shell?: string, cwd?: string, customId?: string): TermSession {
+  const id = customId || `term_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const shells = detectShells();
+  const defShell = process.env.DEFAULT_SHELL || (process.env.SHELL ? basename(process.env.SHELL) : "bash");
+  const chosenShell = shell && shells.find((s) => s.id === shell || s.path === shell)
+    ? (shells.find((s) => s.id === shell || s.path === shell)!.id)
+    : defShell;
+
+  let resolvedCwd = import.meta.dir;
+  if (cwd) {
+    try {
+      const p = resolve(cwd.replace(/^~/, homedir()));
+      if (existsSync(p) && statSync(p).isDirectory()) resolvedCwd = p;
+    } catch {}
+  }
+
+  const s: TermSession = {
+    id,
+    shell: chosenShell,
+    cwd: resolvedCwd,
+    history: [],
+    createdAt: Date.now(),
+  };
+  termSessions.set(id, s);
+  return s;
+}
+
+export function listTermSessions() {
+  return [...termSessions.values()].map((s) => ({
+    id: s.id,
+    shell: s.shell,
+    cwd: s.cwd,
+    createdAt: s.createdAt,
+    hasActiveChild: !!s.activeChild,
+    historyCount: s.history.length,
+  }));
+}
+
+export function getTermSession(id: string) {
+  return termSessions.get(id);
+}
+
+export function closeTermSession(id: string) {
+  const s = termSessions.get(id);
+  if (!s) return false;
+  if (s.activeChild) {
+    try { s.activeChild.kill(); } catch {}
+  }
+  return termSessions.delete(id);
+}
+
+export function interruptTermSession(id: string) {
+  const s = termSessions.get(id);
+  if (!s || !s.activeChild) return false;
+  try {
+    s.activeChild.kill(2); // SIGINT
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function runInTermSession(id: string, cmd: string, onChunk?: (chunk: string) => void): Promise<{ ok: boolean; output: string; code: number; newCwd: string }> {
+  let s = termSessions.get(id);
+  if (!s) {
+    s = createTermSession(undefined, undefined, id);
+  }
+  const trimmed = cmd.trim();
+  if (!trimmed) {
+    return { ok: true, output: "", code: 0, newCwd: s.cwd };
+  }
+  s.history.push(cmd);
+  if (s.history.length > 500) s.history.shift();
+
+  if (trimmed === "clear") {
+    return { ok: true, output: "\x1b[2J\x1b[H", code: 0, newCwd: s.cwd };
+  }
+
+  const shellBin = bin(s.shell) ?? (s.shell.startsWith("/") ? s.shell : "/bin/bash");
+  const script = `${cmd}\n__OVERLOOK_CODE=$?\necho "\n__OVERLOOK_CWD__=$(pwd)"\nexit $__OVERLOOK_CODE`;
+
+  try {
+    const p = Bun.spawn([shellBin, "-c", script], {
+      cwd: s.cwd,
+      env: { ...process.env, TERM: "xterm-256color", PAGER: "cat" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    s.activeChild = p;
+
+    let fullOut = "", fullErr = "";
+    const dec = new TextDecoder();
+
+    const readStream = async (stream: ReadableStream<Uint8Array>, isErr = false) => {
+      for await (const chunk of stream) {
+        const text = dec.decode(chunk, { stream: true });
+        if (isErr) fullErr += text;
+        else fullOut += text;
+        if (onChunk && !text.includes("__OVERLOOK_CWD__=")) {
+          onChunk(text);
+        }
+      }
+    };
+
+    await Promise.all([readStream(p.stdout), readStream(p.stderr, true)]);
+    const code = await p.exited;
+    s.activeChild = undefined;
+
+    const cwdMatch = fullOut.match(/\n__OVERLOOK_CWD__=(.+)\n?$/);
+    const cleanOut = cwdMatch ? fullOut.slice(0, cwdMatch.index) : fullOut;
+    if (cwdMatch && cwdMatch[1].trim()) {
+      const nextDir = cwdMatch[1].trim();
+      if (existsSync(nextDir)) s.cwd = nextDir;
+    }
+
+    const combinedOutput = cleanOut + (fullErr ? (cleanOut && !cleanOut.endsWith("\n") ? "\n" : "") + fullErr : "");
+    return {
+      ok: code === 0,
+      output: combinedOutput,
+      code,
+      newCwd: s.cwd,
+    };
+  } catch (err: any) {
+    s.activeChild = undefined;
+    return {
+      ok: false,
+      output: `Error executing command: ${err.message}`,
+      code: 1,
+      newCwd: s.cwd,
+    };
+  }
+}
+
+
 export const openers = (a: Agent) => Object.entries(a.open ?? {}).map(([label, cmd]) => ({ label, session: cmd.some((x) => x.includes("{session}")) }));
 // Launches detached; the caller has already validated session and cwd.
 export function openIn(a: Agent, label: string, cwd: string, session = "") {
@@ -385,16 +661,32 @@ export function openIn(a: Agent, label: string, cwd: string, session = "") {
   const [head, ...rest] = cmd.map((x) => x.replaceAll("{session}", session).replaceAll("{cwd}", cwd));
   let args: string[];
   if (head === "{terminal}") {
-    const t = terminal();
-    if (!t) return "no terminal found: install xdg-terminal-exec or set TERMINAL in .env";
-    // The terminal may open in its own default folder, and a resumed session belongs to its project folder.
-    args = [...t, "sh", "-c", 'cd "$0" && exec "$@"', cwd, bin(rest[0]) ?? rest[0], ...rest.slice(1)];
+    const terms = detectTerminals();
+    const envPref = process.env.DEFAULT_TERMINAL;
+    const term = terms.find((t) => t.id === envPref) || terms.find((t) => t.id === "ghostty") || terms[0];
+    if (!term) return "no terminal found: install ghostty, kitty, xdg-terminal-exec or set DEFAULT_TERMINAL in .env";
+    const targetBin = bin(rest[0]) ?? rest[0];
+    const targetArgs = [targetBin, ...rest.slice(1)];
+    args = buildTerminalArgs(term.id, cwd, targetArgs);
+    try {
+      Bun.spawn(args, { cwd, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+      return true;
+    } catch (err: any) {
+      const fallbackId = process.env.TERMINAL_FALLBACK || (term.id === "ghostty" ? "kitty" : "ghostty");
+      const fallbackTerm = terms.find((t) => t.id === fallbackId && t.id !== term.id);
+      if (fallbackTerm) {
+        const fbArgs = buildTerminalArgs(fallbackTerm.id, cwd, targetArgs);
+        Bun.spawn(fbArgs, { cwd, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+        return true;
+      }
+      return `failed to launch terminal: ${err.message}`;
+    }
   } else {
     if (!bin(head)) return `${head} is not installed`;
     args = [bin(head)!, ...rest];
+    Bun.spawn(args, { cwd, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+    return true;
   }
-  Bun.spawn(args, { cwd, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
-  return true;
 }
 
 async function lines(stream: ReadableStream<Uint8Array>, on: (l: string) => void) {

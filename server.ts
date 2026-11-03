@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, createTermSession, listTermSessions, getTermSession, closeTermSession, interruptTermSession, runInTermSession } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -453,7 +453,16 @@ const validService = (s: any) =>
 
 function settings() {
   const img = imagesState();
-  return { vaultDir: ROOT, vaultLang, port: cfgPort, folder: img.folder, board: img.board, agents: loadAgents(import.meta.dir), services: serviceList() };
+  const terminals = detectTerminals();
+  const shells = detectShells();
+  const defaultTerm = process.env.DEFAULT_TERMINAL || terminals.find((t) => t.id === "ghostty")?.id || terminals[0]?.id || "";
+  const fallbackTerm = process.env.TERMINAL_FALLBACK || (defaultTerm === "ghostty" ? "kitty" : "ghostty");
+  const defaultShell = process.env.DEFAULT_SHELL || (process.env.SHELL ? basename(process.env.SHELL) : "bash");
+  return {
+    vaultDir: ROOT, vaultLang, port: cfgPort, folder: img.folder, board: img.board,
+    agents: loadAgents(import.meta.dir), services: serviceList(),
+    terminals, shells, defaultTerminal: defaultTerm, fallbackTerminal: fallbackTerm, defaultShell: defaultShell,
+  };
 }
 function saveSettings(b: any) {
   if (!b || typeof b !== "object" || Array.isArray(b)) return "invalid settings";
@@ -481,6 +490,9 @@ function saveSettings(b: any) {
   if (b.vaultDir !== undefined) { ROOT = nextRoot; VAULT = basename(ROOT); env.VAULT_DIR = ROOT; }
   if (b.vaultLang !== undefined) { vaultLang = b.vaultLang; L = LAYOUTS[vaultLang]; ROUTINES = L.routines; env.VAULT_LANG = vaultLang; }
   if (b.port !== undefined) { cfgPort = nextPort; env.PORT = String(cfgPort); }
+  if (b.defaultTerminal !== undefined) { process.env.DEFAULT_TERMINAL = String(b.defaultTerminal); env.DEFAULT_TERMINAL = String(b.defaultTerminal); }
+  if (b.fallbackTerminal !== undefined) { process.env.TERMINAL_FALLBACK = String(b.fallbackTerminal); env.TERMINAL_FALLBACK = String(b.fallbackTerminal); }
+  if (b.defaultShell !== undefined) { process.env.DEFAULT_SHELL = String(b.defaultShell); env.DEFAULT_SHELL = String(b.defaultShell); }
   if (Object.keys(env).length) saveEnv(env);
   if (b.agents !== undefined) writeFileSync(`${import.meta.dir}/agents.json`, JSON.stringify(b.agents, null, 2) + "\n");
   if (b.services !== undefined) writeFileSync(`${import.meta.dir}/services.json`, JSON.stringify(b.services, null, 2) + "\n");
@@ -577,6 +589,28 @@ async function handle(req: Request, port: number) {
     if (p === "/api/voice") return !process.env.TRANSCRIBE ? new Response("set TRANSCRIBE in .env", { status: 400 }) : typeof b.audio === "string" && b.audio ? (voice(b, process.env.TRANSCRIBE), json({ ok: true })) : new Response("missing audio", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
+    if (p === "/api/terminal/open") {
+      const r = spawnTerminal(str(b.terminal), str(b.shell), str(b.cwd) || ROOT);
+      return typeof r === "string" ? new Response(r, { status: 400 }) : json(r);
+    }
+    if (p === "/api/terminal/session/create") {
+      const s = createTermSession(str(b.shell), str(b.cwd), str(b.id));
+      return json({ ok: true, session: s });
+    }
+    if (p === "/api/terminal/session/run") {
+      if (typeof b.id !== "string" || !b.id.trim()) return new Response("missing id", { status: 400 });
+      if (typeof b.cmd !== "string") return new Response("missing cmd", { status: 400 });
+      const r = await runInTermSession(b.id.trim(), b.cmd);
+      return json(r);
+    }
+    if (p === "/api/terminal/session/kill") {
+      if (typeof b.id !== "string") return new Response("missing id", { status: 400 });
+      return json({ ok: interruptTermSession(b.id) });
+    }
+    if (p === "/api/terminal/session/close") {
+      if (typeof b.id !== "string") return new Response("missing id", { status: 400 });
+      return json({ ok: closeTermSession(b.id) });
+    }
     if (p === "/api/calendar" || p === "/api/calendar/delete") {
       const e = calItem(b);
       if (typeof e === "string") return new Response(e, { status: 400 });
@@ -595,6 +629,21 @@ async function handle(req: Request, port: number) {
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/images") return json(imagesState());
   if (p === "/api/settings") return json(settings());
+  if (p === "/api/terminal/sessions") return json({ sessions: listTermSessions() });
+  if (p === "/api/terminals") {
+    const terminals = detectTerminals();
+    const shells = detectShells();
+    const defaultTerm = process.env.DEFAULT_TERMINAL || terminals.find((t) => t.id === "ghostty")?.id || terminals[0]?.id || "";
+    const fallbackTerm = process.env.TERMINAL_FALLBACK || (defaultTerm === "ghostty" ? "kitty" : "ghostty");
+    const defaultShell = process.env.DEFAULT_SHELL || (process.env.SHELL ? basename(process.env.SHELL) : "bash");
+    return json({
+      terminals: terminals.map((t) => ({ ...t, isDefault: t.id === defaultTerm })),
+      shells: shells.map((s) => ({ ...s, isDefault: s.id === defaultShell })),
+      defaultTerminal: defaultTerm,
+      fallbackTerminal: fallbackTerm,
+      defaultShell: defaultShell,
+    });
+  }
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
@@ -615,7 +664,47 @@ async function handle(req: Request, port: number) {
   return new Response("404", { status: 404 });
 }
 
-Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: (req) => handle(req, PORT) });
+Bun.serve({
+  hostname: "127.0.0.1", port: PORT,
+  fetch(req, server) {
+    const url = new URL(req.url);
+    if (url.pathname === "/ws/terminal") {
+      const id = url.searchParams.get("id");
+      if (id && server.upgrade(req, { data: { id, shell: url.searchParams.get("shell"), cwd: url.searchParams.get("cwd") } })) {
+        return undefined;
+      }
+    }
+    return handle(req, PORT);
+  },
+  websocket: {
+    open(ws: any) {
+      const id = ws.data?.id;
+      if (!id) return;
+      let s = getTermSession(id);
+      if (!s) s = createTermSession(ws.data?.shell, ws.data?.cwd, id);
+      ws.send(JSON.stringify({ type: "init", session: { id: s.id, shell: s.shell, cwd: s.cwd } }));
+    },
+    async message(ws: any, message: string | Buffer) {
+      try {
+        const msg = JSON.parse(String(message));
+        const id = ws.data?.id;
+        if (!id) return;
+        if (msg.type === "run" && typeof msg.cmd === "string") {
+          const r = await runInTermSession(id, msg.cmd, (chunk) => {
+            try { ws.send(JSON.stringify({ type: "chunk", data: chunk })); } catch {}
+          });
+          ws.send(JSON.stringify({ type: "exit", code: r.code, output: r.output, newCwd: r.newCwd }));
+        } else if (msg.type === "kill") {
+          interruptTermSession(id);
+          ws.send(JSON.stringify({ type: "killed" }));
+        }
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: "error", error: e.message }));
+      }
+    },
+    close() {}
+  }
+});
 console.log(`Overlook on http://127.0.0.1:${PORT}`);
 
 // A service that forbids iframes (X-Frame-Options DENY) gets a proxy that only allows Overlook as the frame.

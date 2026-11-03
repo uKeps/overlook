@@ -44,6 +44,7 @@ const I = {
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  terminal: '<polyline points="4 17 10 12 4 7"/><path d="M12 19h8"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
@@ -633,10 +634,13 @@ const avatar = (key, ic = "agents", size = 20) => {
 const taskStatus = (t) => (!t.end ? "running" : t.ok ? "finished" : "failed");
 const liveClass = (t) => (!t.end ? "run" : t.ok ? "" : "off");
 const shortCwd = (c) => String(c || "").replace(/^\/home\/[^/]+/, "~");
+const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
+const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
+const cwdLabel = (c) => (c ? shortCwd(c) : `Vault (${D?.vault || "vault"})`);
 
 let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "tile", orchDir = "cols", orchRatio = 50,
   orchPanX = 24, orchPanY = 20, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
-  orchRail = true, orchDeckOpen = false, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
+  orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
 let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdData = null, cwdPaneKey = "";
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
@@ -649,14 +653,389 @@ function saveDismissedSessions() {
   try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions])); } catch {}
 }
 try {
+  orchRailMode = localStorage.getItem("overlook.rail-mode") || "float";
+} catch {}
+function saveRailMode() {
+  try { localStorage.setItem("overlook.rail-mode", orchRailMode); } catch {}
+}
+try {
   const c = JSON.parse(localStorage.getItem(CANVAS_KEY) || "null");
-  if (c) { orchPanes = c.panes || []; orchLinks = c.links || []; orchMode = c.mode || "tile"; orchPanX = c.panX ?? 24; orchPanY = c.panY ?? 20; orchZoom = c.zoom || 1; orchSeq = c.seq || 1; }
+  if (c) {
+    orchPanes = c.panes || [];
+    orchLinks = c.links || [];
+    orchMode = c.mode || "tile";
+    orchPanX = c.panX ?? 24;
+    orchPanY = c.panY ?? 20;
+    orchZoom = c.zoom || 1;
+    orchSeq = c.seq || 1;
+    if (c.railMode) orchRailMode = c.railMode;
+  }
 } catch {}
 function saveCanvas() {
-  try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq })); } catch {}
+  try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode })); } catch {}
 }
-const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
-const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
+function ansiToHtml(str) {
+  if (!str) return "";
+  const colors = {
+    "30": "#5c6370", "31": "#e06c75", "32": "#98c379", "33": "#e5c07b",
+    "34": "#61afef", "35": "#c678dd", "36": "#56b6c2", "37": "#abb2bf",
+    "90": "#5c6370", "91": "#e06c75", "92": "#98c379", "93": "#e5c07b",
+    "94": "#61afef", "95": "#c678dd", "96": "#56b6c2", "97": "#ffffff"
+  };
+  const escaped = str.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] || c);
+  let openSpans = 0;
+  const formatted = escaped
+    .replace(/\u001b\[\?[\d;]*[a-zA-Z]/g, "")
+    .replace(/\u001b\][\s\S]*?\u0007/g, "")
+    .replace(/\u001b\[(\d+(?:;\d+)*)?m/g, (_, code) => {
+      if (!code || code === "0") {
+        const closing = "</span>".repeat(openSpans);
+        openSpans = 0;
+        return closing;
+      }
+      const parts = code.split(";");
+      const c = colors[parts.find((p) => colors[p])];
+      const bold = parts.includes("1") ? "font-weight:600;" : "";
+      if (c || bold) {
+        openSpans++;
+        return `<span style="${bold}${c ? `color:${c};` : ""}">`;
+      }
+      return "";
+    });
+  return formatted + "</span>".repeat(openSpans);
+}
+
+const termPanesState = new Map();
+
+function clearTerminal(id) {
+  const state = termPanesState.get(id);
+  const buf = $(`#term-view-${id} .ghostty-buffer`);
+  if (buf) buf.innerHTML = "";
+  if (state) state.lines = [];
+}
+
+function interruptTerminal(id) {
+  const state = termPanesState.get(id);
+  if (state?.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: "kill" }));
+  } else {
+    api("/api/terminal/session/kill", { id }).catch(() => {});
+  }
+  const buf = $(`#term-view-${id} .ghostty-buffer`);
+  if (buf) {
+    const div = document.createElement("div");
+    div.className = "orch-term-line system";
+    div.textContent = "^C";
+    buf.appendChild(div);
+  }
+}
+
+function mountTerminalPane(card, p) {
+  const feed = card.querySelector(".orch-feed");
+  if (!feed) return;
+  const viewId = `term-view-${p.id}`;
+  let view = feed.querySelector(`#${viewId}`);
+  const emu = (p.emulator || prefTerm || "ghostty").toLowerCase();
+  const isKitty = emu === "kitty";
+  const emuName = isKitty ? "Kitty" : "Ghostty";
+  card.classList.toggle("theme-kitty", isKitty);
+
+  if (!view) {
+    feed.innerHTML = `
+      <div class="ghostty-screen orch-term-view" id="${viewId}" title="Click anywhere to type">
+        <div class="ghostty-buffer orch-term-output"></div>
+        <div class="ghostty-active-line orch-term-input-bar">
+          <span class="ghostty-prompt"></span>
+          <div class="ghostty-cli-wrap">
+            <span class="ghostty-cli-text"></span><span class="ghostty-cursor">█</span>
+            <input type="text" class="ghostty-cli-input" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+      </div>`;
+    view = feed.querySelector(`#${viewId}`);
+  }
+
+  const buffer = view.querySelector(".ghostty-buffer");
+  const promptEl = view.querySelector(".ghostty-prompt");
+  const cliText = view.querySelector(".ghostty-cli-text");
+  const input = view.querySelector(".ghostty-cli-input");
+
+  const getPromptHtml = (cwd) => {
+    const pCwd = cwdLabel(cwd);
+    if (isKitty) {
+      return `<span class="p-user">keps@cachyos</span>:<span class="p-path">${esc(pCwd)}</span><span class="p-sym">$</span>`;
+    }
+    return `<span class="p-user">ghostty</span> <span class="p-sym">❯</span> <span class="p-path">${esc(pCwd)}</span> <span class="p-sym">❯</span>`;
+  };
+
+  promptEl.innerHTML = getPromptHtml(p.cwd);
+
+  const focusInput = () => {
+    if (!input) return;
+    input.disabled = false;
+    input.focus();
+  };
+
+  input.oninput = () => {
+    cliText.textContent = input.value;
+    view.scrollTop = view.scrollHeight;
+  };
+
+  view.onclick = () => focusInput();
+  card.onclick = (e) => {
+    if (!e.target.closest("button, a, select, textarea, .dot, .orch-resize, .orch-port")) focusInput();
+  };
+
+  if (!card.dataset.termBound) {
+    card.dataset.termBound = "1";
+    window.addEventListener("keydown", (e) => {
+      if (orchActive !== paneKey(p)) return;
+      if (orchSelected.size > 1 && e.key === "Delete") return;
+      if (e.key === "Delete" && orchSelected.size > 0) return;
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Enter")) {
+        focusInput();
+      }
+    });
+  }
+
+  if (!termPanesState.has(p.id)) {
+    termPanesState.set(p.id, {
+      history: [],
+      historyIdx: 0,
+      lines: [`<div class="orch-term-line system">${esc(emuName)} Terminal (${esc(p.shell || "bash")}) · 📁 ${esc(p.cwd || orchCwd || "~")}</div><div class="orch-term-line system">Click anywhere to type · Press Enter to run · ↑/↓ history</div>`],
+      ws: null,
+      running: false,
+    });
+  }
+
+  const state = termPanesState.get(p.id);
+  buffer.innerHTML = state.lines.join("");
+  view.scrollTop = view.scrollHeight;
+  setTimeout(focusInput, 30);
+
+  if (!state.ws || state.ws.readyState > 1) {
+    try {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${proto}//${location.host}/ws/terminal?id=${encodeURIComponent(p.id)}&shell=${encodeURIComponent(p.shell || "")}&cwd=${encodeURIComponent(p.cwd || "")}`;
+      state.ws = new WebSocket(wsUrl);
+      state.ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "chunk") {
+            const lastLine = buffer.querySelector(".orch-term-line.active-chunk");
+            if (lastLine) {
+              lastLine.innerHTML += ansiToHtml(msg.data);
+            } else {
+              const div = document.createElement("div");
+              div.className = "orch-term-line out active-chunk";
+              div.innerHTML = ansiToHtml(msg.data);
+              buffer.appendChild(div);
+            }
+            view.scrollTop = view.scrollHeight;
+          } else if (msg.type === "exit") {
+            state.running = false;
+            const activeChunk = buffer.querySelector(".active-chunk");
+            if (activeChunk) activeChunk.classList.remove("active-chunk");
+            if (msg.output && !activeChunk) {
+              const div = document.createElement("div");
+              div.className = msg.code === 0 ? "orch-term-line out" : "orch-term-line err";
+              div.innerHTML = ansiToHtml(msg.output);
+              buffer.appendChild(div);
+            }
+            if (msg.newCwd && msg.newCwd !== p.cwd) {
+              p.cwd = msg.newCwd;
+              promptEl.innerHTML = getPromptHtml(p.cwd);
+              const tabTitle = card.querySelector(".ghostty-tab-title");
+              if (tabTitle) tabTitle.textContent = shortCwd(p.cwd);
+              saveCanvas();
+            }
+            state.lines = [buffer.innerHTML];
+            view.scrollTop = view.scrollHeight;
+            focusInput();
+          }
+        } catch {}
+      };
+      state.ws.onerror = () => {};
+    } catch {}
+  }
+
+  input.onkeydown = async (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const cmd = input.value;
+      input.value = "";
+      cliText.textContent = "";
+
+      if (!cmd.trim()) {
+        const line = document.createElement("div");
+        line.className = "orch-term-line cmd";
+        line.innerHTML = `${getPromptHtml(p.cwd)} <span></span>`;
+        buffer.appendChild(line);
+        view.scrollTop = view.scrollHeight;
+        return;
+      }
+
+      state.history.push(cmd);
+      state.historyIdx = state.history.length;
+
+      if (cmd.trim() === "clear") {
+        buffer.innerHTML = "";
+        state.lines = [];
+        focusInput();
+        return;
+      }
+
+      const cmdLine = document.createElement("div");
+      cmdLine.className = "orch-term-line cmd";
+      cmdLine.innerHTML = `${getPromptHtml(p.cwd)} <span class="cmd-txt">${esc(cmd)}</span>`;
+      buffer.appendChild(cmdLine);
+      view.scrollTop = view.scrollHeight;
+
+      state.running = true;
+      input.disabled = true;
+
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: "run", cmd }));
+      } else {
+        try {
+          const res = await api("/api/terminal/session/run", { id: p.id, cmd, shell: p.shell, cwd: p.cwd });
+          const outDiv = document.createElement("div");
+          outDiv.className = res.code === 0 ? "orch-term-line out" : "orch-term-line err";
+          outDiv.innerHTML = ansiToHtml(res.output);
+          buffer.appendChild(outDiv);
+          if (res.newCwd && res.newCwd !== p.cwd) {
+            p.cwd = res.newCwd;
+            promptEl.innerHTML = getPromptHtml(p.cwd);
+            const tabTitle = card.querySelector(".ghostty-tab-title");
+            if (tabTitle) tabTitle.textContent = shortCwd(p.cwd);
+            saveCanvas();
+          }
+        } catch (err) {
+          const errDiv = document.createElement("div");
+          errDiv.className = "orch-term-line err";
+          errDiv.textContent = `Error: ${err.message}`;
+          buffer.appendChild(errDiv);
+        } finally {
+          state.running = false;
+          input.disabled = false;
+          focusInput();
+          view.scrollTop = view.scrollHeight;
+        }
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (state.history.length > 0 && state.historyIdx > 0) {
+        state.historyIdx--;
+        input.value = state.history[state.historyIdx] || "";
+        cliText.textContent = input.value;
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (state.historyIdx < state.history.length - 1) {
+        state.historyIdx++;
+        input.value = state.history[state.historyIdx] || "";
+        cliText.textContent = input.value;
+      } else {
+        state.historyIdx = state.history.length;
+        input.value = "";
+        cliText.textContent = "";
+      }
+    } else if (e.key === "c" && (e.ctrlKey || e.metaKey)) {
+      if (!input.value) {
+        e.preventDefault();
+        interruptTerminal(p.id);
+        const line = document.createElement("div");
+        line.className = "orch-term-line system";
+        line.textContent = "^C";
+        buffer.appendChild(line);
+        view.scrollTop = view.scrollHeight;
+      } else {
+        input.value = "";
+        cliText.textContent = "";
+      }
+    } else if (e.key === "l" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      buffer.innerHTML = "";
+      state.lines = [];
+      focusInput();
+    }
+  };
+}
+
+let termList = [], shellList = [], prefTerm = "", prefShell = "", termPopOpen = false;
+try { prefTerm = localStorage.getItem("overlook.terminal") || ""; } catch {}
+try { prefShell = localStorage.getItem("overlook.shell") || ""; } catch {}
+
+async function loadTerminals() {
+  try {
+    const data = await api("/api/terminals");
+    termList = data.terminals || [];
+    shellList = data.shells || [];
+    if (!prefTerm) prefTerm = data.defaultTerminal || (termList[0]?.id || "ghostty");
+    if (!prefShell && prefShell !== "") prefShell = data.defaultShell || "bash";
+    const lbl = $("#orch-term-lbl");
+    if (lbl) {
+      const cur = termList.find((t) => t.id === prefTerm);
+      lbl.textContent = cur?.name || "Ghostty";
+    }
+  } catch {}
+}
+
+function paintTermPop() {
+  const pop = $("#term-pop");
+  if (!pop) return;
+  if (!termPopOpen) { pop.hidden = true; $("#orch-term-split")?.classList.remove("open"); return; }
+  const split = $("#orch-term-split");
+  if (split) {
+    const r = split.getBoundingClientRect();
+    pop.style.top = `${Math.min(window.innerHeight - 380, r.bottom + 6)}px`;
+    pop.style.left = `${Math.max(10, Math.min(window.innerWidth - 305, r.left - 60))}px`;
+  }
+  const cwd = $("#run-cwd")?.value || orchCwd || "~";
+  const curEmu = termList.find((t) => t.id === prefTerm) || { id: "ghostty", name: "Ghostty" };
+  const emuName = curEmu.name;
+  pop.innerHTML = `<div class="term-pop-head">
+      <div class="term-pop-cwd"><span class="term-pop-tag">${icon("folder", 11)} CWD</span><code>${esc(cwdLabel(cwd))}</code></div>
+      <button type="button" class="btn glass orch-icon-btn" data-act="term-menu-close" title="Close">${icon("x", 12)}</button>
+    </div>
+    <button type="button" class="btn peach term-pop-cta" data-act="term-canvas-pop">
+      ${icon("terminal", 14)} Open ${esc(emuName)} in Canvas
+    </button>
+    <div class="term-pop-sec">
+      <div class="term-pop-sec-title">Terminal Emulator</div>
+      <div class="term-pop-list">
+        ${termList.map((t) => `<button type="button" class="term-pop-row ${t.id === prefTerm ? "on" : ""}" data-act="term-pick-emu" data-id="${esc(t.id)}">
+          <span class="term-row-ic">${icon("terminal", 13)}</span>
+          <span class="term-row-name">${esc(t.name)}</span>
+          ${t.id === prefTerm ? '<span class="term-check">✓</span>' : ""}
+        </button>`).join("") || '<small class="empty">No external emulator detected</small>'}
+      </div>
+    </div>
+    <div class="term-pop-sec">
+      <div class="term-pop-sec-title">Shell</div>
+      <div class="term-pop-list">
+        <button type="button" class="term-pop-row ${!prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="">
+          <span class="term-row-ic">${icon("bolt", 13)}</span>
+          <span class="term-row-name">Default Login Shell</span>
+          ${!prefShell ? '<span class="term-check">✓</span>' : ""}
+        </button>
+        ${shellList.map((s) => `<button type="button" class="term-pop-row ${s.id === prefShell ? "on" : ""}" data-act="term-pick-shell" data-id="${esc(s.id)}">
+          <span class="term-row-ic">${icon("bolt", 13)}</span>
+          <span class="term-row-name">${esc(s.name)}</span>
+          ${s.id === prefShell ? '<span class="term-check">✓</span>' : ""}
+        </button>`).join("")}
+      </div>
+    </div>
+    <div class="term-pop-foot">
+      <a class="term-pop-config" href="#/settings">${icon("settings", 12)} Settings</a>
+      <button type="button" class="btn glass" data-act="term-launch" title="Launch ${esc(emuName)} window on Desktop">${icon("ext", 11)} Desktop Window</button>
+    </div>`;
+  pop.hidden = false;
+  $("#orch-term-split")?.classList.add("open");
+}
+
 function updateSelectionUI() {
   const plane = $("#orch-plane");
   if (plane) {
@@ -674,16 +1053,25 @@ function updateSelectionUI() {
 function deleteSelectedPanes() {
   if (!orchSelected.size) return;
   const count = orchSelected.size;
+  for (const k of orchSelected) {
+    const pane = orchPanes.find((p) => paneKey(p) === k);
+    if (pane && pane.kind === "terminal") {
+      api("/api/terminal/session/close", { id: pane.id }).catch(() => {});
+      termPanesState.delete(pane.id);
+    }
+  }
   orchPanes = orchPanes.filter((p) => !orchSelected.has(paneKey(p)));
   orchLinks = orchLinks.filter((l) => !orchSelected.has(l.a) && !orchSelected.has(l.b));
   if (orchSelected.has(orchActive)) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
   orchSelected.clear();
-  toast(`Removed ${count} item${count > 1 ? "s" : ""} from Canvas`);
+  updateSelectionUI();
+  toast(`Closed ${count} selected pane${count > 1 ? "s" : ""}`);
   saveCanvas();
   orchSigs.clear();
+  agentsBody();
   orchPaint(true);
 }
-const cwdLabel = (c) => (c ? shortCwd(c) : `Vault (${D?.vault || "vault"})`);
+
 
 async function loadCwdBrowser(path = cwdBrowse) {
   cwdBrowse = path || "~/dev";
@@ -786,8 +1174,8 @@ function ensurePaneRect(p, idx = 0) {
     p.x = 24 + col * 580 + (idx > 3 ? (idx - 3) * 36 : 0);
     p.y = 20 + row * 430 + (idx > 3 ? (idx - 3) * 36 : 0);
   }
-  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 440 : 556);
-  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 420 : 410);
+  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 640 : 580);
+  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 420 : 430);
   return p;
 }
 function arrangeCanvasPanes() {
@@ -827,7 +1215,7 @@ function applyCanvasTransform() {
 function addPane(item, x, y) {
   const k = paneKey(item), have = orchPanes.find((p) => paneKey(p) === k), p = have || item;
   if (!have) {
-    if (orchPanes.length >= 12) orchPanes.shift();
+    if (orchPanes.length >= (orchMode === "free" ? 18 : 6)) orchPanes.shift();
     ensurePaneRect(p, orchPanes.length);
     orchPanes.push(p);
   }
@@ -921,6 +1309,17 @@ function fleetItems() {
       badge: STATE[f.state] || f.state, peach: wait, needs: f.needs || "",
     });
   }
+  for (const p of orchPanes) {
+    if (p && p.kind === "terminal") {
+      const emuName = (p.emulator || prefTerm) === "kitty" ? "Kitty" : "Ghostty";
+      items.push({
+        kind: "terminal", id: p.id, agent: "terminal", ic: "terminal",
+        title: p.title || `${emuName} (${p.shell || "bash"})`,
+        sub: `${shortCwd(p.cwd || orchCwd || "")} · ${emuName.toLowerCase()}`,
+        group: "active", dot: "run", badge: `${emuName.toLowerCase()} · ${p.shell || "shell"}`, peach: true, needs: "",
+      });
+    }
+  }
   const rank = { waiting: 0, active: 1, done: 2 };
   return items.sort((a, b) => rank[a.group] - rank[b.group]);
 }
@@ -934,23 +1333,39 @@ function agents() {
   main.innerHTML = `<div class="orch-shell">
     <form class="task glass orch-deck ${orchDeckOpen ? "open" : ""}" id="run">
       <div class="orch-bar">
-        <button type="button" class="btn glass orch-rail-btn ${orchRail ? "on" : ""}" data-act="orch-rail" title="Toggle Fleet sidebar">${icon("cols", 14)} <span id="orch-rail-lbl">Fleet</span></button>
-        <div class="seg orch-mode-seg" role="radiogroup" aria-label="Workspace mode">
-          <button type="button" class="${orchMode === "tile" ? "on" : ""}" data-act="orch-mode" data-m="tile" title="Snapped Split &amp; Resizable Grid">${icon("split", 13)} Split</button>
-          <button type="button" class="${orchMode === "free" ? "on" : ""}" data-act="orch-mode" data-m="free" title="Free 2D Maestri Canvas (Drag, Resize, Pan &amp; Zoom)">${icon("grid", 13)} Canvas</button>
+        <div class="orch-cluster orch-cluster-nav">
+          <button type="button" class="btn glass orch-rail-btn ${orchRail ? "on" : ""}" data-act="orch-rail" title="Toggle Fleet sidebar">${icon("cols", 14)} <span id="orch-rail-lbl">Fleet</span></button>
+          <div class="seg orch-mode-seg" role="radiogroup" aria-label="Workspace mode">
+            <button type="button" class="${orchMode === "tile" ? "on" : ""}" data-act="orch-mode" data-m="tile" title="Snapped Split &amp; Resizable Grid">${icon("split", 13)} Split</button>
+            <button type="button" class="${orchMode === "free" ? "on" : ""}" data-act="orch-mode" data-m="free" title="Free 2D Maestri Canvas (Drag, Resize, Pan &amp; Zoom)">${icon("grid", 13)} Canvas</button>
+          </div>
+          <button type="button" class="btn glass orch-split-btn ${orchPanes.length > 1 ? "on" : ""}" id="orch-split-btn" data-act="orch-split" title="Toggle 2-pane split view" ${orchMode === "tile" ? "" : "hidden"}>${icon("split", 13)} <span id="orch-split-lbl">${orchPanes.length > 1 ? `Panes (${orchPanes.length})` : "2x"}</span></button>
+          <button type="button" class="btn glass" id="orch-dir-btn" data-act="orch-dir" title="Switch Split between Columns and Rows" ${orchMode === "tile" && orchPanes.length === 2 && !orchMax ? "" : "hidden"}>${orchDir === "rows" ? "═ Rows" : "|| Cols"}</button>
+          <button type="button" class="btn glass orch-new-btn" data-act="orch-new" title="Add a new Agent Tile to Split / Canvas">${icon("plus", 13)} Tile</button>
         </div>
-        <button type="button" class="btn glass orch-split-btn ${orchPanes.length > 1 ? "on" : ""}" id="orch-split-btn" data-act="orch-split" title="Toggle 2-pane split view">${icon("split", 13)} <span id="orch-split-lbl">${orchPanes.length > 1 ? `Panes (${orchPanes.length})` : "2x"}</span></button>
-        <button type="button" class="btn glass" id="orch-dir-btn" data-act="orch-dir" title="Switch Split between Columns and Rows" ${orchMode === "tile" && orchPanes.length === 2 && !orchMax ? "" : "hidden"}>${orchDir === "rows" ? "═ Rows" : "|| Cols"}</button>
-        <button type="button" class="btn glass" data-act="orch-new" title="Add a new Agent Tile to Split / Canvas">${icon("plus", 13)} Tile</button>
-        <textarea id="run-prompt" rows="1" placeholder="${esc(roleRow[2])}" aria-label="Task for the agent"></textarea>
-        <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
-        <input type="hidden" id="run-cwd" value="${esc(orchCwd)}">
-        <button type="button" class="btn glass orch-cwd-btn" id="run-cwd-btn" data-act="cwd-open" title="Browse &amp; select any folder on your PC">
-          ${icon("folder", 14)} <span id="run-cwd-lbl">${esc(cwdLabel(orchCwd))}</span> ${icon("fold", 12)}
-        </button>
-        <div class="orch-multi" id="run-multi"></div>
-        <button type="button" class="btn glass orch-more-btn" data-act="orch-deck-toggle" title="Toggle Role presets, Model &amp; Routines">${icon("fold", 13)} Options</button>
-        <button class="btn peach" id="run-submit" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+        <div class="orch-cluster orch-cluster-prompt">
+          <textarea id="run-prompt" rows="1" placeholder="${esc(roleRow[2])}" aria-label="Task for the agent"></textarea>
+          <div class="orch-ctx-group">
+            <select class="pick" id="run-agent" aria-label="Agent">${(S.runners || []).map((r) => `<option value="${esc(r.id)}" ${r.ready ? "" : "disabled"}>${esc(r.name)}${r.ready ? "" : " (not set up)"}</option>`).join("")}</select>
+            <input type="hidden" id="run-cwd" value="${esc(orchCwd)}">
+            <button type="button" class="orch-cwd-btn" id="run-cwd-btn" data-act="cwd-open" title="Browse &amp; select any folder on your PC">
+              ${icon("folder", 14)} <span id="run-cwd-lbl">${esc(cwdLabel(orchCwd))}</span> ${icon("fold", 12)}
+            </button>
+          </div>
+          <div class="orch-multi" id="run-multi"></div>
+        </div>
+        <div class="orch-cluster orch-cluster-act">
+          <div class="orch-term-split" id="orch-term-split">
+            <button type="button" class="orch-term-main" data-act="term-canvas" title="Open terminal in Canvas">
+              ${icon("terminal", 13)} <span class="orch-term-lbl" id="orch-term-lbl">Terminal</span>
+            </button>
+            <button type="button" class="orch-term-drop" data-act="term-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Choose terminal emulator or shell">
+              ${icon("fold", 11)}
+            </button>
+          </div>
+          <button type="button" class="btn glass orch-more-btn" data-act="orch-deck-toggle" title="Toggle Role presets, Model &amp; Routines"><span>Options</span> ${icon("fold", 11)}</button>
+          <button class="btn peach" id="run-submit" type="submit" ${ready.length ? "" : "disabled"}>Run ${icon("play", 14)}</button>
+        </div>
       </div>
       <div class="orch-presets">
         <div class="orch-roles" role="radiogroup" aria-label="Role preset">
@@ -967,14 +1382,16 @@ function agents() {
       </div>
       ${ready.length ? "" : "<small>No agent is set up yet: see README › Agents.</small>"}
       <div class="cwd-pop glass" id="cwd-pop" hidden></div>
+      <div class="term-pop glass" id="term-pop" hidden></div>
     </form>
-    <div class="orch-work ${orchRail ? "" : "rail-shut"}" id="agents-body"></div>
+    <div class="orch-work ${orchRail ? "" : "rail-shut"} ${orchRail && orchRailMode === "float" ? "rail-float" : ""}" id="agents-body"></div>
   </div>`;
   $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
   $("#run-agent").onchange = () => { orchExtra.delete($("#run-agent").value); runOptions(); renderMultiChips(); };
   $("#run-model").onchange = () => runOptions(true);
   runOptions();
   renderMultiChips();
+  loadTerminals();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
   orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); }, 2000);
@@ -1189,14 +1606,16 @@ function bindPaneDragResize(card, p) {
   }
   const oldBare = card.querySelector(".orch-resize:not([data-corner])");
   if (oldBare) oldBare.remove();
-  ["nw", "ne", "sw", "se"].forEach((c) => {
+  ["nw", "ne", "sw", "se", "n", "s", "e", "w"].forEach((c) => {
     let r = card.querySelector(`.orch-resize.${c}`);
     if (!r) {
       r = document.createElement("div");
       r.className = `orch-resize ${c}`;
-      r.dataset.corner = c;
-      r.title = "Drag corner to resize";
+      if (c.length === 2) r.dataset.corner = c;
+      r.title = c.length === 1 ? "Drag edge to resize" : "Drag corner to resize";
       card.appendChild(r);
+    } else if (c.length === 1 && r.dataset.corner) {
+      delete r.dataset.corner;
     }
     r.addEventListener("pointerdown", (e) => {
       if (orchMode !== "free" || orchMax) return;
@@ -1212,17 +1631,17 @@ function bindPaneDragResize(card, p) {
         let nextW = startW, nextH = startH, nextX = startX, nextY = startY;
 
         if (corner.includes("e")) {
-          nextW = Math.max(280, Math.min(1600, Math.round(startW + dx)));
+          nextW = Math.max(280, Math.min(2600, Math.round(startW + dx)));
         } else if (corner.includes("w")) {
-          const clampedW = Math.max(280, Math.min(1600, Math.round(startW - dx)));
+          const clampedW = Math.max(280, Math.min(2600, Math.round(startW - dx)));
           nextX = Math.round(startX + (startW - clampedW));
           nextW = clampedW;
         }
 
         if (corner.includes("s")) {
-          nextH = Math.max(180, Math.min(1200, Math.round(startH + dy)));
+          nextH = Math.max(180, Math.min(1800, Math.round(startH + dy)));
         } else if (corner.includes("n")) {
-          const clampedH = Math.max(180, Math.min(1200, Math.round(startH - dy)));
+          const clampedH = Math.max(180, Math.min(1800, Math.round(startH - dy)));
           nextY = Math.round(startY + (startH - clampedH));
           nextH = clampedH;
         }
@@ -1287,18 +1706,21 @@ function agentsBody() {
   const el = $("#agents-body");
   if (!el) return;
   el.classList.toggle("rail-shut", !orchRail);
+  el.classList.toggle("rail-float", orchRail && orchRailMode === "float");
   const all = fleetItems();
   const counts = {
     all: all.length,
     active: all.filter((x) => x.group === "active").length,
     waiting: all.filter((x) => x.group === "waiting").length,
     done: all.filter((x) => x.group === "done").length,
+    notes: D.notes.length,
+    terminals: all.filter((x) => x.kind === "terminal").length,
   };
-  const list = all.filter((x) => orchFilter === "all" || x.group === orchFilter);
+  const list = all.filter((x) => orchFilter === "all" || x.group === orchFilter || (orchFilter === "terminals" && x.kind === "terminal"));
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   document.querySelector('[data-act="orch-rail"]')?.classList.toggle("on", orchRail);
-  if (!orchPanes.length) {
+  if (!orchPanes.length && orchMode !== "free") {
     const first = list[0] || all[0];
     if (first) {
       orchPanes = [ensurePaneRect({ kind: first.kind, id: first.id }, 0)];
@@ -1312,7 +1734,10 @@ function agentsBody() {
   if (orchMax && !orchPanes.some((p) => paneKey(p) === orchMax)) orchMax = "";
   const rLbl = $("#orch-rail-lbl"), sBtn = $("#orch-split-btn"), sLbl = $("#orch-split-lbl"), dBtn = $("#orch-dir-btn");
   if (rLbl) rLbl.textContent = `Fleet (${counts.all})`;
-  if (sBtn) sBtn.classList.toggle("on", orchPanes.length > 1);
+  if (sBtn) {
+    sBtn.classList.toggle("on", orchPanes.length > 1);
+    sBtn.hidden = orchMode === "free";
+  }
   if (sLbl) sLbl.textContent = orchPanes.length > 1 ? `Panes (${orchPanes.length})` : "2x";
   if (dBtn) {
     dBtn.hidden = !(orchMode === "tile" && orchPanes.length === 2 && !orchMax);
@@ -1320,25 +1745,66 @@ function agentsBody() {
   }
   document.querySelectorAll("[data-act='orch-mode']").forEach((b) => b.classList.toggle("on", b.dataset.m === orchMode));
   if (!el.querySelector(".orch-canvas")) {
-    el.innerHTML = `<aside class="orch-fleet glass">
-        <div class="orch-tabs" id="orch-tabs"></div>
-        <div class="orch-list" id="orch-list"></div>
-        <details class="orch-ledger" id="orch-ledger">
-          <summary id="orch-ledger-sum"></summary>
-          <div class="orch-ledger-cols" id="orch-ledger-cols"></div>
-        </details>
-      </aside>
+    el.innerHTML = `<div class="orch-fleet-wrap ${orchRailMode === "float" ? "float" : ""}" id="orch-fleet-wrap">
+        <button type="button" class="orch-fleet-pill glass" data-act="orch-rail-open" title="Open Fleet sidebar">${icon("cols", 13)} <span>Fleet <small id="orch-fleet-pill-cnt"></small></span></button>
+        <aside class="orch-fleet glass ${orchRailMode === "float" ? "floating" : ""}">
+          <div class="orch-fleet-head">
+            <div class="orch-fleet-title">
+              ${icon("cols", 14)} <span>Fleet</span> <span class="pill" id="orch-fleet-badge"></span>
+            </div>
+            <div class="orch-fleet-acts">
+              <button type="button" class="btn glass orch-icon-btn ${orchRailMode === "float" ? "on" : ""}" data-act="orch-rail-mode" title="${orchRailMode === "float" ? "Dock sidebar to side" : "Float sidebar over canvas"}">${icon(orchRailMode === "float" ? "ext" : "split", 12)}</button>
+              <button type="button" class="btn glass orch-icon-btn" data-act="orch-rail" title="Hide Fleet sidebar">${icon("x", 12)}</button>
+            </div>
+          </div>
+          <div class="orch-tabs" id="orch-tabs"></div>
+          <div class="orch-list" id="orch-list"></div>
+          <details class="orch-ledger" id="orch-ledger">
+            <summary id="orch-ledger-sum"></summary>
+            <div class="orch-ledger-cols" id="orch-ledger-cols"></div>
+          </details>
+        </aside>
+      </div>
       <div class="orch-canvas" id="orch-canvas">
         <div class="orch-plane" id="orch-plane"></div>
         <div class="orch-hud glass" id="orch-hud"></div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
   }
+  const fleetBadge = $("#orch-fleet-badge"), fleetPillCnt = $("#orch-fleet-pill-cnt"), pill = el.querySelector(".orch-fleet-pill"), fleetEl = el.querySelector(".orch-fleet"), fleetWrap = $("#orch-fleet-wrap");
+  if (fleetBadge) fleetBadge.textContent = counts.all;
+  if (fleetPillCnt) fleetPillCnt.textContent = counts.all;
+  if (fleetWrap) fleetWrap.classList.toggle("float", orchRailMode === "float");
+  if (fleetEl) fleetEl.classList.toggle("floating", orchRailMode === "float");
   const pinnedKeys = new Set(orchPanes.map(paneKey));
   counts.notes = D.notes.length;
-  $("#orch-tabs").innerHTML = [["all", "All"], ["active", "Active"], ["waiting", "Wait"], ["done", "Done"], ["notes", "Notes"]].map(([k, l]) =>
+  $("#orch-tabs").innerHTML = [["all", "All"], ["active", "Active"], ["waiting", "Wait"], ["done", "Done"], ["notes", "Notes"], ["terminals", "Terminals"]].map(([k, l]) =>
     `<button type="button" class="orch-tab ${orchFilter === k ? "on" : ""}" data-act="orch-tab" data-k="${k}">${l}<small>${counts[k]}</small></button>`).join("");
-  if (orchFilter === "notes") {
+  if (orchFilter === "terminals") {
+    const termItems = all.filter((x) => x.kind === "terminal");
+    $("#orch-list").innerHTML = `
+      <div class="orch-fleet-quick-act">
+        <button type="button" class="btn peach" data-act="term-new-pane">${icon("plus", 13)} New Terminal</button>
+      </div>
+      ${termItems.map((it) => {
+        const k = paneKey(it), isPin = pinnedKeys.has(k), isAct = orchActive === k;
+        return `<div class="orch-item ${isAct ? "on" : ""} ${isPin && orchPanes.length > 1 ? "pinned" : ""}" draggable="true" data-kind="${it.kind}" data-id="${esc(it.id)}" title="Drag onto the canvas">
+          <button type="button" class="orch-item-main" data-act="orch-sel" data-kind="${it.kind}" data-id="${esc(it.id)}">
+            <span class="live ${it.dot}"></span>
+            <span class="row-av">${icon("terminal", 18)}</span>
+            <span class="orch-info">
+              <b>${esc(it.title)}</b>
+              <small>${esc(it.sub)}</small>
+            </span>
+            <span class="pill peach">${esc(it.badge)}</span>
+          </button>
+          <div class="orch-item-actions">
+            <button type="button" class="orch-pin-btn ${isPin && orchPanes.length > 1 ? "on" : ""}" data-act="orch-pin" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${isPin && orchPanes.length > 1 ? "Remove from workspace" : "Add side-by-side to Split / Canvas"}">${icon(isPin && orchPanes.length > 1 ? "x" : "plus", 13)}</button>
+            <button type="button" class="orch-dismiss-btn" data-act="term-close-session" data-id="${esc(it.id)}" aria-label="Close terminal" title="Close terminal">${icon("x", 12)}</button>
+          </div>
+        </div>`;
+      }).join("") || '<p class="empty">No active terminals. Click "+ New Terminal" to open one in the canvas.</p>'}`;
+  } else if (orchFilter === "notes") {
     if (!$("#orch-nq")) {
       $("#orch-list").innerHTML = `<input id="orch-nq" class="orch-nq" type="search" placeholder="Search the vault… drag a note onto the canvas" autocomplete="off"><div id="orch-notes"></div>`;
       $("#orch-nq").value = orchNoteQ;
@@ -1577,6 +2043,7 @@ async function orchPaint(force) {
         <button type="button" class="fchip" data-act="orch-new" title="Open a new Agent Tile">${icon("plus", 12)} Agent</button>
         <button type="button" class="fchip" data-act="orch-add-sticky" title="Add a Sticky Note to Canvas">${icon("spark", 12)} Sticky</button>
         <button type="button" class="fchip" data-act="orch-tab" data-k="notes" title="Open Vault Notes list">${icon("notes", 12)} Notes</button>
+        <button type="button" class="fchip" data-act="term-canvas" title="Open terminal in Canvas">${icon("terminal", 12)} Terminal</button>
         <button type="button" class="fchip" data-act="orch-arrange" title="Auto-tile floating windows">Arrange</button>
         <button type="button" class="fchip" data-act="orch-fit" title="Fit all windows in view">Fit</button>
         <span class="orch-hud-sep"></span>
@@ -1593,8 +2060,9 @@ async function orchPaint(force) {
     let card = plane.querySelector(`.orch-pane[data-key="${CSS.escape(key)}"]`);
     if (!card) {
       card = document.createElement("section");
-      card.className = "orch-pane glass";
+      card.className = "orch-pane";
       card.dataset.key = key;
+      card.dataset.kind = p.kind;
       card.innerHTML = `<div class="orch-head"></div>
         <div class="feed list orch-feed"><p class="empty">Loading…</p></div>
         <div class="orch-needs"></div>
@@ -1608,7 +2076,7 @@ async function orchPaint(force) {
         <div class="orch-resize se" data-corner="se" title="Drag corner to resize"></div>
         <div class="orch-port" title="Drag to connect to another card (provides context)">●</div>`;
       card.addEventListener("pointerdown", (e) => {
-        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port")) return;
+        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot")) return;
         if (e.shiftKey || e.metaKey || e.ctrlKey) {
           if (orchSelected.has(key)) orchSelected.delete(key);
           else orchSelected.add(key);
@@ -1629,11 +2097,20 @@ async function orchPaint(force) {
       const form = card.querySelector(".orch-talk"), msg = card.querySelector(".orch-msg");
       form.onsubmit = (e) => { e.preventDefault(); orchSend(p, card); };
       msg.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); orchSend(p, card); } };
+      const head = card.querySelector(".orch-head");
+      head.addEventListener("dblclick", (e) => {
+        if (e.target.closest("button, a, select, input, textarea")) return;
+        orchMax = orchMax === key ? "" : key;
+        orchActive = key;
+        orchSigs.clear();
+        agentsBody();
+      });
       bindPaneDragResize(card, p);
       plane.appendChild(card);
     }
     card.classList.toggle("active", key === orchActive);
     card.classList.toggle("selected", orchSelected.has(key));
+    card.dataset.kind = p.kind;
     if (isFree) {
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`;
       card.style.width = `${p.w}px`; card.style.height = `${p.h}px`;
@@ -1649,7 +2126,7 @@ async function orchPaint(force) {
       ${orchPanes.length > 1 || isFree ? `<button type="button" class="btn glass orch-icon-btn ${orchMax === key ? "on" : ""}" data-act="orch-max" data-key="${esc(key)}" title="${orchMax === key ? "Restore Split / Canvas" : "Maximize pane"}">${icon("max", 13)}</button>` : ""}
       ${orchPanes.length > 1 || isFree ? `<button type="button" class="btn glass orch-icon-btn" data-act="orch-unpin" data-key="${esc(key)}" title="Close pane">${icon("x", 13)}</button>` : ""}`;
     const form = card.querySelector(".orch-talk");
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky") ? "none" : "";
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || p.kind === "terminal") ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;
@@ -1688,6 +2165,35 @@ async function orchPaint(force) {
         ta.value = p.text || "";
       }
       if (form) form.style.display = "none";
+      return;
+    }
+    if (p.kind === "terminal") {
+      p.w ??= 640; p.h ??= 420;
+      const sig = `terminal|${p.id}|${p.shell}|${p.cwd}|${p.emulator}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
+      orchSigs.set(key, sig);
+      const cwd = p.cwd || orchCwd || "";
+      const emuName = (p.emulator || prefTerm) === "kitty" ? "Kitty" : "Ghostty";
+      const shellName = p.shell || prefShell || "bash";
+      card.querySelector(".orch-head").innerHTML = `
+        <div class="ghostty-traffic-lights">
+          <span class="dot close" data-act="orch-unpin" data-key="${esc(key)}" title="Close terminal (⌘W)"></span>
+          <span class="dot min" data-act="orch-swap" data-key="${esc(key)}" title="Minimize / Swap order"></span>
+          <span class="dot max" data-act="orch-max" data-key="${esc(key)}" title="${orchMax === key ? "Restore Split / Canvas" : "Maximize Fullscreen"}"></span>
+        </div>
+        <div class="ghostty-tab-pill" title="${esc(cwd)}">
+          <span class="ghostty-tab-ic">${icon("terminal", 13)}</span>
+          <span class="ghostty-tab-title">${esc(cwdLabel(cwd))}</span>
+          <span class="ghostty-tab-proc">${esc(shellName)}</span>
+        </div>
+        <div class="ghostty-acts">
+          <button type="button" class="ghostty-theme-toggle" data-act="term-toggle-theme" data-key="${esc(key)}" title="Toggle Ghostty / Kitty UI theme">${esc(emuName)}</button>
+          <button type="button" class="btn glass orch-icon-btn" data-act="term-launch-app" data-key="${esc(key)}" title="Open in native ${esc(emuName)} window (Desktop)">${icon("ext", 12)}</button>
+          <button type="button" class="btn glass orch-icon-btn" data-act="term-clear" data-key="${esc(key)}" title="Clear screen (Ctrl+L)">${icon("trash", 12)}</button>
+        </div>`;
+      card.querySelector(".orch-needs").innerHTML = "";
+      if (form) form.style.display = "none";
+      mountTerminalPane(card, p);
       return;
     }
     if (p.kind === "new") {
@@ -2146,6 +2652,29 @@ async function settingsPage() {
       </div>
       <small>Vault path and language apply immediately and persist to <code>.env</code>; port takes effect on the next restart.</small>
     </form>
+    <h3>Terminal &amp; Shell</h3>
+    <form class="task glass" id="set-terminal">
+      <div class="set-row">
+        <label>Primary emulator
+          <select class="pick" id="set-term-primary">
+            ${(cfg.terminals || []).map((t) => `<option value="${esc(t.id)}" ${t.id === cfg.defaultTerminal ? "selected" : ""}>${esc(t.name)}</option>`).join("") || '<option value="">None detected</option>'}
+          </select>
+        </label>
+        <label>Fallback emulator
+          <select class="pick" id="set-term-fallback">
+            <option value="" ${!cfg.fallbackTerminal ? "selected" : ""}>None</option>
+            ${(cfg.terminals || []).map((t) => `<option value="${esc(t.id)}" ${t.id === cfg.fallbackTerminal ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Default shell
+          <select class="pick" id="set-term-shell">
+            ${(cfg.shells || []).map((s) => `<option value="${esc(s.id)}" ${s.id === cfg.defaultShell ? "selected" : ""}>${esc(s.name)}</option>`).join("") || '<option value="bash">Bash</option>'}
+          </select>
+        </label>
+        <button class="btn peach" type="submit">Save</button>
+      </div>
+      <small>Auto-detects installed emulators (Ghostty, Kitty, etc.). Falls back to secondary emulator if primary is unavailable.</small>
+    </form>
     <h3>Card images</h3>
     <form class="task glass" id="set-images">
       <div class="set-row">
@@ -2190,6 +2719,24 @@ async function settingsPage() {
     try {
       await api("/api/settings", { vaultDir: $("#set-vault-dir").value, vaultLang: $("#set-vault-lang").value, port: Number($("#set-port").value) });
       [D, S] = await Promise.all([api("/api"), api("/api/system")]); topBar(); toast("Vault & server settings saved");
+    } catch (err) { toast(err.message); }
+  };
+  $("#set-terminal").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/settings", {
+        defaultTerminal: $("#set-term-primary").value,
+        fallbackTerminal: $("#set-term-fallback").value,
+        defaultShell: $("#set-term-shell").value,
+      });
+      prefTerm = $("#set-term-primary").value;
+      prefShell = $("#set-term-shell").value;
+      try {
+        localStorage.setItem("overlook.terminal", prefTerm);
+        localStorage.setItem("overlook.shell", prefShell);
+      } catch {}
+      toast("Terminal preferences saved");
+      settingsPage();
     } catch (err) { toast(err.message); }
   };
   $("#set-images").onsubmit = async (e) => {
@@ -2322,15 +2869,175 @@ const ACTIONS = {
     renderMultiChips();
   },
   "orch-rail": (el) => {
+    if (el?.closest?.(".orch-fleet-wrap.float")) {
+      $("#orch-fleet-wrap")?.classList.remove("open");
+      return;
+    }
     orchRail = !orchRail;
-    el.classList.toggle("on", orchRail);
+    document.querySelectorAll('[data-act="orch-rail"]').forEach((b) => b.classList.toggle("on", orchRail));
     $("#agents-body")?.classList.toggle("rail-shut", !orchRail);
+    $("#agents-body")?.classList.toggle("rail-float", orchRail && orchRailMode === "float");
+  },
+  "orch-rail-open": () => {
+    $("#orch-fleet-wrap")?.classList.toggle("open");
+  },
+  "orch-rail-mode": () => {
+    orchRailMode = orchRailMode === "float" ? "dock" : "float";
+    saveRailMode();
+    saveCanvas();
+    const wrap = $("#orch-fleet-wrap");
+    if (wrap) wrap.classList.toggle("float", orchRailMode === "float");
+    const body = $("#agents-body");
+    if (body) body.classList.toggle("rail-float", orchRail && orchRailMode === "float");
+    const fleet = document.querySelector(".orch-fleet");
+    if (fleet) fleet.classList.toggle("floating", orchRailMode === "float");
+    const btn = document.querySelector('[data-act="orch-rail-mode"]');
+    if (btn) {
+      btn.classList.toggle("on", orchRailMode === "float");
+      btn.title = orchRailMode === "float" ? "Dock sidebar to side" : "Float sidebar over canvas";
+      btn.innerHTML = icon(orchRailMode === "float" ? "ext" : "split", 12);
+    }
+    toast(orchRailMode === "float" ? "Fleet sidebar is now floating" : "Fleet sidebar is now docked");
   },
   "orch-deck-toggle": (el) => {
     orchDeckOpen = !orchDeckOpen;
     $("#run")?.classList.toggle("open", orchDeckOpen);
     document.querySelectorAll('[data-act="orch-deck-toggle"]').forEach((b) => b.classList.toggle("on", orchDeckOpen));
     if (!orchDeckOpen && el) el.blur();
+  },
+  "term-quick": async (el) => {
+    const cwd = el?.dataset?.cwd || $("#run-cwd")?.value || orchCwd;
+    try {
+      const res = await api("/api/terminal/open", { terminal: prefTerm || undefined, shell: prefShell || undefined, cwd });
+      toast(res.fallback ? `${res.terminal} (fallback) opened in ${cwdLabel(res.cwd)}` : `${res.terminal} opened in ${cwdLabel(res.cwd)}`);
+    } catch (e) {
+      toast(e.message);
+    }
+  },
+  "term-canvas": (el) => {
+    const cwd = el?.dataset?.cwd || $("#run-cwd")?.value || orchCwd || "";
+    const shell = prefShell || (shellList[0]?.id || "bash");
+    const emulator = prefTerm || "ghostty";
+    const emuName = emulator === "kitty" ? "Kitty" : "Ghostty";
+    const termId = `term_${Date.now()}`;
+    const p = { kind: "terminal", id: termId, emulator, shell, cwd, title: `${emuName} (${shell})` };
+    addPane(p);
+    saveCanvas();
+    toast(`${emuName} (${shell}) opened in Canvas`);
+  },
+  "term-canvas-pop": () => {
+    termPopOpen = false;
+    paintTermPop();
+    const cwd = $("#run-cwd")?.value || orchCwd || "";
+    const shell = prefShell || (shellList[0]?.id || "bash");
+    const emulator = prefTerm || "ghostty";
+    const emuName = emulator === "kitty" ? "Kitty" : "Ghostty";
+    const termId = `term_${Date.now()}`;
+    const p = { kind: "terminal", id: termId, emulator, shell, cwd, title: `${emuName} (${shell})` };
+    addPane(p);
+    saveCanvas();
+    toast(`${emuName} (${shell}) opened in Canvas`);
+  },
+  "term-new-pane": () => {
+    const cwd = $("#run-cwd")?.value || orchCwd || "";
+    const shell = prefShell || (shellList[0]?.id || "bash");
+    const emulator = prefTerm || "ghostty";
+    const emuName = emulator === "kitty" ? "Kitty" : "Ghostty";
+    const termId = `term_${Date.now()}`;
+    const p = { kind: "terminal", id: termId, emulator, shell, cwd, title: `${emuName} (${shell})` };
+    addPane(p);
+    saveCanvas();
+    toast(`New ${emuName} (${shell}) created in Canvas`);
+  },
+  "term-launch-app": async (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    const cwd = p?.cwd || $("#run-cwd")?.value || orchCwd;
+    const terminal = p?.emulator || prefTerm || "ghostty";
+    try {
+      const res = await api("/api/terminal/open", { terminal, shell: p?.shell || prefShell || undefined, cwd });
+      toast(res.fallback ? `${res.terminal} (fallback) opened in ${cwdLabel(res.cwd)}` : `${res.terminal} opened in ${cwdLabel(res.cwd)}`);
+    } catch (e) {
+      toast(e.message);
+    }
+  },
+  "term-clear": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (p) clearTerminal(p.id);
+  },
+  "term-restart": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (p) {
+      clearTerminal(p.id);
+      api("/api/terminal/session/create", { id: p.id, shell: p.shell, cwd: p.cwd }).catch(() => {});
+      toast(`Terminal (${p.shell}) restarted`);
+    }
+  },
+  "term-interrupt": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (p) interruptTerminal(p.id);
+  },
+  "term-close-session": async (el) => {
+    const id = el.dataset.id;
+    orchPanes = orchPanes.filter((p) => !(p.kind === "terminal" && p.id === id));
+    saveCanvas();
+    await api("/api/terminal/session/close", { id }).catch(() => {});
+    agentsBody();
+    orchPaint(true);
+    toast("Terminal closed");
+  },
+  "term-toggle-theme": (el) => {
+    const key = el.dataset.key;
+    const p = orchPanes.find((x) => paneKey(x) === key);
+    if (!p) return;
+    const current = (p.emulator || prefTerm || "ghostty").toLowerCase();
+    const next = current === "kitty" ? "ghostty" : "kitty";
+    p.emulator = next;
+    prefTerm = next;
+    try {
+      const conf = JSON.parse(localStorage.getItem("overlook.terminal") || "{}");
+      conf.terminal = next;
+      localStorage.setItem("overlook.terminal", JSON.stringify(conf));
+    } catch {}
+    saveCanvas();
+    orchSigs.delete(key);
+    orchPaint(true);
+    toast(`Switched theme to ${next === "kitty" ? "Kitty" : "Ghostty"}`);
+  },
+  "term-menu-toggle": () => {
+    termPopOpen = !termPopOpen;
+    paintTermPop();
+  },
+  "term-menu-close": () => {
+    termPopOpen = false;
+    paintTermPop();
+  },
+  "term-pick-emu": (el) => {
+    prefTerm = el.dataset.id;
+    try { localStorage.setItem("overlook.terminal", prefTerm); } catch {}
+    const cur = termList.find((t) => t.id === prefTerm);
+    const lbl = $("#orch-term-lbl");
+    if (lbl) lbl.textContent = cur?.name || "Ghostty";
+    paintTermPop();
+  },
+  "term-pick-shell": (el) => {
+    prefShell = el.dataset.id;
+    try { localStorage.setItem("overlook.shell", prefShell); } catch {}
+    paintTermPop();
+  },
+  "term-launch": async () => {
+    termPopOpen = false;
+    paintTermPop();
+    const cwd = $("#run-cwd")?.value || orchCwd;
+    try {
+      const res = await api("/api/terminal/open", { terminal: prefTerm || undefined, shell: prefShell || undefined, cwd });
+      toast(res.fallback ? `${res.terminal} (fallback) opened in ${cwdLabel(res.cwd)}` : `${res.terminal} opened in ${cwdLabel(res.cwd)}`);
+    } catch (e) {
+      toast(e.message);
+    }
   },
   "orch-mode": (el) => {
     orchMode = (el.dataset.m || el.dataset.mode) === "free" ? "free" : "tile";
@@ -2343,7 +3050,7 @@ const ACTIONS = {
   },
   "orch-new": () => {
     orchMax = "";
-    if (orchPanes.length >= 6) orchPanes.shift();
+    if (orchPanes.length >= (orchMode === "free" ? 18 : 6)) orchPanes.shift();
     const id = String(++orchSeq);
     const p = { kind: "new", id, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd };
     if (orchMode === "free") ensurePaneRect(p, orchPanes.length);
@@ -2495,7 +3202,7 @@ const ACTIONS = {
         if (orchActive === k) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
       }
     } else {
-      if (orchPanes.length >= 6) orchPanes.shift();
+      if (orchPanes.length >= (orchMode === "free" ? 18 : 6)) orchPanes.shift();
       if (orchMode === "free") ensurePaneRect(item, orchPanes.length);
       orchPanes.push(item);
       orchActive = k;
@@ -2513,11 +3220,19 @@ const ACTIONS = {
   "orch-unpin": (el) => {
     const k = el.dataset.key;
     orchMax = "";
+    const pane = orchPanes.find((p) => paneKey(p) === k);
+    if (pane && pane.kind === "terminal") {
+      api("/api/terminal/session/close", { id: pane.id }).catch(() => {});
+      termPanesState.delete(pane.id);
+    }
     orchPanes = orchPanes.filter((p) => paneKey(p) !== k);
+    orchSelected.delete(k);
+    updateSelectionUI();
     if (orchActive === k) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
     saveCanvas();
     orchSigs.clear();
     agentsBody();
+    orchPaint(true);
   },
   "orch-dismiss": async (el) => {
     const kind = el.dataset.kind, id = el.dataset.id;
@@ -2646,7 +3361,11 @@ document.addEventListener("click", (e) => {
   if (cwdOpen && !e.target.closest("#cwd-pop") && !e.target.closest('[data-act="cwd-open"]')) {
     cwdOpen = false; cwdPaneKey = ""; paintCwdPop();
   }
+  if (termPopOpen && !e.target.closest("#term-pop") && !e.target.closest("#orch-term-split")) {
+    termPopOpen = false; paintTermPop();
+  }
   if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
+  if (!e.target.closest("#orch-fleet-wrap")) $("#orch-fleet-wrap")?.classList.remove("open");
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const res = e.target.closest(".ev.result");
@@ -2679,8 +3398,11 @@ document.addEventListener("keydown", (e) => {
     updateSelectionUI();
     return;
   }
-  if ((e.key === "Delete" || e.key === "Backspace") && orchSelected.size > 0 && route().pg === "agents" && orchMode === "free" && !orchMax) {
-    if (!e.target.closest("input, textarea, select, [contenteditable]")) {
+  if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax) {
+    const isEditingText = e.target.closest("textarea, select, [contenteditable]") ||
+      (e.target.closest("input") && !e.target.classList.contains("ghostty-cli-input")) ||
+      (e.target.classList?.contains("ghostty-cli-input") && e.target.value.length > 0 && orchSelected.size <= 1);
+    if (!isEditingText) {
       e.preventDefault();
       deleteSelectedPanes();
       return;

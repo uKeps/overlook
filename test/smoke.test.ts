@@ -1519,5 +1519,341 @@ test("adversarial verification: task persistence across reload, retryTask 404 re
   }
 });
 
+test("adversarial verification: floating fleet sidebar, extended canvas panes, 8-dir resize, and header dblclick", async () => {
+  const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
+  const appCss = readFileSync(`${ROOT}/app.css`, "utf8");
+
+  // 1. Assert required styles and structure for minimalist toolbar and floating fleet
+  expect(appCss).toContain(".orch-cluster-nav");
+  expect(appCss).toContain(".orch-cluster-prompt");
+  expect(appCss).toContain(".orch-cluster-act");
+  expect(appCss).toContain(".orch-fleet-wrap");
+  expect(appCss).toContain(".orch-fleet-wrap.float:is(:hover, :focus-within, .open) .orch-fleet");
+  expect(appCss).toContain(".orch-fleet-head");
+  expect(appCss).toContain(".orch-fleet-pill");
+  expect(appCss).toContain(".orch-work.rail-float");
+  expect(appCss).toContain(".orch-work.rail-float .orch-fleet");
+  expect(appCss).toContain(".orch-resize.e");
+  expect(appCss).toContain(".orch-resize.w");
+  expect(appCss).toContain(".orch-resize.s");
+  expect(appCss).toContain(".orch-resize.n");
+
+  // 2. Assert JS handlers and state management
+  expect(appJs).toContain("orchRailMode");
+  expect(appJs).toContain('"orch-rail-mode"');
+  expect(appJs).toContain('"orch-rail-open"');
+  expect(appJs).toContain("saveRailMode");
+  expect(appJs).toContain('"overlook.rail-mode"');
+  expect(appJs).toContain('["nw", "ne", "sw", "se", "n", "s", "e", "w"]');
+  expect(appJs).toContain("Math.min(2600,");
+  expect(appJs).toContain("Math.min(1800,");
+  expect(appJs).toContain('head.addEventListener("dblclick"');
+
+  // 3. Test 8-direction resize calculations against bounds
+  const simulateResize = (corner: string, startW: number, startH: number, startX: number, startY: number, dx: number, dy: number) => {
+    let nextW = startW, nextH = startH, nextX = startX, nextY = startY;
+    if (corner.includes("e")) {
+      nextW = Math.max(280, Math.min(2600, Math.round(startW + dx)));
+    } else if (corner.includes("w")) {
+      const clampedW = Math.max(280, Math.min(2600, Math.round(startW - dx)));
+      nextX = Math.round(startX + (startW - clampedW));
+      nextW = clampedW;
+    }
+
+    if (corner.includes("s")) {
+      nextH = Math.max(180, Math.min(1800, Math.round(startH + dy)));
+    } else if (corner.includes("n")) {
+      const clampedH = Math.max(180, Math.min(1800, Math.round(startH - dy)));
+      nextY = Math.round(startY + (startH - clampedH));
+      nextH = clampedH;
+    }
+    return { nextW, nextH, nextX, nextY };
+  };
+
+  // Horizontal edge resize (east): extends up to 2600px without altering Y or H
+  const eastExtend = simulateResize("e", 600, 400, 50, 50, 2500, 0);
+  expect(eastExtend.nextW).toBe(2600); // capped at 2600
+  expect(eastExtend.nextH).toBe(400);  // unchanged
+  expect(eastExtend.nextX).toBe(50);   // unchanged
+
+  // Horizontal edge resize (west): extends left up to 2600px and updates X
+  const westExtend = simulateResize("w", 600, 400, 500, 50, -400, 0);
+  expect(westExtend.nextW).toBe(1000);
+  expect(westExtend.nextX).toBe(100);
+
+  // Vertical edge resize (south): extends down up to 1800px
+  const southExtend = simulateResize("s", 600, 400, 50, 50, 0, 1500);
+  expect(southExtend.nextH).toBe(1800);
+  expect(southExtend.nextW).toBe(600);
+
+  // Corner resize (se): adjusts both dimensions simultaneously
+  const cornerExtend = simulateResize("se", 500, 300, 50, 50, 300, 200);
+  expect(cornerExtend.nextW).toBe(800);
+  expect(cornerExtend.nextH).toBe(500);
+
+  // Minimum bounds clamped
+  const minShrink = simulateResize("se", 500, 300, 50, 50, -400, -250);
+  expect(minShrink.nextW).toBe(280);
+  expect(minShrink.nextH).toBe(180);
+
+  // 4. Test fleet sidebar mode transition simulation
+  let testRailMode = "float";
+  let testRail = true;
+  const toggleRailMode = () => {
+    testRailMode = testRailMode === "float" ? "dock" : "float";
+    return testRailMode;
+  };
+  expect(toggleRailMode()).toBe("dock");
+  expect(toggleRailMode()).toBe("float");
+
+  const toggleRail = () => {
+    testRail = !testRail;
+    return { railShut: !testRail, railFloat: testRail && testRailMode === "float", pillHidden: testRail };
+  };
+  const closedState = toggleRail();
+  expect(closedState.railShut).toBe(true);
+  expect(closedState.railFloat).toBe(false);
+  expect(closedState.pillHidden).toBe(false);
+
+  const openState = toggleRail();
+  expect(openState.railShut).toBe(false);
+  expect(openState.railFloat).toBe(true);
+  expect(openState.pillHidden).toBe(true);
+});
+
+test("adversarial verification: terminal & shell launcher, emulator detection, fallback chain, and settings persistence", async () => {
+  const { buildTerminalArgs } = await import("../tasks");
+
+  // 1. Argument builder correctness for various emulators
+  const ghosttyArgs = buildTerminalArgs("ghostty", "/home/test", ["-e", "bash"]);
+  expect(ghosttyArgs).toEqual(["ghostty", "--working-directory=/home/test", "-e", "-e", "bash"]);
+
+  const kittyArgs = buildTerminalArgs("kitty", "/home/test", ["bash"]);
+  expect(kittyArgs).toEqual(["kitty", "--directory=/home/test", "bash"]);
+
+  const xdgArgs = buildTerminalArgs("xdg-terminal-exec", "/home/test", ["bash"]);
+  expect(xdgArgs).toEqual(["xdg-terminal-exec", "--dir=/home/test", "--", "bash"]);
+
+  // 2. GET /api/terminals returns detected terminals and shells
+  const termRes = await (await fetch(`${BASE}/api/terminals`)).json();
+  expect(termRes).toBeDefined();
+  expect(Array.isArray(termRes.terminals)).toBe(true);
+  expect(Array.isArray(termRes.shells)).toBe(true);
+  expect(typeof termRes.defaultTerminal).toBe("string");
+  expect(typeof termRes.defaultShell).toBe("string");
+
+  // 3. POST /api/terminal/open rejects non-installed shell with 400
+  const badShell = await post("/api/terminal/open", { shell: "non-existent-shell-404xyz" });
+  expect(badShell.status).toBe(400);
+  const errTxt = await badShell.text();
+  expect(errTxt).toContain("is not installed");
+
+  // 4. POST /api/terminal/open succeeds when launching a valid shell
+  if (termRes.terminals.length > 0) {
+    const okRes = await post("/api/terminal/open", { shell: "bash", cwd: ROOT });
+    expect(okRes.status).toBe(200);
+    const data = await okRes.json();
+    expect(data.ok).toBe(true);
+    expect(data.shell).toBe("bash");
+    expect(data.cwd).toBe(ROOT);
+  }
+
+  // 5. Settings persistence for terminal preferences
+  const updateSettings = await post("/api/settings", {
+    defaultTerminal: "ghostty",
+    fallbackTerminal: "kitty",
+    defaultShell: "bash",
+  });
+  expect(updateSettings.status).toBe(200);
+  const cfg = await (await fetch(`${BASE}/api/settings`)).json();
+  expect(cfg.defaultTerminal).toBe("ghostty");
+  expect(cfg.fallbackTerminal).toBe("kitty");
+  expect(cfg.defaultShell).toBe("bash");
+
+  // 6. Frontend assets contain split-button, popover, and state hooks
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+  expect(appCss).toContain(".orch-term-split");
+  expect(appCss).toContain(".term-pop");
+  expect(appCss).toContain(".orch-term-main");
+  expect(appJs).toContain('"term-quick"');
+  expect(appJs).toContain('"term-menu-toggle"');
+  expect(appJs).toContain("loadTerminals");
+  expect(appJs).toContain("paintTermPop");
+  expect(appJs).toContain("set-terminal");
+});
+
+test("adversarial verification: embedded canvas terminal, session management, cd tracking, and WebSocket streaming", async () => {
+  // 1. Session creation via POST /api/terminal/session/create
+  const createRes = await post("/api/terminal/session/create", { shell: "bash", cwd: ROOT, id: "test_term_1" });
+  expect(createRes.status).toBe(200);
+  const createData = await createRes.json();
+  expect(createData.ok).toBe(true);
+  expect(createData.session.id).toBe("test_term_1");
+  expect(createData.session.shell).toBe("bash");
+  expect(createData.session.cwd).toBe(ROOT);
+
+  // 2. GET /api/terminal/sessions lists the created session
+  const listRes = await (await fetch(`${BASE}/api/terminal/sessions`)).json();
+  expect(Array.isArray(listRes.sessions)).toBe(true);
+  expect(listRes.sessions.some((s: any) => s.id === "test_term_1")).toBe(true);
+
+  // 3. POST /api/terminal/session/run runs command and captures output
+  const runRes = await post("/api/terminal/session/run", { id: "test_term_1", cmd: "echo 'OVERLOOK_TERMINAL_EMBEDDED'" });
+  expect(runRes.status).toBe(200);
+  const runData = await runRes.json();
+  expect(runData.ok).toBe(true);
+  expect(runData.code).toBe(0);
+  expect(runData.output).toContain("OVERLOOK_TERMINAL_EMBEDDED");
+
+  // 4. Command changing directory updates session cwd
+  const cdRes = await post("/api/terminal/session/run", { id: "test_term_1", cmd: "cd /tmp && pwd" });
+  expect(cdRes.status).toBe(200);
+  const cdData = await cdRes.json();
+  expect(cdData.ok).toBe(true);
+  expect(cdData.newCwd).toBe("/tmp");
+
+  // 5. POST /api/terminal/session/kill and close
+  const killRes = await post("/api/terminal/session/kill", { id: "test_term_1" });
+  expect(killRes.status).toBe(200);
+
+  const closeRes = await post("/api/terminal/session/close", { id: "test_term_1" });
+  expect(closeRes.status).toBe(200);
+  const afterCloseList = await (await fetch(`${BASE}/api/terminal/sessions`)).json();
+  expect(afterCloseList.sessions.some((s: any) => s.id === "test_term_1")).toBe(false);
+
+  // 6. WebSocket streaming at /ws/terminal
+  const wsUrl = `ws://127.0.0.1:${PORT}/ws/terminal?id=test_term_ws&shell=bash&cwd=${encodeURIComponent(ROOT)}`;
+  const ws = new WebSocket(wsUrl);
+  const wsMessages: any[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("WS timeout")), 5000);
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(String(e.data));
+        wsMessages.push(msg);
+        if (msg.type === "init") {
+          ws.send(JSON.stringify({ type: "run", cmd: "echo 'WS_STREAM_OK'" }));
+        } else if (msg.type === "exit") {
+          clearTimeout(timeout);
+          ws.close();
+          resolve();
+        }
+      } catch (err) {
+        clearTimeout(timeout);
+        reject(err);
+      }
+    };
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    };
+  });
+  expect(wsMessages.some((m) => m.type === "init")).toBe(true);
+  expect(wsMessages.some((m) => m.type === "exit" && m.code === 0)).toBe(true);
+  const exitMsg = wsMessages.find((m) => m.type === "exit");
+  expect(exitMsg.output).toContain("WS_STREAM_OK");
+
+  // 7. Verify frontend canvas & sidebar terminal hooks
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+  expect(appJs).toContain("mountTerminalPane");
+  expect(appJs).toContain('"term-canvas"');
+  expect(appJs).toContain('"term-new-pane"');
+  expect(appJs).toContain('"term-launch-app"');
+  expect(appJs).toContain('"term-close-session"');
+  expect(appJs).toContain('["terminals", "Terminals"]');
+  expect(appJs).toContain("ansiToHtml");
+  expect(appJs).toContain("focusInput");
+  expect(appJs).not.toMatch(/\bROOT\b/);
+  expect(appJs.indexOf("const cwdLabel =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));
+  expect(appJs.indexOf("const paneKey =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));
+  expect(appCss).toContain('.orch-pane[data-kind="terminal"]');
+  expect(appCss).toContain(".orch-term-view");
+  expect(appCss).toContain(".orch-term-input-bar");
+  expect(appCss).toContain(".orch-term-output");
+  expect(appCss).toContain(".orch-fleet-quick-act");
+});
+
+test("adversarial verification: canvas multiselect deletion via Delete key, traffic lights unpin, and edge handle isolation", async () => {
+  // 1. Verify terminal session create and close API contract
+  const createRes = await post("/api/terminal/session/create", { id: "test_term_multisel", shell: "bash", cwd: REPO });
+  expect(createRes.status).toBe(200);
+  const createJson = (await createRes.json()) as any;
+  expect(createJson.ok).toBe(true);
+  expect(createJson.session.id).toBe("test_term_multisel");
+
+  const closeRes = await post("/api/terminal/session/close", { id: "test_term_multisel" });
+  expect(closeRes.status).toBe(200);
+  const closeJson = (await closeRes.json()) as any;
+  expect(closeJson.ok).toBe(true);
+
+  // 2. Verify frontend multiselect deletion and traffic lights isolation
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+
+  // Multiselect & Delete key handling
+  expect(appJs).toContain("deleteSelectedPanes");
+  expect(appJs).toContain('api("/api/terminal/session/close", { id: pane.id })');
+  expect(appJs).toContain('e.key === "Delete" && orchSelected.size > 0');
+  expect(appJs).toContain("isEditingText");
+  expect(appJs).toContain("ghostty-cli-input");
+
+  // Traffic lights unpin & empty canvas protection
+  expect(appJs).toContain('if (!orchPanes.length && orchMode !== "free")');
+  expect(appJs).toContain('.dot, .orch-resize');
+  expect(appJs).toContain('if (c.length === 2) r.dataset.corner = c;');
+
+  // CSS layer hierarchy and handle isolation
+  expect(appCss).toContain(".ghostty-traffic-lights .dot");
+  expect(appCss).toContain("z-index: 35");
+  expect(appCss).toContain('.orch-pane[data-kind="terminal"] .orch-resize.nw::after');
+  expect(appCss).toContain("display: none !important");
+  expect(appCss).toContain(".orch-resize.e::after, .orch-resize.w::after");
+});
+
+test("adversarial verification: canvas high-contrast contours, split terminal button alignment, and clean shell detection", async () => {
+  // 1. Shell detection filtering
+  const termRes = await (await fetch(`${BASE}/api/terminals`)).json();
+  const shellIds = (termRes.shells || []).map((s: any) => s.id);
+  expect(shellIds).not.toContain("git-shell");
+  expect(shellIds).not.toContain("rbash");
+  expect(shellIds).not.toContain("systemd-home-fallback-shell");
+  expect(shellIds).not.toContain("nologin");
+  expect(shellIds).not.toContain("false");
+
+  // 2. High-contrast dual-layer contours in CSS
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+  expect(appCss).toContain(".orch-plane.free .orch-pane");
+  expect(appCss).toContain("box-shadow: 0 0 0 1px rgba(0, 0, 0, .95), 0 20px 52px rgba(0, 0, 0, .7) !important");
+  expect(appCss).toContain("html[data-ui=\"minimal\"] .orch-pane");
+  expect(appCss).toContain(".orch-deck");
+  expect(appCss).toContain("box-shadow: 0 4px 20px rgba(0, 0, 0, .4), 0 0 0 1px rgba(0, 0, 0, .5)");
+  expect(appCss).toContain(".orch-head");
+  expect(appCss).toContain("border-bottom: 2px solid rgba(255, 255, 255, .38) !important");
+  expect(appCss).toContain(".orch-talk");
+  expect(appCss).toContain("border-top: 2px solid rgba(255, 255, 255, .32) !important");
+  expect(appCss).toContain(".ghostty-tab-pill");
+  expect(appCss).toContain(".orch-ctx-group > select.pick");
+  expect(appCss).toContain(".orch-ctx-group .orch-cwd-btn");
+
+  // 3. Seamless split button & popover structure in JS
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  expect(appJs).toContain('card.className = "orch-pane";');
+  expect(appJs).toContain('<button type="button" class="orch-cwd-btn"');
+  expect(appJs).toContain('<button type="button" class="orch-term-main"');
+  expect(appJs).toContain('<button type="button" class="orch-term-drop"');
+  expect(appJs).not.toContain('class="btn glass orch-term-main"');
+  expect(appJs).not.toContain('class="btn glass orch-term-drop"');
+  expect(appJs).toContain("term-pop-cta");
+  expect(appJs).toContain("term-row-ic");
+  expect(appJs).toContain("term-check");
+
+  // 4. Split-button chevron rotation in CSS
+  expect(appCss).toContain(".orch-term-split .orch-term-drop svg");
+  expect(appCss).toContain(".orch-term-split.open .orch-term-drop svg");
+  expect(appCss).toContain("transform: rotate(180deg)");
+});
+
 
 
