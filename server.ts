@@ -457,15 +457,25 @@ async function open(b: any) {
   return typeof s === "string" ? s : openIn(s.a, String(b.via), s.cwd, s.session);
 }
 // What a canvas terminal pane runs: an agent session's TUI (task/key), a new agent TUI (agent [+ prompt]), or a shell.
+// An agent runs inside the user's shell, like typing it in Ghostty: when it exits (Ctrl+C, /exit, an error) the pane
+// is a shell prompt in the same folder, ready for the next command. A note, if any, prints first.
+const shq = (x: string) => `'${x.replaceAll("'", `'\\''`)}'`;
+function inShell(argv: string[], note = "") {
+  const sh = shellPath();
+  const pre = note ? `printf '\\033[2m%s\\033[0m\\n' ${shq(note)}; ` : "";
+  return [sh, "-ic", `${pre}${argv.length ? `${argv.map(shq).join(" ")}; ` : ""}exec ${shq(sh)} -i`];
+}
 async function ptySpec(q: URLSearchParams) {
   if (q.has("task") || q.has("key")) {
     const s = await sessionOf({ task: q.get("task") ?? undefined, key: q.get("key") ?? undefined });
     if (typeof s === "string") return s;
     if (!s.session) return "this task has no session to resume";
     if (sessionBusy(s.session)) return "this session is running (task or another pane)";
-    if (tuiResumes(s.a) && !sessionStarted(s.session)) return "this conversation's transcript is gone (Claude Code deletes them after 30 days), so it can't be resumed";
+    // Nothing to resume (Claude Code deletes transcripts after 30 days): a shell in its folder, saying why.
+    if (tuiResumes(s.a) && !sessionStarted(s.session))
+      return { argv: inShell([], "This conversation's transcript is gone (Claude Code deletes them after 30 days). Start a new one: claude"), cwd: s.cwd, title: s.a.name };
     const argv = agentArgv(s.a, s.session);
-    return typeof argv === "string" ? argv : { argv: withCanvas(s.a, argv), cwd: s.cwd, title: s.a.name, session: s.session };
+    return typeof argv === "string" ? argv : { argv: inShell(withCanvas(s.a, argv)), cwd: s.cwd, title: s.a.name, session: s.session };
   }
   if (q.has("agent")) {
     const a = loadAgents(import.meta.dir).find((x) => x.id === q.get("agent"));
@@ -479,7 +489,7 @@ async function ptySpec(q: URLSearchParams) {
     const ms = models(a), model = ms.find((m) => m.id === q.get("model"))?.id ?? "";
     const effort = (ms.find((m) => m.id === model)?.efforts ?? efforts(a)).includes(q.get("effort") ?? "") ? q.get("effort")! : "";
     const argv = sid && !q.has("fresh") && sessionStarted(sid) ? agentArgv(a, sid) : tuiArgv(a, sid, q.has("fresh") ? prompt : "", model, effort);
-    return typeof argv === "string" ? argv : { argv: withCanvas(a, argv), cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid };
+    return typeof argv === "string" ? argv : { argv: inShell(withCanvas(a, argv)), cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid };
   }
   const sh = shellPath(q.get("shell") ?? undefined);
   return { argv: [sh], cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: basename(sh) };
