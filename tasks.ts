@@ -535,6 +535,7 @@ const ptys = new Map<string, Pty>();
 const TAIL = 512_000;
 // A headless copy of each terminal (Ghostty's VT core, the one the pane renders with), so another agent can read what a
 // pane shows: TUIs redraw in place, so the raw output stream says little.
+const GHOSTTY_TERM = ["/usr/share/terminfo/x/xterm-ghostty", `${homedir()}/.terminfo/x/xterm-ghostty`].some(existsSync) ? "xterm-ghostty" : "xterm-256color";
 const vt = await Ghostty.load(`${import.meta.dir}/node_modules/ghostty-web/ghostty-vt.wasm`).catch(() => null);
 
 // A known shell (by id or path) or the user's default; a cwd that exists, or the fallback.
@@ -585,7 +586,9 @@ export function openPty(id: string, argv: string[], cwd: string, cols: number, r
   t.proc = Bun.spawn(argv, {
     // Without Claude Code's own markers: Overlook started from inside a claude session would make the TUI a "child" (no transcript).
     // OVERLOOK_PANE/OVERLOOK_TOKEN: who this pane is, for the `overlook` command (bin/overlook) its agent can run.
-    cwd, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", CLAUDECODE: undefined, CLAUDE_CODE_CHILD_SESSION: undefined, CLAUDE_CODE_ENTRYPOINT: undefined,
+    // The pane runs Ghostty's own terminal core, so it says so (TERM=xterm-ghostty when that terminfo is installed):
+    // shell configs that check for Ghostty (a fastfetch greeting, keys) behave as in the real one.
+    cwd, env: { ...process.env, TERM: GHOSTTY_TERM, ...(GHOSTTY_TERM === "xterm-ghostty" ? { TERM_PROGRAM: "ghostty" } : {}), COLORTERM: "truecolor", CLAUDECODE: undefined, CLAUDE_CODE_CHILD_SESSION: undefined, CLAUDE_CODE_ENTRYPOINT: undefined,
       OVERLOOK_PANE: id, OVERLOOK_TOKEN: t.token, ...env },
     terminal: { cols, rows, data: (_, d) => emit(dec.decode(d, { stream: true })) },
   });

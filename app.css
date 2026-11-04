@@ -1940,17 +1940,12 @@ body.canvas-full .orch-work { gap: 0; }
 /* empty canvas: just the hint over the dot grid */
 .orch-empty { background: none !important; border: 0 !important; box-shadow: none !important; }
 
-/* A terminal card is just the terminal: no frame, no fixed title bar. Its title bar (traffic lights, title, actions —
-   and the handle to drag it) floats above it while the pointer is over the card, so it never takes a terminal row. */
+/* A terminal card is just the terminal: no frame, no title bar. */
 .orch-pane[data-kind="terminal"] { border-color: transparent; border-radius: 8px; box-shadow: 0 12px 34px rgba(0, 0, 0, .4); }
 .orch-pane[data-kind="terminal"].active { border-color: transparent; box-shadow: 0 16px 44px rgba(0, 0, 0, .5); }
 .orch-plane.free .orch-pane[data-kind="terminal"].selected { border-color: var(--accent); }
-.orch-pane[data-kind="terminal"] > .orch-head {
-  position: absolute; left: 0; right: 0; z-index: 5; height: 26px; border-radius: 8px 8px 0 0;
-  background: color-mix(in srgb, var(--win-bg) 80%, #fff); opacity: 0; pointer-events: none; transition: opacity .12s;
-}
-.orch-plane.free .orch-pane[data-kind="terminal"] > .orch-head { bottom: 100%; }        /* above the card, on the canvas */
-.orch-plane:not(.free) .orch-pane[data-kind="terminal"] > .orch-head { top: 0; }        /* split: over its first row */
-.orch-pane[data-kind="terminal"]:hover > .orch-head { opacity: 1; pointer-events: auto; }
-.orch-pane[data-kind="terminal"] .orch-term-view { border-radius: 8px; }
-.orch-pane[data-kind="terminal"].collapsed > .orch-head { position: static; opacity: 1; pointer-events: auto; border-radius: 8px; }
+/* No title bar at all, like Ghostty under Hyprland: Alt+drag moves it, its edges resize it, `exit` closes it,
+   Ctrl+Alt+W / Enter close / maximize it. 95% opaque over a blur of the canvas, as the Ghostty window over the desktop. */
+.orch-pane[data-kind="terminal"] > .orch-head { display: none; }
+.orch-pane[data-kind="terminal"] { border-radius: 12px; backdrop-filter: blur(18px); background: color-mix(in srgb, var(--win-bg) 92%, transparent); }
+.orch-pane[data-kind="terminal"] .orch-term-view { border-radius: 12px; overflow: hidden; padding: 10px 12px; caret-color: transparent; opacity: .95; background: transparent !important; }

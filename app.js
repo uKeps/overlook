@@ -814,7 +814,12 @@ function termConnect(st, p) {
   ws.onclose = async (e) => {
     if (st.ws !== ws || !terms.has(p.id)) return;
     st.ws = null;
-    if (e.code === 4001) { st.dead = true; return note("process ended · press Enter to start it again"); }
+    // The shell ended (`exit`, Ctrl+D): the card closes, like a terminal window does.
+    if (e.code === 4001) {
+      orchPanes = orchPanes.filter((x) => !(x.kind === "terminal" && x.id === p.id));
+      termClose(p.id); saveCanvas(); orchSigs.clear(); agentsBody();
+      return;
+    }
     // A drop after it worked (Overlook restarting, the network): reconnect quietly, like a terminal that just keeps
     // going; the server replays the screen (or resumes the session), onto a clean screen.
     if (st.opened && (st.retry ?? 0) < 6) {
@@ -1094,8 +1099,9 @@ function ensurePaneRect(p, idx = 0) {
     p.x = 24 + col * 580 + (idx > 3 ? (idx - 3) * 36 : 0);
     p.y = 20 + row * 430 + (idx > 3 ? (idx - 3) * 36 : 0);
   }
-  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 640 : 580);
-  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 420 : 430);
+  // A terminal opens at about a Ghostty window's size (~95 columns: a fastfetch greeting fits on one line).
+  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
+  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
   return p;
 }
 function arrangeCanvasPanes() {
@@ -1347,7 +1353,7 @@ function renderMultiChips() {
 }
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
 // before ghostty-web sees the key) without taking keys a shell or TUI uses.
-const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · Z full screen · / this help";
+const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · Z full screen · R reload · / this help · Alt+drag moves a card";
 // Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen); Esc leaves.
 function canvasFull(on = !document.body.classList.contains("canvas-full")) {
   document.body.classList.toggle("canvas-full", on);
@@ -1368,6 +1374,7 @@ window.addEventListener("keydown", (e) => {
     KeyW: () => orchActive && ACTIONS["orch-unpin"]({ dataset: { key: orchActive } }),
     KeyF: () => { if (orchMode === "free") { fitCanvasView(); saveCanvas(); } },
     KeyZ: () => canvasFull(),
+    KeyR: () => location.reload(),
     Slash: () => toast(PANE_KEYS),
   }[e.code];
   const digit = /^Digit([1-9])$/.exec(e.code);
@@ -1515,10 +1522,10 @@ function bindCanvasInteractions(canvas) {
 function bindPaneDragResize(card, p) {
   const head = card.querySelector(".orch-head"), port = card.querySelector(".orch-port");
   if (head) {
-    head.addEventListener("pointerdown", (e) => {
+    const startMove = (e) => {
       if (orchMode !== "free" || orchMax || e.target.closest("button, a, select, input")) return;
       e.preventDefault();
-      try { head.setPointerCapture(e.pointerId); } catch {}
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
       const curKey = paneKey(p);
       if (e.shiftKey || e.metaKey || e.ctrlKey) {
         if (orchSelected.has(curKey)) orchSelected.delete(curKey);
@@ -1570,7 +1577,10 @@ function bindPaneDragResize(card, p) {
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
-    });
+    };
+    head.addEventListener("pointerdown", startMove);
+    // Alt+drag moves a card from anywhere, like a window manager: a bare terminal has no title bar to grab.
+    card.addEventListener("pointerdown", (e) => { if (e.altKey && e.button === 0) { e.stopPropagation(); startMove(e); } }, true);
   }
   // Invisible edges and corners: only the cursor says "resize" (no highlight, no tooltip).
   ["nw", "ne", "sw", "se", "n", "s", "e", "w"].forEach((c) => {
