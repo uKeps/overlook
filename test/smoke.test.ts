@@ -10,7 +10,9 @@ const ROOT = mkdtempSync(`${tmpdir()}/overlook-`);
 const VAULT = `${ROOT}/example-vault`;
 const PORT = 4799;
 const BASE = `http://127.0.0.1:${PORT}`;
-const ENV = { ...process.env, VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
+// Stand-ins for the desktop terminals: "Open terminal" must not pop a real window (in a folder this test deletes) on every run.
+const FAKEBIN = `${ROOT}/fakebin`;
+const ENV = { ...process.env, PATH: `${FAKEBIN}:${process.env.PATH}`, DEFAULT_TERMINAL: "ghostty", TERMINAL_FALLBACK: "kitty", VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
 const FAKE = "http://127.0.0.1:4798";
 const TODAY = new Date().toLocaleDateString("sv");
 let server: ReturnType<typeof Bun.spawn>;
@@ -24,6 +26,8 @@ beforeAll(async () => {
   const files = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: REPO }).stdout.toString().split("\0").filter(Boolean);
   for (const f of files) if (existsSync(`${REPO}/${f}`)) { mkdirSync(dirname(`${ROOT}/${f}`), { recursive: true }); copyFileSync(`${REPO}/${f}`, `${ROOT}/${f}`); }
   if (existsSync(`${REPO}/node_modules`)) symlinkSync(`${REPO}/node_modules`, `${ROOT}/node_modules`);
+  mkdirSync(FAKEBIN);
+  for (const t of ["ghostty", "kitty"]) writeFileSync(`${FAKEBIN}/${t}`, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   writeFileSync(`${ROOT}/agents.json`, JSON.stringify([
     { id: "echo", name: "Echo", process: "echo", run: ["echo", "got", "{prompt}", "--model", "{model}", "--effort", "{effort}"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" },
     { id: "bare", name: "Bare", run: ["echo", "got", "{prompt}", "--model", "{model}"] },
@@ -94,7 +98,7 @@ test("other sites can't read the vault or open a terminal", async () => {
   expect((await fetch(`${BASE}/api`, { headers: { Origin: BASE } })).status).toBe(200);
   // Browsers let any page open a WebSocket to localhost: the Origin is the only thing that tells them apart.
   const opened = await new Promise<boolean>((res) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/terminal?id=evil_probe&shell=bash`, { headers: { Origin: "http://evil.example" } } as any);
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=evil_probe&shell=bash`, { headers: { Origin: "http://evil.example" } } as any);
     ws.onopen = () => { ws.close(); res(true); };
     ws.onerror = ws.onclose = () => res(false);
   });
@@ -748,6 +752,13 @@ test("quota error detection across CLI stream-json, raw JSON, stderr, Claude CLI
   expect(ccTask.ok).toBe(false);
   expect(ccTask.quota?.exhausted).toBe(true);
   expect(ccTask.quota?.resetsIn).toBe("1h 30m");
+  // An agent that merely talks about a 429 (and succeeds) is not out of quota.
+  // A prompt is passed as text: "$&" and "$$" are not replacement patterns.
+  const dollars = await finished(await run("echo", "price $$5 and $& sign"));
+  expect(dollars.events.map((e: any) => e.txt).join("\n")).toContain("got price $$5 and $& sign");
+  const talky = await finished(await run("echo", "fix the HTTP 429 retry, it resets in 5m"));
+  expect(talky.ok).toBe(true);
+  expect(talky.quota).toBeUndefined();
 
   // 5. OpenAI API 429 quota detection
   const apiTask = await finished(await run("fake-openai", "trigger-quota"));
@@ -1578,9 +1589,7 @@ test("adversarial verification: floating fleet sidebar, extended canvas panes, 8
   const appCss = readFileSync(`${ROOT}/app.css`, "utf8");
 
   // 1. Assert required styles and structure for minimalist toolbar and floating fleet
-  expect(appCss).toContain(".orch-cluster-nav");
   expect(appCss).toContain(".orch-cluster-prompt");
-  expect(appCss).toContain(".orch-cluster-act");
   expect(appCss).toContain(".orch-fleet-wrap");
   expect(appCss).toContain(".orch-fleet-wrap.float:is(:hover, :focus-within, .open) .orch-fleet");
   expect(appCss).toContain(".orch-fleet-head");
@@ -1724,146 +1733,82 @@ test("adversarial verification: terminal & shell launcher, emulator detection, f
   expect(cfg.fallbackTerminal).toBe("kitty");
   expect(cfg.defaultShell).toBe("bash");
 
-  // 6. Frontend assets contain split-button, popover, and state hooks
+  // 6. Shell and emulator choice live in Settings; canvas terminals use the chosen shell
   const appJs = readFileSync(`${REPO}/app.js`, "utf8");
-  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
-  expect(appCss).toContain(".orch-term-split");
-  expect(appCss).toContain(".term-pop");
-  expect(appCss).toContain(".orch-term-main");
-  expect(appJs).toContain('"term-quick"');
-  expect(appJs).toContain('"term-menu-toggle"');
   expect(appJs).toContain("loadTerminals");
-  expect(appJs).toContain("paintTermPop");
   expect(appJs).toContain("set-terminal");
 });
 
-test("adversarial verification: embedded canvas terminal, session management, cd tracking, and WebSocket streaming", async () => {
-  // 1. Session creation via POST /api/terminal/session/create
-  const createRes = await post("/api/terminal/session/create", { shell: "bash", cwd: ROOT, id: "test_term_1" });
-  expect(createRes.status).toBe(200);
-  const createData = await createRes.json();
-  expect(createData.ok).toBe(true);
-  expect(createData.session.id).toBe("test_term_1");
-  expect(createData.session.shell).toBe("bash");
-  expect(createData.session.cwd).toBe(ROOT);
+test("canvas terminal: a real PTY over /ws/pty, only for Overlook's own pages", async () => {
+  const url = `ws://127.0.0.1:${PORT}/ws/pty?id=t_pty&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=90&rows=20`;
+  const upgrade = (u: string, origin: string) => fetch(u.replace("ws:", "http:"), { headers: { origin, upgrade: "websocket", connection: "Upgrade", "sec-websocket-key": btoa("the sample nonce"), /* RFC 6455's example nonce, built here so no key-like literal sits in the source */ "sec-websocket-version": "13" } });
+  // Browsers let any site open a WebSocket to localhost: a foreign or missing Origin gets nothing.
+  for (const origin of ["http://evil.example", ""]) expect((await upgrade(url, origin)).status).toBe(403);
+  // An agent without a "{terminal}" opener has no TUI to run.
+  expect((await upgrade(url.replace("shell=bash", "agent=echo"), BASE)).status).toBe(400);
 
-  // 2. GET /api/terminal/sessions lists the created session
-  const listRes = await (await fetch(`${BASE}/api/terminal/sessions`)).json();
-  expect(Array.isArray(listRes.sessions)).toBe(true);
-  expect(listRes.sessions.some((s: any) => s.id === "test_term_1")).toBe(true);
-
-  // 3. POST /api/terminal/session/run runs command and captures output
-  const runRes = await post("/api/terminal/session/run", { id: "test_term_1", cmd: "echo 'OVERLOOK_TERMINAL_EMBEDDED'" });
-  expect(runRes.status).toBe(200);
-  const runData = await runRes.json();
-  expect(runData.ok).toBe(true);
-  expect(runData.code).toBe(0);
-  expect(runData.output).toContain("OVERLOOK_TERMINAL_EMBEDDED");
-
-  // 4. Command changing directory updates session cwd
-  const cdRes = await post("/api/terminal/session/run", { id: "test_term_1", cmd: "cd /tmp && pwd" });
-  expect(cdRes.status).toBe(200);
-  const cdData = await cdRes.json();
-  expect(cdData.ok).toBe(true);
-  expect(cdData.newCwd).toBe("/tmp");
-
-  // 5. POST /api/terminal/session/kill and close
-  const killRes = await post("/api/terminal/session/kill", { id: "test_term_1" });
-  expect(killRes.status).toBe(200);
-
-  const closeRes = await post("/api/terminal/session/close", { id: "test_term_1" });
-  expect(closeRes.status).toBe(200);
-  const afterCloseList = await (await fetch(`${BASE}/api/terminal/sessions`)).json();
-  expect(afterCloseList.sessions.some((s: any) => s.id === "test_term_1")).toBe(false);
-
-  // 6. WebSocket streaming at /ws/terminal
-  const wsUrl = `ws://127.0.0.1:${PORT}/ws/terminal?id=test_term_ws&shell=bash&cwd=${encodeURIComponent(ROOT)}`;
-  const ws = new WebSocket(wsUrl);
-  const wsMessages: any[] = [];
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("WS timeout")), 5000);
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(String(e.data));
-        wsMessages.push(msg);
-        if (msg.type === "init") {
-          ws.send(JSON.stringify({ type: "run", cmd: "echo 'WS_STREAM_OK'" }));
-        } else if (msg.type === "exit") {
-          clearTimeout(timeout);
-          ws.close();
-          resolve();
-        }
-      } catch (err) {
-        clearTimeout(timeout);
-        reject(err);
-      }
-    };
-    ws.onerror = (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    };
+  const ws = new WebSocket(url, { headers: { origin: BASE } } as any);
+  let out = "";
+  // The server closes the socket (4001) when the process exits, so the pane can offer to start it again.
+  const closed = await new Promise<number>((res, rej) => {
+    const t = setTimeout(() => rej(new Error(`timeout: ${out}`)), 8000);
+    ws.onopen = () => ws.send("stty size; tty; exit\r");
+    ws.onmessage = (e) => { out += e.data; };
+    ws.onclose = (e) => { clearTimeout(t); res(e.code); };
+    ws.onerror = rej;
   });
-  expect(wsMessages.some((m) => m.type === "init")).toBe(true);
-  expect(wsMessages.some((m) => m.type === "exit" && m.code === 0)).toBe(true);
-  const exitMsg = wsMessages.find((m) => m.type === "exit");
-  expect(exitMsg.output).toContain("WS_STREAM_OK");
+  expect(closed).toBe(4001);
+  expect(out).toContain("process exited");
+  expect(out).toContain("20 90");
+  expect(out).toMatch(/\/dev\/pts\/\d+/);
+  await Bun.sleep(100);
+  expect((await (await fetch(`${BASE}/api/pty`)).json()).sessions.some((x: any) => x.id === "t_pty")).toBe(false); // exited + unwatched: reaped
 
-  // 7. Verify frontend canvas & sidebar terminal hooks
-  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
-  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
-  expect(appJs).toContain("mountTerminalPane");
-  expect(appJs).toContain('"term-canvas"');
-  expect(appJs).toContain('"term-new-pane"');
-  expect(appJs).toContain('"term-launch-app"');
-  expect(appJs).toContain('"term-close-session"');
-  expect(appJs).toContain('["terminals", "Terminals"]');
-  expect(appJs).toContain("ansiToHtml");
-  expect(appJs).toContain("focusInput");
-  expect(appJs).not.toMatch(/\bROOT\b/);
-  expect(appJs.indexOf("const cwdLabel =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));
-  expect(appJs.indexOf("const paneKey =")).toBeLessThan(appJs.indexOf("function mountTerminalPane"));
-  expect(appCss).toContain('.orch-pane[data-kind="terminal"]');
-  expect(appCss).toContain(".orch-term-view");
-  expect(appCss).toContain(".orch-term-input-bar");
-  expect(appCss).toContain(".orch-term-output");
-  expect(appCss).toContain(".orch-fleet-quick-act");
+  // Closing a pane kills a live interactive shell (they ignore SIGTERM; closing the PTY hangs them up).
+  const live = new WebSocket(url.replace("t_pty", "t_live"), { headers: { origin: BASE } } as any);
+  let pidOut = "";
+  const pid = await new Promise<number>((res, rej) => {
+    const t = setTimeout(() => rej(new Error(`timeout: ${pidOut}`)), 8000);
+    live.onopen = () => live.send("echo PID=$$\r");
+    live.onmessage = (e) => { pidOut += e.data; const m = pidOut.match(/PID=(\d+)/); if (m) { clearTimeout(t); res(Number(m[1])); } };
+  });
+  live.close();
+  expect(await (await post("/api/pty/close", { id: "t_live" })).json()).toEqual({ ok: true });
+  await Bun.sleep(500);
+  expect(() => process.kill(pid, 0)).toThrow();
+
+  // An agent session's TUI is its "{terminal}" opener minus the terminal; a new one is the bare CLI plus the first prompt.
+  const { agentArgv, tuiArgv, tuiOk, tuiResumes } = await import("../tasks");
+  const sh = Bun.which("sh");
+  const like = { id: "c", name: "C", run: ["sh"], open: { Terminal: ["{terminal}", "sh", "--resume", "{session}"] }, tui: ["sh", "--session-id", "{session}", "{prompt}"] };
+  const agy = { id: "a", name: "A", run: ["sh"], tui: ["sh", "-i", "{prompt}"] };
+  expect([tuiOk(like), tuiResumes(like), tuiOk(agy), tuiResumes(agy)]).toEqual([true, true, true, false]);
+  expect(agentArgv(like, "abc")).toEqual([sh, "--resume", "abc"]);
+  expect(tuiArgv(like, "abc", "hi")).toEqual([sh, "--session-id", "abc", "hi"]);
+  expect(tuiArgv(agy, "", "hi")).toEqual([sh, "-i", "hi"]);
+  expect(tuiArgv(agy, "", "")).toEqual([sh]); // no prompt: the flag goes too
+  expect(tuiArgv(agy, "", "- fix the list")).toEqual([sh, "-i", " - fix the list"]); // a markdown list is not a flag
+  const picky = { id: "p", name: "P", run: ["sh"], tui: ["sh", "--model", "{model}", "--effort", "{effort}", "{prompt}"] };
+  expect(tuiArgv(picky, "", "hi", "opus", "")).toEqual([sh, "--model", "opus", "hi"]); // an empty effort drops its flag
+  expect(tuiOk({ id: "e", name: "E", run: ["echo"] })).toBe(false);
 });
 
 test("adversarial verification: canvas multiselect deletion via Delete key, traffic lights unpin, and edge handle isolation", async () => {
-  // 1. Verify terminal session create and close API contract
-  const createRes = await post("/api/terminal/session/create", { id: "test_term_multisel", shell: "bash", cwd: REPO });
-  expect(createRes.status).toBe(200);
-  const createJson = (await createRes.json()) as any;
-  expect(createJson.ok).toBe(true);
-  expect(createJson.session.id).toBe("test_term_multisel");
-
-  const closeRes = await post("/api/terminal/session/close", { id: "test_term_multisel" });
-  expect(closeRes.status).toBe(200);
-  const closeJson = (await closeRes.json()) as any;
-  expect(closeJson.ok).toBe(true);
-
   // 2. Verify frontend multiselect deletion and traffic lights isolation
   const appJs = readFileSync(`${REPO}/app.js`, "utf8");
   const appCss = readFileSync(`${REPO}/app.css`, "utf8");
 
   // Multiselect & Delete key handling
   expect(appJs).toContain("deleteSelectedPanes");
-  expect(appJs).toContain('api("/api/terminal/session/close", { id: pane.id })');
   expect(appJs).toContain('e.key === "Delete" && orchSelected.size > 0');
-  expect(appJs).toContain("isEditingText");
-  expect(appJs).toContain("ghostty-cli-input");
 
   // Traffic lights unpin & empty canvas protection
   expect(appJs).toContain('if (!orchPanes.length && orchMode !== "free")');
-  expect(appJs).toContain('.dot, .orch-resize');
-  expect(appJs).toContain('if (c.length === 2) r.dataset.corner = c;');
-
-  // CSS layer hierarchy and handle isolation
-  expect(appCss).toContain(".ghostty-traffic-lights .dot");
-  expect(appCss).toContain("z-index: 35");
-  expect(appCss).toContain('.orch-pane[data-kind="terminal"] .orch-resize.nw::after');
-  expect(appCss).toContain("display: none !important");
-  expect(appCss).toContain(".orch-resize.e::after, .orch-resize.w::after");
+  // Window chrome: traffic lights close/minimize/maximize, and resize handles on all 8 edges and corners
+  expect(appJs).toContain('data-act="orch-unpin"');
+  expect(appJs).toContain('data-act="orch-collapse"');
+  expect(appJs).toContain('["nw", "ne", "sw", "se", "n", "s", "e", "w"]');
+  expect(appCss).toContain(".orch-plane.free .orch-resize { display: block; }");
 });
 
 test("adversarial verification: canvas high-contrast contours, split terminal button alignment, and clean shell detection", async () => {
@@ -1879,34 +1824,19 @@ test("adversarial verification: canvas high-contrast contours, split terminal bu
   // 2. High-contrast dual-layer contours in CSS
   const appCss = readFileSync(`${REPO}/app.css`, "utf8");
   expect(appCss).toContain(".orch-plane.free .orch-pane");
-  expect(appCss).toContain("box-shadow: 0 0 0 1px rgba(0, 0, 0, .95), 0 20px 52px rgba(0, 0, 0, .7) !important");
-  expect(appCss).toContain("html[data-ui=\"minimal\"] .orch-pane");
   expect(appCss).toContain(".orch-deck");
-  expect(appCss).toContain("box-shadow: 0 4px 20px rgba(0, 0, 0, .4), 0 0 0 1px rgba(0, 0, 0, .5)");
   expect(appCss).toContain(".orch-head");
-  expect(appCss).toContain("border-bottom: 2px solid rgba(255, 255, 255, .38) !important");
   expect(appCss).toContain(".orch-talk");
-  expect(appCss).toContain("border-top: 2px solid rgba(255, 255, 255, .32) !important");
-  expect(appCss).toContain(".ghostty-tab-pill");
   expect(appCss).toContain(".orch-ctx-group > select.pick");
   expect(appCss).toContain(".orch-ctx-group .orch-cwd-btn");
 
-  // 3. Seamless split button & popover structure in JS
+  // 3. One command bar (layout · prompt with agent and folder · options · Run) and an icon HUD
   const appJs = readFileSync(`${REPO}/app.js`, "utf8");
   expect(appJs).toContain('card.className = "orch-pane";');
   expect(appJs).toContain('<button type="button" class="orch-cwd-btn"');
-  expect(appJs).toContain('<button type="button" class="orch-term-main"');
-  expect(appJs).toContain('<button type="button" class="orch-term-drop"');
-  expect(appJs).not.toContain('class="btn glass orch-term-main"');
-  expect(appJs).not.toContain('class="btn glass orch-term-drop"');
-  expect(appJs).toContain("term-pop-cta");
-  expect(appJs).toContain("term-row-ic");
-  expect(appJs).toContain("term-check");
-
-  // 4. Split-button chevron rotation in CSS
-  expect(appCss).toContain(".orch-term-split .orch-term-drop svg");
-  expect(appCss).toContain(".orch-term-split.open .orch-term-drop svg");
-  expect(appCss).toContain("transform: rotate(180deg)");
+  expect(appJs).toContain('data-act="orch-deck-toggle"');
+  expect(appJs).toContain('class="hud-btn');
+  expect(appCss).toContain(".hud-btn");
 });
 
 
