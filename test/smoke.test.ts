@@ -12,7 +12,8 @@ const PORT = 4799;
 const BASE = `http://127.0.0.1:${PORT}`;
 // Stand-ins for the desktop terminals: "Open terminal" must not pop a real window (in a folder this test deletes) on every run.
 const FAKEBIN = `${ROOT}/fakebin`;
-const ENV = { ...process.env, PATH: `${FAKEBIN}:${process.env.PATH}`, DEFAULT_TERMINAL: "ghostty", TERMINAL_FALLBACK: "kitty", VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
+// HISTFILE: the shells these tests open must not write into the user's shell history.
+const ENV = { ...process.env, HISTFILE: "/dev/null", PATH: `${FAKEBIN}:${process.env.PATH}`, DEFAULT_TERMINAL: "ghostty", TERMINAL_FALLBACK: "kitty", VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
 const FAKE = "http://127.0.0.1:4798";
 const TODAY = new Date().toLocaleDateString("sv");
 let server: ReturnType<typeof Bun.spawn>;
