@@ -570,10 +570,12 @@ export const sessionStarted = (sid: string) => { try { return [...new Bun.Glob(`
 export function openPty(id: string, argv: string[], cwd: string, cols: number, rows: number, title: string, session = "", env: Record<string, string> = {}): Pty {
   const old = ptys.get(id);
   if (old && old.code === undefined) return old;
+  old?.screen?.free();
   const dec = new TextDecoder();
   const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set(), token: crypto.randomUUID(), screen: vt?.createTerminal(cols, rows) } as unknown as Pty;
   const emit = (s: string) => {
     t.tail += s;
+    // ponytail: every chunk is parsed twice (pane + mirror); fine for agent TUIs, build it lazily if a flood ever shows up.
     if (t.screen) { t.screen.write(s); while (t.screen.hasResponse()) t.screen.readResponse(); } // the real pane answers queries
     // Trimmed in batches (not a 512KB copy per chunk), at a line start, with attributes reset for the replay.
     // ponytail: a line start can still sit inside a TUI's escape sequence (one garbled cell at worst).
@@ -591,7 +593,7 @@ export function openPty(id: string, argv: string[], cwd: string, cols: number, r
     t.code = code;
     emit(`\r\n\x1b[2m[process exited with code ${code}]\x1b[0m\r\n`);
     for (const end of t.ends) end(); // the panes' sockets close, so they offer to start it again
-    if (!t.subs.size && ptys.get(id) === t) ptys.delete(id); // nobody watching: reopening the pane respawns it anyway
+    if (!t.subs.size && ptys.get(id) === t) { ptys.delete(id); t.screen?.free(); t.screen = undefined; } // nobody watching: reopening the pane respawns it anyway
   });
   ptys.set(id, t);
   return t;
@@ -630,19 +632,32 @@ export function screenText(t: Pty, max = 60) {
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
 export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task.";
-const wires = new Set<string>(), names = new Map<string, string>(), sent = new Map<string, number[]>();
+// Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
+// of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
+const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; at: number }>(), sent = new Map<string, number[]>();
 export const handoffs: { from: string; to: string; at: number }[] = [];
 const pair = (a: string, b: string) => [a, b].sort().join("|");
-export function setWires(list: unknown, titles: unknown) {
-  wires.clear(); names.clear();
-  if (Array.isArray(list)) for (const w of list) if (Array.isArray(w) && typeof w[0] === "string" && typeof w[1] === "string") wires.add(pair(w[0], w[1]));
-  if (titles && typeof titles === "object") for (const [k, v] of Object.entries(titles)) if (typeof v === "string") names.set(k, v.slice(0, 80));
+const live = () => [...canvases.values()].filter((c) => Date.now() - c.at < 90_000);
+export function setWires(client: unknown, list: unknown, titles: unknown) {
+  if (typeof client !== "string" || !/^[\w-]{1,64}$/.test(client)) return false;
+  const c = { wires: new Set<string>(), names: new Map<string, string>(), at: Date.now() };
+  if (Array.isArray(list)) for (const w of list) if (Array.isArray(w) && typeof w[0] === "string" && typeof w[1] === "string") c.wires.add(pair(w[0], w[1]));
+  if (titles && typeof titles === "object") for (const [k, v] of Object.entries(titles)) if (typeof v === "string") c.names.set(k, v.slice(0, 80));
+  canvases.set(client, c);
+  return true;
 }
-const nameOf = (t: Pty) => names.get(t.id) || t.title;
-export const wireCount = () => wires.size;
+const nameOf = (t: Pty) => live().map((c) => c.names.get(t.id)).find(Boolean) || t.title;
 const callerOf = (from: unknown, token: unknown) => { const t = typeof from === "string" ? ptys.get(from) : undefined; return t && typeof token === "string" && token === t.token ? t : null; };
-const peersOf = (me: Pty) => [...ptys.values()].filter((p) => p !== me && wires.has(pair(me.id, p.id)));
-const findPeer = (me: Pty, to: string) => { const ps = peersOf(me), q = to.toLowerCase(); return ps.find((p) => p.id === to) ?? ps.find((p) => nameOf(p).toLowerCase().includes(q)); };
+const peersOf = (me: Pty) => { const ws = live(); return [...ptys.values()].filter((p) => p !== me && ws.some((c) => c.wires.has(pair(me.id, p.id)))); };
+// A card by id, or by a part of its name that only one wired card has (a message must not land on a guess).
+function findPeer(me: Pty, to: string): Pty | string {
+  if (!to.trim()) return "say which card (overlook peers lists them)";
+  const ps = peersOf(me), q = to.toLowerCase(), byId = ps.find((p) => p.id === to);
+  if (byId) return byId;
+  const hits = ps.filter((p) => nameOf(p).toLowerCase().includes(q));
+  return hits.length === 1 ? hits[0] : hits.length ? `"${to}" matches ${hits.length} cards (${hits.map((p) => `${p.id} = ${nameOf(p)}`).join(", ")}): use the card id`
+    : `no card wired to this one matches "${to}" (overlook peers lists them)`;
+}
 export function ptyPeers(from: unknown, token: unknown) {
   const me = callerOf(from, token);
   return me ? peersOf(me).map((p) => ({ id: p.id, name: nameOf(p), running: p.code === undefined })) : "unknown pane or token";
@@ -651,13 +666,13 @@ export function ptyRead(from: unknown, token: unknown, to: unknown, max = 60) {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
   const p = findPeer(me, String(to ?? ""));
-  return p ? { id: p.id, name: nameOf(p), text: screenText(p, Math.min(400, Math.max(5, max))) } : `no card wired to this one matches "${to}" (overlook peers lists them)`;
+  return typeof p === "string" ? p : { id: p.id, name: nameOf(p), text: screenText(p, Math.min(400, Math.max(5, max))) };
 }
 export function ptySend(from: unknown, token: unknown, to: unknown, text: unknown): true | string {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
   const p = findPeer(me, String(to ?? ""));
-  if (!p) return `no card wired to this one matches "${to}" (overlook peers lists them)`;
+  if (typeof p === "string") return p;
   if (p.code !== undefined) return `${nameOf(p)} is not running`;
   // Plain text only: control characters (escape sequences, Ctrl-C, a carriage return that would submit early) are dropped.
   const clean = String(text ?? "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").trim().slice(0, 8000);
@@ -667,7 +682,9 @@ export function ptySend(from: unknown, token: unknown, to: unknown, text: unknow
   if (recent.length >= 6) return "rate limit: 6 messages a minute to one card; wait or ask the user";
   sent.set(k, [...recent, now]);
   const msg = `[Message from "${nameOf(me)}" (card ${me.id}) on the Overlook canvas; reply with: overlook send ${me.id} "..."]\n${clean}`;
-  p.proc.terminal?.write(p.screen?.hasBracketedPaste() ? `\x1b[200~${msg}\x1b[201~` : msg);
+  // Bracketed paste keeps a multi-line message one prompt; a program that doesn't ask for it would take each newline as
+  // Enter, so it gets the message on one line.
+  p.proc.terminal?.write(p.screen?.hasBracketedPaste() ? `\x1b[200~${msg}\x1b[201~` : msg.replace(/\n+/g, " "));
   setTimeout(() => { if (p.code === undefined) p.proc.terminal?.write("\r"); }, 150);
   handoffs.push({ from: me.id, to: p.id, at: now });
   if (handoffs.length > 50) handoffs.shift();

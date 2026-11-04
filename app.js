@@ -749,15 +749,17 @@ try {
 } catch {}
 // The server only lets terminals talk across wires it knows (agent hand-off): send the terminal↔terminal wires and
 // the cards' names whenever they change.
-let wiresSent = "";
-function syncWires() {
+let wiresSent = "", wiresAt = 0;
+// One id per browser, so the server keeps each open canvas's wires apart (see setWires).
+const CANVAS_CLIENT = (() => { try { let id = localStorage.getItem("overlook.client"); if (!id) localStorage.setItem("overlook.client", (id = crypto.randomUUID())); return id; } catch { return crypto.randomUUID(); } })();
+function syncWires(force) {
   const term = (k) => (k.startsWith("terminal:") ? k.slice(9) : "");
   const wires = orchLinks.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
   const names = Object.fromEntries(orchPanes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
   const body = JSON.stringify({ wires, names });
-  if (body === wiresSent) return;
-  wiresSent = body;
-  api("/api/canvas/wires", { wires, names }).catch(() => { wiresSent = ""; });
+  if (body === wiresSent && !force) return;
+  wiresSent = body; wiresAt = Date.now();
+  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names }).catch(() => { wiresSent = ""; });
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
 const termName = (p) => (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
@@ -908,7 +910,7 @@ async function mountTerminalPane(card, p) {
       st.fit.observeResize();
       st.term.onData((d) => termSend(st, d));
       st.term.onResize(({ cols, rows }) => termSend(st, "\0" + JSON.stringify({ cols, rows })));
-      st.term.onTitleChange((t) => { if (!t) return; st.title = t; const n = st.el.closest(".orch-pane")?.querySelector(".win-title b"); if (n) n.textContent = t; });
+      st.term.onTitleChange((t) => { if (!t) return; st.title = t; const n = st.el.closest(".orch-pane")?.querySelector(".win-title b"); if (n) n.textContent = t; syncWires(); });
     });
   }
   if (st.el.parentNode !== feed) { feed.innerHTML = ""; feed.appendChild(st.el); }
@@ -1140,9 +1142,9 @@ function addPane(item, x, y) {
 let hotWires = new Set();
 async function pollHandoffs() {
   if (!orchLinks.length || !orchPanes.some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
+
+  if (Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
   const r = await api("/api/pty").catch(() => null);
-  // A restarted server forgot the wires: send them again.
-  if (r && r.wires !== new Set(JSON.parse(wiresSent || '{"wires":[]}').wires.map((w) => [...w].sort().join("|"))).size) { wiresSent = ""; syncWires(); }
   const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [`terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
@@ -1192,7 +1194,7 @@ async function linkedContext(key, budget) {
     }
     if (p.kind === "terminal") {
       const txt = termText(p.id);
-      return txt ? `### Screen of terminal "${terms.get(p.id)?.title || (p.run ? runnerName(p.run.agent) : p.shell || "shell")}" (last lines)\n${txt}` : "";
+      return txt ? `### Screen of terminal "${termName(p)}" (last lines)\n${txt}` : "";
     }
     if (p.kind !== "task" && p.kind !== "agent") return "";
     const r = await api(p.kind === "task" ? `/api/task?id=${encodeURIComponent(p.id)}` : `/api/agent?key=${encodeURIComponent(p.id)}`).catch(() => null);
@@ -1202,7 +1204,9 @@ async function linkedContext(key, budget) {
   const each = Math.floor((budget - 140) / Math.max(1, srcs.length));
   const body = parts.filter(Boolean).map((s) => (s.length > each ? `${s.slice(0, each)}…` : s)).join("\n\n");
   // A terminal wired to other terminals can talk to them itself: say how (the ids are what `overlook` takes).
-  const peers = key.startsWith("terminal:") ? orchLinks.filter((l) => l.a === key || l.b === key).map((l) => (l.a === key ? l.b : l.a)).filter((k) => k.startsWith("terminal:")) : [];
+  // (agents told at start, through their `canvas` args, don't need it on every message)
+  const target = orchPanes.find((p) => paneKey(p) === key), knows = S.runners?.find((r) => r.id === target?.run?.agent)?.canvas;
+  const peers = key.startsWith("terminal:") && !knows ? orchLinks.filter((l) => l.a === key || l.b === key).map((l) => (l.a === key ? l.b : l.a)).filter((k) => k.startsWith("terminal:")) : [];
   const how = peers.length ? `You can also talk to the wired terminals yourself: ${peers.map((k) => `"${termName(orchPanes.find((p) => paneKey(p) === k) || { id: k.slice(9) })}" = card ${k.slice(9)}`).join(", ")}. Run \`overlook send <card> "message"\` to hand work to one (it lands there as a prompt), \`overlook read <card>\` to see its screen.\n\n` : "";
   return body || how ? `${body ? `Context from cards linked to this one on the Overlook canvas:\n\n${body}\n\n` : ""}${how}---\n\n` : "";
 }
@@ -2160,7 +2164,7 @@ async function orchSend(p, card) {
     if (p.kind === "terminal") {
       if (!termPrompt(p.id, fullText)) return toast("This terminal is not connected — press Enter in it to reconnect");
       t.value = ""; p.draft = ""; saveCanvas();
-      if (ctx) toast(`Sent with context from ${linkCount(oldKey)} linked card(s)`);
+      if (ctx && linkCount(oldKey)) toast(`Sent with context from ${linkCount(oldKey)} linked card(s)`);
       return;
     }
     if (p.kind === "new") {

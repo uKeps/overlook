@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, wireCount } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -403,7 +403,7 @@ async function services() {
 
 // Agents you can put to work from the Agents page, from agents.json (or the built-in CLIs).
 const runners = () => loadAgents(import.meta.dir).filter((a) => a.run || a.api)
-  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a), tui: tuiOk(a), avatar: avatarVersion(a.id) }));
+  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a), tui: tuiOk(a), canvas: !!a.canvas, avatar: avatarVersion(a.id) }));
 
 // Agent avatars: a picture per agent in avatars/<id>.<ext> (personal, not in git), sent from Settings as a data URL so the
 // JSON-only rule for POSTs still holds. Squared to 256 px with ImageMagick when it's there; otherwise kept as sent.
@@ -675,7 +675,8 @@ async function handle(req: Request, port: number) {
     }
     if (p === "/api/pty/close") return typeof b.id === "string" ? json({ ok: closePty(b.id) }) : new Response("missing id", { status: 400 });
     // Agent hand-off: the canvas sends its wires; a pane (from + its token) lists, reads and messages the panes wired to it.
-    if (p === "/api/canvas/wires") { setWires(b.wires, b.names); return json({ ok: true }); }
+    // Wires are the permission to talk, so only Overlook's own page may set them (Origin = this host), not a program in a pane.
+    if (p === "/api/canvas/wires") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : setWires(b.client, b.wires, b.names) ? json({ ok: true }) : new Response("bad client", { status: 400 });
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
@@ -697,7 +698,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/images") return json(imagesState());
   if (p === "/api/settings") return json(settings());
-  if (p === "/api/pty") return json({ sessions: listPtys(), wires: wireCount(), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
+  if (p === "/api/pty") return json({ sessions: listPtys(), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
   if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {
     const terminals = detectTerminals();
@@ -771,7 +772,7 @@ Bun.serve({
       // spec is null when the PTY was alive at upgrade: attach to it whatever its state since (exited ones show their end).
       // The `overlook` command (bin/) on the PATH, and where to reach this server, for the pane's hand-offs.
       const t = spec === null ? getPty(id) : openPty(id, spec.argv, spec.cwd, cols, rows, spec.title, spec.session,
-        { OVERLOOK_URL: `http://127.0.0.1:${PORT}`, PATH: `${import.meta.dir}/bin:${process.env.PATH ?? ""}` });
+        { OVERLOOK_URL: `http://127.0.0.1:${PORT}`, PATH: `${import.meta.dir}/bin:${dirname(process.execPath)}:${process.env.PATH ?? ""}` }); // bun for bin/overlook's shebang
       if (!t) return ws.close(4000, "gone");
       // The replay stays under the socket's 2 MiB backpressure limit even when every character is 3 UTF-8 bytes (TUI borders).
       if (t.tail) ws.send(t.tail.length > 400_000 ? "\x1b[0m" + t.tail.slice(-400_000) : t.tail);

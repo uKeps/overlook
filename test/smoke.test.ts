@@ -1752,7 +1752,10 @@ test("agent hand-off: a terminal talks to the terminals wired to it, and only to
     throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
   };
   const a = await open("t_ha"), b = await open("t_hb");
-  expect((await post("/api/canvas/wires", { wires: [["t_ha", "t_hb"]], names: { t_ha: "Alpha", t_hb: "Beta" } })).status).toBe(200);
+  // Wires come from Overlook's own page only: a program in a pane (no Origin) can't wire itself to anything.
+  const wire = (body: object, origin = BASE) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify({ client: "test-canvas", ...body }) });
+  expect((await wire({ wires: [["t_ha", "t_hb"]] }, "")).status).toBe(403);
+  expect((await wire({ wires: [["t_ha", "t_hb"]], names: { t_ha: "Alpha", t_hb: "Beta" } })).status).toBe(200);
 
   a.ws.send("overlook peers; overlook send Beta 'echo HANDOFF_$((6*7))'; sleep 1; overlook read Beta 40\r");
   await until(a, /--- Beta \(t_hb\)[\s\S]*HANDOFF_42/); // A read B's screen: B ran what A sent
@@ -1761,7 +1764,7 @@ test("agent hand-off: a terminal talks to the terminals wired to it, and only to
 
   // Only a pane's own token speaks for it; no wire, no talking.
   expect((await post("/api/pty/send", { from: "t_ha", token: "not-the-token", to: "t_hb", text: "x" })).status).toBe(400);
-  await post("/api/canvas/wires", { wires: [], names: {} });
+  await wire({ wires: [], names: {} });
   a.ws.send("overlook send Beta hi\r");
   await until(a, /no card wired to this one matches "Beta"/);
   a.ws.close(); b.ws.close();
