@@ -16,6 +16,7 @@ const I = {
   home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   notes: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
   review: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   graph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.4 6.6l7.2 1M7 8.3l2.2 7.3M16.6 10.1l-5 6"/>',
   agents: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1.5M15 13v1.5"/>',
   services: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
@@ -149,7 +150,7 @@ function topBar() {
 // Items come from Calendar.md (D.calendar) and schedule.json (S.schedule); reviews and daily notes add their own dots.
 // Pinned sits under the top bar; floating shrinks to a pill that opens on hover. The choice is per browser.
 const CAL_KEY = "overlook.calendar", DOCK_KEY = "overlook.dock", UI_KEY = "overlook.ui";
-let uiMode = (() => { try { return localStorage.getItem(UI_KEY) === "minimal" ? "minimal" : "classic"; } catch { return "classic"; } })();
+let uiMode = (() => { try { return localStorage.getItem(UI_KEY) === "classic" ? "classic" : "minimal"; } catch { return "minimal"; } })();
 function setUi(v) {
   uiMode = v === "minimal" ? "minimal" : "classic";
   document.documentElement.dataset.ui = uiMode;
@@ -298,8 +299,8 @@ function suggestions() {
   // No focus picked for today: the first card runs the morning routine, the agent that picks it.
   if (!D.focus?.length) {
     const run = (S?.tasks || []).find((t) => t.routine === "morning" && !t.end);
-    s.push(run ? { cat: "Start the day", ic: "target", title: "The morning routine is picking today's focus", sub: "An agent is reading the vault and writing up to 3 things for today in the daily note.", meta: [["Started", ago(Date.parse(run.start))]], href: `#/t/${run.id}`, action: "See progress" }
-      : { cat: "Start the day", ic: "target", title: "Pick today's focus", sub: "Runs the morning routine: an agent reads the vault and writes up to 3 things for today in the daily note.", meta: [["Takes", "about a minute"]], href: "#/", act: "start-day", action: "Start the day" });
+    s.push(run ? { cat: "Today", ic: "target", title: "The morning routine is picking today's focus", sub: "An agent is reading the vault and writing up to 3 things for today in the daily note.", meta: [["Started", ago(Date.parse(run.start))]], href: `#/t/${run.id}`, action: "See progress" }
+      : { cat: "Today", ic: "target", title: "Pick today's focus", sub: "Runs the morning routine: an agent reads the vault and writes up to 3 things for today in the daily note.", meta: [["Takes", "about a minute"]], href: "#/", act: "start-day", action: "Start the day" });
   }
   for (const f of D.focus || []) { const a = ln(f); s.push({ cat: "Today's focus", ic: "target", title: unlink(f), raw: f, sub: "Picked for today in the daily note.", meta: [["Source", "Daily note"]], href: a ? `#/w/${encodeURIComponent(a)}` : obs(dailyPath()), action: "Open" }); }
   for (const n of due()) s.push({ cat: "Review", ic: "review", title: n.title, sub: "Before opening: do you remember what it is about?", meta: [["Due", n.review_on === D.today ? "today" : `${daysBetween(n.review_on, D.today)} d ago`], ["Interval", `${n.interval} d`]], href: "#/review", action: "Review" });
@@ -331,12 +332,13 @@ function home() {
   SG = suggestions();
   idx = Math.min(idx, SG.length - 1);
   if (uiMode === "minimal") {
+    const need = needsYou() + (D.focus?.length ? 0 : 1), run = runningNow();
     main.innerHTML = `<section class="min-home">
+        <header class="min-hello"><h1>${esc(dayName(D.today, { weekday: "long", day: "numeric", month: "long" }))}</h1>
+          <p>${need ? `${need} ${need === 1 ? "thing needs" : "things need"} you` : "Nothing needs you right now"}${run ? `, ${run} ${run === 1 ? "agent" : "agents"} running` : ""}</p></header>
         <div class="min-queue">
-          <div class="min-qhead"><span>Today's workbench</span><small>${SG.length} ${SG.length === 1 ? "item" : "items"} · ↑↓ or click to preview</small></div>
           <div class="min-rows">${SG.map((s, i) => `<div class="min-row ${i === idx ? "on" : ""}" data-i="${i}">
             <button type="button" class="min-sel" data-act="go" data-i="${i}">
-              <span class="min-idx">${String(i + 1).padStart(2, "0")}</span>
               <span class="min-txt"><b>${emLinks(s.raw || s.title)}</b><small>${esc(s.sub)}</small></span>
               <span class="min-cat">${icon(s.ic, 13)} ${esc(s.cat)}</span>
             </button>
@@ -377,21 +379,21 @@ function place() {
     document.querySelectorAll(".min-row").forEach((r, i) => r.classList.toggle("on", i === idx));
     const st = $("#min-stage");
     if (st && SG[idx]) {
-      const i = idx, s = SG[i], p = pinFor(i), ascii = asciiCards() || !D.pins?.length;
-      st.innerHTML = `<div class="min-art ${ascii ? "card-ascii" : ""}">
+      const i = idx, s = SG[i], p = pinFor(i), ascii = cardArt === "ascii" || !D.pins?.length, showArt = cardArt === "ascii" || !!D.pins?.length;
+      st.innerHTML = `${showArt ? `<div class="min-art ${ascii ? "card-ascii" : ""}">
           ${ascii ? `<ascii-art piece="${scene(s, i)}"></ascii-art>` : `<img src="${art(i)}" alt="">`}
           <div class="min-art-bar">
             ${!ascii && D.pins?.length ? `<button type="button" class="min-pick" data-act="pick-open" data-i="${i}">${icon("image", 13)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}
             <button type="button" class="min-pick" data-act="cycle-art" title="Switch card art (${cardArt})">${ascii ? "Use photo" : "Use ASCII"}</button>
             ${!ascii && p?.link ? `<a class="min-pinlink" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
           </div>
-        </div>
+        </div>` : ""}
         <div class="min-focus">
           <div class="min-focus-top"><span class="tag">${icon(s.ic, 13)} ${esc(s.cat)}</span>
-            <span class="card-idx">${String(i + 1).padStart(2, "0")} / ${String(SG.length).padStart(2, "0")}</span></div>
+            <span class="min-pos">${i + 1} of ${SG.length}</span></div>
           <h2>${emLinks(s.raw || s.title)}</h2>
           <p>${esc(s.sub)}</p>
-          ${s.meta.length ? `<div class="min-meta-list">${s.meta.map(([k, v]) => `<span class="min-meta">${esc(k)}: <b>${esc(v)}</b></span>`).join("")}</div>` : ""}
+          ${s.meta.length ? `<dl class="min-meta-list">${s.meta.map(([k, v]) => `<div class="min-meta"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>` : ""}
           <div class="min-focus-foot">
             ${cta(s, "btn peach", 14)}
             <span class="min-nav"><button type="button" data-act="prev" aria-label="Previous">${icon("l", 14)}</button><button type="button" data-act="next" aria-label="Next">${icon("r", 14)}</button></span>
@@ -437,7 +439,7 @@ function notes() {
   const count = {};
   for (const n of D.notes) count[n.folder] = (count[n.folder] || 0) + 1;
   main.innerHTML = `<div class="ph"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p>
-      <div class="r"><input class="search glass" id="search" placeholder="Search titles and text  /" value="${esc(query)}" autocomplete="off"></div></div>
+      <div class="r"><input class="search glass" id="search" placeholder="Filter notes" value="${esc(query)}" autocomplete="off"></div></div>
     <div class="filters">${[["", "All", D.notes.length], ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])]
       .map(([k, v, c]) => `<button class="fchip ${filter === k ? "on" : ""}" data-act="filter" data-k="${esc(k)}">${esc(v)}<small>${c}</small></button>`).join("")}</div>
     <div class="grid" id="note-grid"></div><div id="text-hits"></div>`;
@@ -631,7 +633,7 @@ function graph() {
     // Labels after the dots, the most linked first (all of them when zoomed in); one that would overlap is skipped.
     const want = hover ? [hover, ...byDeg.filter((n) => n !== hover && near.has(n))] : zoom > 1.8 ? byDeg : byDeg.slice(0, 25);
     const placed = [], k = 1 / Math.min(zoom, 1); // zoomed out, labels keep 12px on screen instead of shrinking with the dots
-    ctx.font = `500 ${12 * k}px Inter, sans-serif`; ctx.lineJoin = "round"; ctx.lineWidth = 3 * k; ctx.strokeStyle = bg;
+    ctx.font = `500 ${12 * k}px "Instrument Sans", system-ui, sans-serif`; ctx.lineJoin = "round"; ctx.lineWidth = 3 * k; ctx.strokeStyle = bg;
     for (const n of want) {
       const t = n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, label = n === hover && n.a ? `${t} · ${n.a}` : t, x = n.x + n.r + 5 * k, y = n.y + 4 * k, w = ctx.measureText(label).width;
       if (placed.some(([px, py, pw]) => x < px + pw + 4 * k && x + w + 4 * k > px && Math.abs(y - py) < 14 * k)) continue;
@@ -2835,6 +2837,78 @@ async function settingsPage() {
 }
 
 // ---------------------------------------------------------------- routes and events
+// ---------------------------------------------------------------- Command bar: "/" or Ctrl/⌘+K from any page
+// One field for notes (title, then text), pages and actions; after Apple Spotlight and the Combobox on 21st.dev.
+const GO = [["", "Home", "home"], ["notes", "Notes", "notes"], ["review", "Review", "review"], ["graph", "Graph", "graph"],
+  ["agents", "Agents", "agents"], ["services", "Services", "services"], ["settings", "Settings", "settings"]];
+const ck = { items: [], sel: 0, timer: 0 };
+function cmdkOpen() {
+  const d = $("#cmdk");
+  if (d.open) return;
+  $("#cmdk-q").value = ""; cmdkFill(""); d.showModal(); $("#cmdk-q").focus();
+}
+function cmdkFill(q) {
+  const terms = fold(q).trim().split(/\s+/).filter((t) => t && !STOP.has(t)), has = (s) => terms.every((t) => fold(s).includes(t));
+  const acts = [{ ic: "spark", title: "Capture a thought", sub: "Action", run: () => ACTIONS.capture() },
+    ...(D.focus?.length ? [] : [{ ic: "target", title: "Start the day", sub: "Action", run: () => ACTIONS["start-day"]() }]),
+    ...GO.map(([h, title, ic]) => ({ ic, title, sub: "Page", href: `#/${h}` }))];
+  const whole = terms.join(" "), rank = (n) => { const t = fold(n.title); return t === whole ? 0 : t.startsWith(whole) ? 1 : t.includes(terms[0] || "") ? 2 : 3; };
+  const notes = terms.length ? D.notes.filter((n) => has(`${n.title} ${n.summary} ${n.tags.join(" ")}`))
+    .sort((a, b) => rank(a) - rank(b) || a.title.length - b.title.length).slice(0, 8)
+    .map((n) => ({ ic: n.type === "project" ? "bolt" : "notes", title: n.title, sub: folderLabel(n.folder), href: noteHref(n.path) })) : [];
+  ck.items = [...notes, ...acts.filter((a) => !terms.length || has(a.title))]; ck.sel = 0; cmdkPaint();
+  clearTimeout(ck.timer);
+  if (terms.join("").length < 3) return;
+  ck.timer = setTimeout(async () => {
+    const hits = await api(`/api/search?q=${encodeURIComponent(terms.join(" "))}`).catch(() => []);
+    if ($("#cmdk-q").value !== q || !$("#cmdk").open) return;
+    const seen = new Set(ck.items.map((it) => it.href));
+    const more = hits.filter((h) => !seen.has(noteHref(h.path))).slice(0, 6).map((h) => ({ ic: "notes", title: h.title, sub: h.line, href: noteHref(h.path), text: true }));
+    if (more.length) { ck.items = [...ck.items, ...more]; cmdkPaint(); }
+  }, 200);
+}
+function cmdkPaint() {
+  $("#cmdk-list").innerHTML = ck.items.map((it, i) => `${it.text && !ck.items[i - 1]?.text ? '<div class="ck-sep">In the text</div>' : ""}
+    <button type="button" class="ck-row ${i === ck.sel ? "on" : ""}" data-i="${i}" role="option" aria-selected="${i === ck.sel}">${icon(it.ic, 16)}<span class="ck-t">${esc(it.title)}</span><span class="ck-s">${esc(it.sub)}</span></button>`).join("")
+    || `<div class="ck-empty">Nothing matches. <button type="button" class="btn glass" data-ck="capture">Capture it as a question</button></div>`;
+}
+function cmdkGo(i) {
+  const it = ck.items[i];
+  if (!it) return;
+  $("#cmdk").close();
+  if (it.href !== undefined) location.hash = it.href; else it.run();
+}
+$("#cmdk-q").addEventListener("input", (e) => cmdkFill(e.target.value));
+$("#cmdk").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    ck.sel = (ck.sel + (e.key === "ArrowDown" ? 1 : -1) + ck.items.length) % Math.max(1, ck.items.length);
+    cmdkPaint(); $("#cmdk-list .ck-row.on")?.scrollIntoView({ block: "nearest" });
+  }
+  if (e.key === "Enter") { e.preventDefault(); cmdkGo(ck.sel); }
+});
+$("#cmdk").addEventListener("click", (e) => {
+  if (e.target.id === "cmdk") return e.target.close(); // the backdrop
+  if (e.target.closest("[data-ck=capture]")) { $("#cmdk").close(); return ACTIONS.capture(); }
+  const row = e.target.closest(".ck-row");
+  if (row) cmdkGo(Number(row.dataset.i));
+});
+$("#cmdk-list").addEventListener("pointermove", (e) => {
+  const row = e.target.closest(".ck-row");
+  if (row && Number(row.dataset.i) !== ck.sel) { ck.sel = Number(row.dataset.i); $("#cmdk-list").querySelectorAll(".ck-row").forEach((r) => r.classList.toggle("on", r === row)); }
+});
+
+// Dock: icons swell toward the pointer, macOS-style (after the Floating Dock on 21st.dev). Mouse only; off with reduced motion.
+const calm = matchMedia("(prefers-reduced-motion: reduce)");
+$("#dock").addEventListener("pointermove", (e) => {
+  if (calm.matches || e.pointerType !== "mouse") return;
+  for (const el of $("#dock").querySelectorAll("a, button")) {
+    const r = el.getBoundingClientRect(), s = 1 + .3 * Math.max(0, 1 - Math.abs(e.clientX - (r.left + r.width / 2)) / 110);
+    el.style.transform = s > 1.001 ? `translateY(${(-(s - 1) * 26).toFixed(1)}px) scale(${s.toFixed(3)})` : "";
+  }
+});
+$("#dock").addEventListener("pointerleave", () => { for (const el of $("#dock").querySelectorAll("a, button")) el.style.transform = ""; });
+
 const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], images: [imagesPage, "Images"], settings: [settingsPage, "Settings"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
 function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
 function render() {
@@ -2899,6 +2973,7 @@ const ACTIONS = {
     try { await api("/api/trash", { path: el.dataset.p }); } catch (e) { return toast(e.message); }
     D = await api("/api"); toast("Moved to .trash"); location.hash = "#/notes";
   },
+  cmdk: () => cmdkOpen(),
   "start-day": async () => {
     const agent = (S.runners || []).find((r) => r.ready)?.id;
     if (!agent) return toast("No agent is ready: add one in Settings");
@@ -3470,6 +3545,7 @@ $("#dock-pill")?.addEventListener("click", () => {
   $("#dockwrap")?.classList.toggle("open");
 });
 document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k" && !(route().pg === "agents" && e.target.closest("input, textarea"))) { e.preventDefault(); cmdkOpen(); return; }
   if (e.key === "Escape" && cwdOpen) { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); return; }
   if (e.key === "Escape" && calDay && !document.querySelector("dialog[open]")) { calDay = ""; calRender(); return; }
   if (e.key === "Escape" && orchSelected.size > 0 && route().pg === "agents") {
@@ -3495,7 +3571,7 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }
   if (e.key === "v" || e.key === "V") { e.preventDefault(); ACTIONS["ui-toggle"](); }
-  if (e.key === "/" && pg !== "agents") { e.preventDefault(); if (pg !== "notes") location.hash = "#/notes"; setTimeout(() => $("#search")?.focus(), pg === "notes" ? 0 : 80); }
+  if (e.key === "/" && pg !== "agents") { e.preventDefault(); cmdkOpen(); }
   if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
   if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }
   if (pg === "review" && queue[pos]) {
