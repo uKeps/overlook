@@ -935,7 +935,9 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 
 /* Embedded terminal panes: ghostty-web draws the screen on a canvas; the window chrome is a plain Ghostty-style title bar. */
 .orch-pane[data-kind="terminal"] { min-width: 320px; min-height: 200px; }
-.orch-pane[data-kind="terminal"] .orch-feed { padding: 0; overflow: hidden; display: flex; gap: 0; }
+/* clip, not hidden: a hidden overflow can still be scrolled by the browser (focusing the terminal's input), which
+   pushed the first row out of the top of the card. A clipped one can't scroll at all. */
+.orch-pane[data-kind="terminal"] .orch-feed { padding: 0; overflow: clip; display: flex; gap: 0; }
 /* 2px = Ghostty's default window-padding; the background comes from the user's Ghostty theme. */
 .orch-term-view { flex: 1; min-width: 0; min-height: 0; padding: 2px; background: #000; outline: none; cursor: text; }
 .orch-term-view canvas { display: block; }
@@ -1948,4 +1950,4 @@ body.canvas-full .orch-work { gap: 0; }
    Ctrl+Alt+W / Enter close / maximize it. 95% opaque over a blur of the canvas, as the Ghostty window over the desktop. */
 .orch-pane[data-kind="terminal"] > .orch-head { display: none; }
 .orch-pane[data-kind="terminal"] { border-radius: 12px; backdrop-filter: blur(18px); background: color-mix(in srgb, var(--win-bg) 92%, transparent); }
-.orch-pane[data-kind="terminal"] .orch-term-view { border-radius: 12px; overflow: hidden; padding: 10px 12px; caret-color: transparent; opacity: .95; background: transparent !important; }
+.orch-pane[data-kind="terminal"] .orch-term-view { border-radius: 12px; overflow: clip; padding: 10px 12px; caret-color: transparent; opacity: .95; background: transparent !important; }

@@ -927,6 +927,8 @@ async function mountTerminalPane(card, p) {
         cursorStyle: ["bar", "underline"].includes(look.cursorStyle) ? look.cursorStyle : "block",
         cursorBlink: true, scrollback: 10000, theme,
       });
+      // Belt and braces with overflow: clip: whatever scrolls the terminal's box goes back to the top.
+      st.el.addEventListener("scroll", () => { st.el.scrollTop = 0; st.el.scrollLeft = 0; });
       st.fit = new m.FitAddon();
       st.term.loadAddon(st.fit);
       st.term.open(st.el);
