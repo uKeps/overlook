@@ -30,6 +30,7 @@ beforeAll(async () => {
     { id: "mixed", name: "Mixed", run: ["echo", "{model}-{effort}"], efforts: ["low", "high"], effort: "high",
       models: [{ id: "big", label: "Big" }, { id: "small", label: "Small", efforts: ["medium"] }] },
     { id: "sleeper", name: "Sleeper", run: ["sleep", "30"] },
+    { id: "forker", name: "Forker", run: ["sh", "-c", "sleep 31.5 & sleep 31.5"] },
     { id: "opener", name: "Opener", run: ["true", "{session}"], open: { Log: ["sh", "-c", "echo {session} > opened.txt"] } },
     { id: "missing", name: "Missing", run: ["definitely-not-installed-overlook"] },
     { id: "fake-openai", name: "Fake OpenAI", api: "openai", url: `${FAKE}/v1`, model: "fake", key: "FAKE_KEY" },
@@ -63,8 +64,53 @@ test("note reader resolves wikilinks and backlinks", async () => {
   expect((await fetch(`${BASE}/api/note?path=${encodeURIComponent("../server.ts")}`)).status).toBe(404);
 });
 
+test("search looks inside notes: every term, accents and case ignored", async () => {
+  const f = `${VAULT}/3 Concepts/Frete.md`;
+  writeFileSync(f, "# Frete\n\nO custo do armador_custo entra na coleção de coletas.\n");
+  const hits = async (q: string) => (await (await fetch(`${BASE}/api/search?q=${encodeURIComponent(q)}`)).json()).map((h: any) => h.path);
+  expect(await hits("ARMADOR_custo colecao")).toEqual(["3 Concepts/Frete.md"]);
+  expect((await (await fetch(`${BASE}/api/search?q=armador_custo`)).json())[0].line).toContain("armador_custo");
+  expect(await hits("armador_custo inexistente")).toEqual([]);
+  rmSync(f);
+});
+
+test("notes at the vault root show up; agent instructions and the calendar don't", async () => {
+  writeFileSync(`${VAULT}/Start here.md`, "# Start here\n\n> [!abstract] In one sentence\n> Where to begin.\n");
+  writeFileSync(`${VAULT}/AGENTS.md`, "# rules\n");
+  const paths = (await (await fetch(`${BASE}/api`)).json()).notes.map((n: any) => n.path);
+  rmSync(`${VAULT}/Start here.md`); rmSync(`${VAULT}/AGENTS.md`);
+  expect(paths).toContain("Start here.md");
+  expect(paths).not.toContain("AGENTS.md");
+  expect(paths).not.toContain("Calendar.md");
+});
+
 test("writes need JSON from an allowed host", async () => {
   expect((await post("/api/capture", { text: "x" }, "text/plain")).status).toBe(403);
+});
+
+test("other sites can't read the vault or open a terminal", async () => {
+  expect((await fetch(`${BASE}/api`, { headers: { Host: "evil.example" } })).status).toBe(403); // DNS rebinding
+  expect((await fetch(`${BASE}/api`, { headers: { Origin: "http://evil.example" } })).status).toBe(403);
+  expect((await fetch(`${BASE}/api`, { headers: { Origin: BASE } })).status).toBe(200);
+  // Browsers let any page open a WebSocket to localhost: the Origin is the only thing that tells them apart.
+  const opened = await new Promise<boolean>((res) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/terminal?id=evil_probe&shell=bash`, { headers: { Origin: "http://evil.example" } } as any);
+    ws.onopen = () => { ws.close(); res(true); };
+    ws.onerror = ws.onclose = () => res(false);
+  });
+  expect(opened).toBe(false);
+});
+
+test("note HTML shows as text, only safe links survive, and a wikilink with a folder routes by name", async () => {
+  const f = `${VAULT}/3 Concepts/Unsafe.md`;
+  writeFileSync(f, "# Unsafe\n\n<img src=x onerror=alert(1)>\n\n<script>alert(2)</script>\n\n[bad](javascript:alert(3)) [bad2](JaVaScRiPt:alert(4)) [ok](https://example.com) [[3 Concepts/HTTP|HTTP]]\n");
+  const n = await (await fetch(`${BASE}/api/note?path=${encodeURIComponent("3 Concepts/Unsafe.md")}`)).json();
+  rmSync(f);
+  expect(n.html).not.toContain("<img");
+  expect(n.html).not.toContain("<script");
+  expect(n.html.toLowerCase()).not.toContain("javascript:");
+  expect(n.html).toContain('href="https://example.com"');
+  expect(n.html).toContain('href="#/w/HTTP"');
 });
 
 test("capture creates today's daily note from the template", async () => {
@@ -267,7 +313,7 @@ test("a voice memo becomes an inbox note that an agent is told to file; a failur
 test("agents.json drives the runner list", async () => {
   const s = await (await fetch(`${BASE}/api/system`)).json();
   const ready = Object.fromEntries(s.runners.map((r: any) => [r.id, r.ready]));
-  expect(ready).toEqual({ echo: true, bare: true, mixed: true, sleeper: true, opener: true, missing: false, "fake-openai": true, "fake-claude": true });
+  expect(ready).toEqual({ echo: true, bare: true, mixed: true, sleeper: true, forker: true, opener: true, missing: false, "fake-openai": true, "fake-claude": true });
   const claude = s.runners.find((r: any) => r.id === "fake-claude");
   expect([claude.models.map((m: any) => m.id), claude.effort]).toEqual([["claude-opus-5-5"], "high"]);
   expect(s.agentsMd).toBe(false);
@@ -289,6 +335,14 @@ test("a CLI agent runs in the vault with the chosen model and effort", async () 
   expect((await finished(await run("bare", long))).events.map((e: any) => e.txt)).toContain(`got ${long}`);
   // No model listed: the {model} token and its flag are dropped.
   expect((await finished(await run("bare", "hi"))).events.map((e: any) => e.txt)).toContain("got hi");
+});
+
+test("stop also ends what the agent started, so the task finishes", async () => {
+  const id = await run("forker");
+  await Bun.sleep(300);
+  expect((await post("/api/task/stop", { id })).status).toBe(200);
+  expect((await finished(id)).ok).toBe(false);
+  expect(Bun.spawnSync(["pgrep", "-f", "^sleep 31.5"]).stdout.toString().trim()).toBe(""); // no orphan left holding the pipes
 });
 
 test("a running task can be stopped", async () => {
@@ -836,7 +890,7 @@ test("note agent endpoint validates topic boundaries, layouts in pt and en, cust
   expect(noteEnRes.status).toBe(200);
   const noteEnTask = await finished((await noteEnRes.json()).id);
   expect(noteEnTask.prompt).toBe(
-    'Create a note in the vault about: "Event-Driven Architecture". Follow AGENTS.md strictly: choose the right folder (e.g. 3 Concepts/ or 4 Ideas/), use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.'
+    'Create a note in the vault about: "Event-Driven Architecture". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.'
   );
 
   // 4. Portuguese prompt layout when vaultLang is pt
@@ -845,7 +899,7 @@ test("note agent endpoint validates topic boundaries, layouts in pt and en, cust
   expect(notePtRes.status).toBe(200);
   const notePtTask = await finished((await notePtRes.json()).id);
   expect(notePtTask.prompt).toBe(
-    'Crie uma nota no vault sobre: "Arquitetura Orientada a Eventos". Siga o AGENTS.md rigorosamente: decida a pasta correta (ex: 3 Conceitos/ ou 4 Ideias/), use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.'
+    'Crie uma nota no vault sobre: "Arquitetura Orientada a Eventos". Siga o AGENTS.md rigorosamente: decida a pasta correta pelo AGENTS.md, use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.'
   );
 
   // 5. Jail / Security: Prompt injection attempt with shell chars, quotes, and newlines

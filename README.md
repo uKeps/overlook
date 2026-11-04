@@ -33,7 +33,8 @@ ones just show up empty.
 | Path | Used for |
 | --- | --- |
 | `1 Inbox/` … `8 …/` | Notes. Any folder starting with a digit 1–8 and a space (`7 …` is skipped: drawings) |
-| `2 Daily/YYYY-MM-DD.md` | Daily note. `## Focus` feeds the Home carousel, captures land in `## Captured` |
+| `*.md` at the root | Notes too (a "start here" map, say), except agent instructions (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `README.md`) and `Calendar.md` |
+| `2 Daily/YYYY-MM-DD.md` | Daily note. `## Focus` feeds the Home carousel, captures land in `## Captured`; a checked item or a capture filed as `→ [[Note]]` leaves the Home |
 | `2 Daily/_Template.md` | Optional template for new daily notes |
 | `9 Agent/Log.md`, `Findings.md` | Optional agent log and gotchas (bullet lines) |
 
@@ -41,14 +42,16 @@ Frontmatter Overlook reads, all optional:
 
 ```yaml
 type: concept         # concept, project and daily get special treatment; anything else is a label
-area: programming     # colors the graph
+area: programming     # in the graph, a hovered note and its neighbours take their area's colour
 tags: [web, api]
 review_on: 2026-01-10 # shows up in Review on/after this date
 interval: 2           # days; doubles when you remember, resets to 1 when you forget
+confidence: inferred  # a badge in the reader: measured/confirmed (green), inferred/hypothesis (amber), anything else plain
+updated: 2026-01-05  # the badge says how many days ago the note was checked
 ```
 
 Vault in Portuguese? Set `VAULT_LANG=pt` in `.env` and Overlook reads `2 Diário`, `## Foco de hoje`,
-`## Capturei`, `9 Agente/Achados.md` and the `tipo` / `revisar_em` / `intervalo` keys instead.
+`## Capturei`, `9 Agente/Achados.md` and the `tipo` / `revisar_em` / `intervalo` / `confianca` (`medido`, `deducao`) / `atualizado` keys instead.
 
 A one-line summary comes from a `> [!abstract]` callout right after the title.
 

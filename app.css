@@ -3,15 +3,15 @@
   color-scheme: dark;
   /* A theme sets the base colours below (see the themes at the end); everything else is mixed from them. */
   --bg: #0a0b0d; --surface: #16171b; --surface-2: #28292e;
-  --ink: #f3efe9; --accent: #f4b88f; --accent-ink: #2b1a0f; --accent-2: var(--accent-2);
-  --ok: #82d9a8; --bad: var(--bad); --warn: #f2cf7a;
+  --ink: #f3efe9; --accent: #f4b88f; --accent-ink: #2b1a0f; --accent-2: #8fc7f4;
+  --ok: #82d9a8; --bad: #ff8f80; --warn: #f2cf7a;
   --p1: #f4b88f; --p2: #8fc7f4; --p3: #c9a3ff; --p4: #9be3b5; --p5: #f2cf7a; --p6: #ff8f80; /* graph areas */
   /* The blurred art behind the page: in full colour by default; a theme keeps only its light and shade (luminosity)
      so the colour comes from the theme's own backdrop underneath. */
   --amb-blend: normal; --amb-opacity: 1;
   --glass: color-mix(in srgb, var(--surface) 55%, transparent); --glass-2: color-mix(in srgb, var(--surface-2) 62%, transparent);
   --line: color-mix(in srgb, var(--ink) 9%, transparent);
-  --muted: color-mix(in srgb, var(--ink) 64%, transparent); --faint: color-mix(in srgb, var(--ink) 40%, transparent);
+  --muted: color-mix(in srgb, var(--ink) 64%, transparent); --faint: color-mix(in srgb, var(--ink) 60%, transparent);
   --r: 18px; --ease: cubic-bezier(.2, .8, .2, 1);
   /* Floating panels (calendar, dock): a long soft settle on the way in, a quicker exit after a short grace period. */
   --float-ease: cubic-bezier(.16, 1, .3, 1);
@@ -71,14 +71,14 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-event
 .day:hover { background: var(--glass); }
 .day.sel { box-shadow: inset 0 0 0 1px var(--accent); }
 .day.out { opacity: .4; }
-.day.today { background: var(--accent); color: var(--accent-ink); }
-.day.today b { color: var(--accent-ink); }
+.day.today { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+.day.today b { color: var(--accent); }
 .day .m { display: flex; gap: 3px; height: 5px; }
 .day .m i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .day .m i.s { background: var(--accent-2); }
 .day .m i.r { background: rgba(255, 255, 255, .8); }
 .day .m i.d { background: rgba(255, 255, 255, .4); }
-.day.today .m i { background: var(--accent-ink); }
+.day.today .m i { background: var(--accent); }
 .wk-sep { width: 1px; background: var(--line); margin: 6px 6px; }
 .cal-side { display: flex; align-items: center; gap: 4px; }
 .cal-title { font: 600 13px var(--display); color: var(--ink); padding: 6px 10px; border-radius: 10px; white-space: nowrap; }
@@ -236,6 +236,11 @@ h3 { font: 600 12px var(--body); color: var(--faint); text-transform: uppercase;
 .nc .f { margin-top: auto; display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--faint); }
 .pill { white-space: nowrap; font: 500 11px var(--mono); padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
 .pill.peach { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.pill.conf.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.pill.conf.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.quiet-danger { display: flex; align-items: center; gap: 6px; margin: 4px 6px; font-size: 12.5px; color: color-mix(in srgb, var(--bad) 85%, transparent); }
+.quiet-danger:hover { color: var(--bad); text-decoration: underline; }
+.rv-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* Reader */
 .reader { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 20px; align-items: start; }
@@ -243,12 +248,14 @@ h3 { font: 600 12px var(--body); color: var(--faint); text-transform: uppercase;
 .art .in { padding: 38px 46px 48px; position: relative; }
 .art h1 { font: 700 40px/1.08 var(--display); letter-spacing: -.025em; color: var(--accent); margin-bottom: 12px; }
 .art .chips { display: flex; gap: 6px; margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.prose { font-size: 15.5px; line-height: 1.75; color: color-mix(in srgb, var(--ink) 88%, transparent); max-width: 70ch; }
+.prose { font-size: 15.5px; line-height: 1.75; color: color-mix(in srgb, var(--ink) 88%, transparent); }
+.prose > :not(table, pre, .mermaid) { max-width: 70ch; }
 .prose > * + * { margin-top: 14px; }
 .prose h2, .prose h3 { font: 700 20px var(--display); color: var(--ink); margin-top: 30px; text-transform: none; letter-spacing: -.01em; }
 .prose a { color: var(--accent); border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
 .prose code { font: 13px var(--mono); background: rgba(255, 255, 255, .07); padding: 1px 6px; border-radius: 5px; }
-.prose pre { background: rgba(0, 0, 0, .35); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; }
+.prose pre { background: rgba(0, 0, 0, .35); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; line-height: 1.5; }
+.prose .mermaid { background: rgba(0, 0, 0, .25); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; text-align: center; }
 .prose pre code { background: none; padding: 0; }
 .prose blockquote { border-left: 2px solid var(--line); padding: 2px 0 2px 16px; color: var(--muted); }
 .prose blockquote.co { border: 1px solid var(--line); border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 0 12px 12px 0; padding: 14px 18px; color: var(--ink); }
@@ -355,8 +362,6 @@ a.row:hover, .row.hov:hover { background: var(--glass); }
 /* Graph */
 .graph { border-radius: 22px; height: min(680px, 70vh); position: relative; overflow: hidden; }
 .graph canvas { width: 100%; height: 100%; display: block; cursor: grab; }
-.graph .legend { position: absolute; left: 18px; bottom: 16px; display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
-.graph .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 
 /* Live agent */
 a.ag.link { transition: background .2s, border-color .2s, transform .3s var(--ease); }
@@ -406,7 +411,7 @@ a.ag.link:hover { background: var(--glass-2); border-color: color-mix(in srgb, v
 
 /* Dock */
 .dockwrap { position: fixed; bottom: 22px; left: 50%; translate: -50% 0; z-index: 10; display: grid; justify-items: center; }
-.dock { display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 22px; background: color-mix(in srgb, var(--surface) 82%, transparent); }
+.dock { display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 22px; background: var(--surface); box-shadow: 0 12px 40px rgba(0, 0, 0, .45); }
 .dock-pill { display: none; }
 /* Floating dock: a pill at the bottom; hovering or focusing it rises the dock over it. */
 .dockwrap.float .dock-pill { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .16);
@@ -652,6 +657,8 @@ body.app .top, body.app main { max-width: 1680px; }
   .frame { height: calc(100dvh - 190px); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+
+input:focus, textarea:focus, select:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent); }
 
 /* Themes: each sets only the base colours; glass, lines and text tints are mixed from them in :root.
    Colours from each theme's published palette. Any element can carry data-theme (the swatches in Settings do). */
@@ -1881,7 +1888,6 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
     font-size: 12px;
   }
   .car {
-    min-height: auto;
     margin-top: 4px;
     touch-action: pan-y;
   }
@@ -2199,3 +2205,9 @@ html[data-ui="minimal"] .term-pop-row { font-family: var(--mono); font-size: 11p
   }
 }
 
+@media (max-width: 480px) {
+  /* The 9 dock items fit a 390px phone instead of scrolling with the ends cut off; the tap target stays 42px tall. */
+  .dock { gap: 2px; padding: 5px 4px; }
+  .dock a, .dock button { width: 38px; min-width: 38px; }
+  .dock .sep { display: none; }
+}

@@ -85,7 +85,16 @@ function ago(ms) {
 const duration = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : `${Math.floor(s / 86400)} d`);
 const due = () => D.notes.filter((n) => n.review_on && n.review_on <= D.today).sort((a, b) => a.review_on.localeCompare(b.review_on));
 const inbox = () => D.notes.filter((n) => n.folder.startsWith("1 "));
-const folderLabel = (f) => f.replace(/^\d+\s*-?\s*/, "");
+// Confidence (frontmatter confidence / confianca): how far to trust a note before deciding on it, and how old the check is.
+const CONF = { medido: "ok", measured: "ok", confirmed: "ok", deducao: "warn", inferred: "warn", hypothesis: "warn" };
+const confKind = (n) => CONF[fold(n.confidence || "")] ?? "";
+function confChip(n) {
+  if (!n.confidence) return "";
+  const k = confKind(n), age = /^\d{4}-\d{2}-\d{2}$/.test(n.updated || "") ? daysBetween(n.updated, D.today) : null;
+  const tip = k === "warn" ? "Not confirmed: check it before deciding on it" : k === "ok" ? "Checked against its source" : "General knowledge, not checked here";
+  return `<span class="pill conf ${k}" title="${tip}${n.updated ? ` · updated ${esc(n.updated)}` : ""}">${esc(n.confidence)}${age === null ? "" : ` · ${age ? `${age} d` : "today"}`}</span>`;
+}
+const folderLabel = (f) => (f === "." ? "Root" : f.replace(/^\d+\s*-?\s*/, ""));
 const dailyPath = () => `${D.daily}/${D.today}`;
 
 // Ambient background: two layers crossfading with the art of what is in focus.
@@ -286,12 +295,18 @@ const CAL_ACTIONS = {
 function suggestions() {
   const s = [];
   const ln = (txt) => txt.match(/\[\[([^\]|]+)/)?.[1];
+  // No focus picked for today: the first card runs the morning routine, the agent that picks it.
+  if (!D.focus?.length) {
+    const run = (S?.tasks || []).find((t) => t.routine === "morning" && !t.end);
+    s.push(run ? { cat: "Start the day", ic: "target", title: "The morning routine is picking today's focus", sub: "An agent is reading the vault and writing up to 3 things for today in the daily note.", meta: [["Started", ago(Date.parse(run.start))]], href: `#/t/${run.id}`, action: "See progress" }
+      : { cat: "Start the day", ic: "target", title: "Pick today's focus", sub: "Runs the morning routine: an agent reads the vault and writes up to 3 things for today in the daily note.", meta: [["Takes", "about a minute"]], href: "#/", act: "start-day", action: "Start the day" });
+  }
   for (const f of D.focus || []) { const a = ln(f); s.push({ cat: "Today's focus", ic: "target", title: unlink(f), raw: f, sub: "Picked for today in the daily note.", meta: [["Source", "Daily note"]], href: a ? `#/w/${encodeURIComponent(a)}` : obs(dailyPath()), action: "Open" }); }
   for (const n of due()) s.push({ cat: "Review", ic: "review", title: n.title, sub: "Before opening: do you remember what it is about?", meta: [["Due", n.review_on === D.today ? "today" : `${daysBetween(n.review_on, D.today)} d ago`], ["Interval", `${n.interval} d`]], href: "#/review", action: "Review" });
   for (const c of D.captured || []) s.push({ cat: "Captured today", ic: "spark", title: unlink(c), raw: c, sub: "Raw capture. It becomes a note once it fits in one sentence, or it dies.", meta: [["Status", "In the daily note"]], href: obs(dailyPath()), action: "Open in Obsidian" });
   for (const n of inbox()) s.push({ cat: "Inbox", ic: "inbox", title: n.title, sub: "Process: becomes a permanent note or leaves the vault.", meta: [["Arrived", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
   for (const v of D.missing.slice(0, 3)) s.push({ cat: "Gap", ic: "gap", title: v.target, sub: `Linked ${v.n}× and doesn't exist yet. Write it when you need it, not out of duty.`, meta: [["Linked", `${v.n}×`]], href: `#/w/${encodeURIComponent(v.target)}`, action: "See who links it" });
-  for (const n of D.notes.filter((n) => n.type === "project")) s.push({ cat: "Project", ic: "bolt", title: n.title, sub: plain(n.summary), meta: [["Area", n.area || "-"], ["Touched", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
+  for (const n of D.notes.filter((n) => n.type === "project").sort((a, b) => b.mtime - a.mtime).slice(0, 5)) s.push({ cat: "Project", ic: "bolt", title: n.title, sub: plain(n.summary), meta: [["Area", n.area || "-"], ["Touched", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
   const outside = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
   for (const n of outside) s.push({ cat: "Rediscover", ic: "leaf", title: n.title, sub: plain(n.summary), meta: [["Out of the cycle", "never reviewed"], ["Area", n.area || "-"]], href: noteHref(n.path), action: "Reread" });
   return s.length ? s : [{ cat: "All caught up", ic: "leaf", piece: "bonsai", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
@@ -308,6 +323,9 @@ const SCENES = ["night-coast", "kyoto-dusk", "aurora-fjord", "lantern-lake", "mi
   "alpine-dawn", "deep-reef", "earthrise", "storm-plains", "marine-drive", "taj-dawn", "varanasi-ghats"];
 const asciiCards = () => cardArt === "ascii" || (cardArt === "auto" && !D.pins?.length);
 const scene = (s, i) => s.piece || SCENES[(hash(D.today) + i) % SCENES.length];
+// A card's call to action: a link, or a button when the card runs something (data-act).
+const cta = (s, cls, ic) => s.act ? `<button type="button" class="${cls}" data-act="${esc(s.act)}">${esc(s.action)} ${icon("r", ic)}</button>`
+  : `<a class="${cls}" href="${esc(s.href)}">${esc(s.action)} ${icon("r", ic)}</a>`;
 
 function home() {
   SG = suggestions();
@@ -322,7 +340,7 @@ function home() {
               <span class="min-txt"><b>${emLinks(s.raw || s.title)}</b><small>${esc(s.sub)}</small></span>
               <span class="min-cat">${icon(s.ic, 13)} ${esc(s.cat)}</span>
             </button>
-            <a class="min-go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 13)}</a>
+            ${cta(s, "min-go", 13)}
           </div>`).join("")}</div>
         </div>
         <aside class="min-stage glass" id="min-stage"></aside>
@@ -341,7 +359,7 @@ function home() {
           ${s.meta.length ? `<div class="meta">${s.meta.map(([k, v]) => `<span>${esc(k)}<b>${esc(v)}</b></span>`).join("")}</div>` : ""}
           <h2 class="${s.title.length > 44 ? "long" : ""}">${emLinks(s.raw || s.title)}</h2>
         </div>
-        <div class="card-foot"><a class="btn peach go" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 16)}</a></div>
+        <div class="card-foot">${cta(s, "btn peach go", 16)}</div>
       </div>
       ${ascii ? `<div class="card-pin card-ascii"><ascii-art piece="${scene(s, i)}"></ascii-art></div>` : `<div class="card-pin"><img src="${art(i)}" alt="">${p?.link ? `<a class="pin-link" href="${esc(p.link)}" target="_blank">pinterest ↗</a>` : ""}
         ${D.pins?.length ? `<button type="button" class="pin-pick" data-act="pick-open" data-i="${i}" aria-label="Choose this card's image">${icon("image", 15)} ${D.pinCards?.[cardKey(s)] ? "Chosen" : "Choose image"}</button>` : ""}</div>`}
@@ -375,7 +393,7 @@ function place() {
           <p>${esc(s.sub)}</p>
           ${s.meta.length ? `<div class="min-meta-list">${s.meta.map(([k, v]) => `<span class="min-meta">${esc(k)}: <b>${esc(v)}</b></span>`).join("")}</div>` : ""}
           <div class="min-focus-foot">
-            <a class="btn peach" href="${esc(s.href)}">${esc(s.action)} ${icon("r", 14)}</a>
+            ${cta(s, "btn peach", 14)}
             <span class="min-nav"><button type="button" data-act="prev" aria-label="Previous">${icon("l", 14)}</button><button type="button" data-act="next" aria-label="Next">${icon("r", 14)}</button></span>
           </div>
         </div>`;
@@ -419,23 +437,40 @@ function notes() {
   const count = {};
   for (const n of D.notes) count[n.folder] = (count[n.folder] || 0) + 1;
   main.innerHTML = `<div class="ph"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p>
-      <div class="r"><input class="search glass" id="search" placeholder="Search title or summary  /" value="${esc(query)}" autocomplete="off"></div></div>
+      <div class="r"><input class="search glass" id="search" placeholder="Search titles and text  /" value="${esc(query)}" autocomplete="off"></div></div>
     <div class="filters">${[["", "All", D.notes.length], ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])]
       .map(([k, v, c]) => `<button class="fchip ${filter === k ? "on" : ""}" data-act="filter" data-k="${esc(k)}">${esc(v)}<small>${c}</small></button>`).join("")}</div>
-    <div class="grid" id="note-grid"></div>`;
+    <div class="grid" id="note-grid"></div><div id="text-hits"></div>`;
   grid();
   ambient(art("notes"));
 }
+// Words a question carries that say nothing about the note ("o que é AWB", "what is AWB").
+const STOP = new Set(["o", "a", "os", "as", "que", "e", "de", "do", "da", "what", "is", "the", "of"]);
+let textTimer = 0;
 function grid() {
-  const q = fold(query);
-  const weight = (n) => (!q ? 0 : fold(n.title).startsWith(q) ? 0 : fold(n.title).includes(q) ? 1 : 2);
-  const ns = D.notes.filter((n) => (!filter || n.folder === filter) && (!q || fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(q)))
+  const q = fold(query).trim(), terms = q.split(/\s+/).filter((t) => t && !STOP.has(t));
+  const weight = (n) => (!q ? 0 : fold(n.title).startsWith(terms[0] || q) ? 0 : fold(n.title).includes(terms[0] || q) ? 1 : 2);
+  const ns = D.notes.filter((n) => (!filter || n.folder === filter) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
     .sort((a, b) => weight(a) - weight(b) || b.mtime - a.mtime);
   $("#note-grid").innerHTML = ns.map((n, i) => `<a class="nc glass" href="${noteHref(n.path)}" style="animation-delay:${Math.min(i, 12) * 25}ms">
       <h4>${esc(n.title)}</h4>
       <p>${esc(n.type === "daily" ? "Daily note" : plain(n.summary) || "No one-line summary.")}</p>
-      <span class="f">${n.type ? `<span class="pill">${esc(n.type)}</span>` : ""}${n.review_on ? '<span class="pill peach">in cycle</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${ago(n.mtime)}</span></span></a>`).join("")
-    || `<p class="empty">Nothing matches "${esc(query)}".</p>`;
+      <span class="f">${n.type ? `<span class="pill">${esc(n.type)}</span>` : ""}${confKind(n) === "warn" ? `<span class="pill conf warn">${esc(n.confidence)}</span>` : ""}${n.review_on ? '<span class="pill peach">in cycle</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${ago(n.mtime)}</span></span></a>`).join("")
+    || `<p class="empty">No title matches "${esc(query)}".</p>`;
+  // Then the text of the notes, a beat after typing stops.
+  const box = $("#text-hits");
+  clearTimeout(textTimer);
+  if (!box) return;
+  box.innerHTML = "";
+  if (terms.join("").length < 3) return;
+  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => !filter || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
+  textTimer = setTimeout(async () => {
+    const hits = (await api(`/api/search?q=${encodeURIComponent(terms.join(" "))}`).catch(() => [])).filter((h) => !shown.has(h.path) && inFolder(h.path));
+    if (fold(query).trim() !== q || !$("#text-hits")) return;
+    $("#text-hits").innerHTML = hits.length
+      ? `<h3>In the text</h3><div class="list glass">${hits.map((h) => `<a class="row" href="${noteHref(h.path)}"><span class="t">${esc(h.title)}<small>${esc(h.line)}</small></span></a>`).join("")}</div>`
+      : ns.length ? "" : `<p class="empty">Not in the text either. <button class="btn glass" data-act="capture">Capture it as a question</button></p>`;
+  }, 250);
 }
 
 // ---------------------------------------------------------------- Reader
@@ -445,16 +480,16 @@ async function reader(path) {
   main.innerHTML = `<div class="reader">
     <article class="art glass">
       <div class="in"><h1>${esc(n.title)}</h1>
-        <div class="chips">${[n.type, n.area, ...n.tags].filter(Boolean).map((t) => `<span class="pill">${esc(t)}</span>`).join("")}</div>
+        <div class="chips">${confChip(n)}${[n.type, n.area, ...n.tags].filter(Boolean).map((t) => `<span class="pill">${esc(t)}</span>`).join("")}</div>
         <div class="prose" id="prose">${n.html}</div></div></article>
     <aside class="rail">
       <div class="box glass">
         <a class="btn peach" href="${obs(n.path)}">Open in Obsidian ${icon("ext", 16)}</a>
         ${n.review_on ? `<p class="empty" style="padding:10px 0 0">In the cycle: review ${n.review_on <= D.today ? "today" : rel.format(daysBetween(D.today, n.review_on), "day")}, interval ${n.interval} d.</p>`
-          : `<button class="btn glass" data-act="enroll" data-p="${esc(n.path)}">Add to the review cycle</button>`}
-        <button class="btn glass" data-act="trash" data-p="${esc(n.path)}">Delete note</button></div>
+          : `<button class="btn glass" data-act="enroll" data-p="${esc(n.path)}">Add to the review cycle</button>`}</div>
       <div class="box glass"><h3>Linked from</h3>${n.backlinks.map((b) => `<a class="l" href="${noteHref(b.path)}">${esc(b.title)}</a>`).join("") || '<p class="empty" style="padding:0">Nothing links here yet.</p>'}</div>
       <div class="box glass"><h3>Links to</h3>${[...new Set(n.links)].map((l) => `<a class="l" href="#/w/${encodeURIComponent(l)}" style="${resolveNote(l) ? "" : "opacity:.5"}">${esc(l)}</a>`).join("") || '<p class="empty" style="padding:0">No links.</p>'}</div>
+      <button class="quiet-danger" data-act="trash" data-p="${esc(n.path)}">${icon("trash", 14)} Move to trash</button>
     </aside></div>`;
   // Obsidian callout: a blockquote starting with [!type] Title.
   document.querySelectorAll("#prose blockquote").forEach((b) => {
@@ -464,6 +499,13 @@ async function reader(path) {
     b.classList.add("co", m[1]);
     p.innerHTML = `<span class="ct">${m[2] || m[1]}</span>` + p.innerHTML.slice(m[0].length);
   });
+  // Diagrams: mermaid loads only for a note that has one; offline, the diagram stays as code.
+  const mm = [...document.querySelectorAll("#prose code.language-mermaid")];
+  if (mm.length) import("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs").then(async ({ default: m }) => {
+    m.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
+    const ds = mm.filter((c) => c.isConnected).map((c) => { const d = document.createElement("div"); d.className = "mermaid"; d.textContent = c.textContent; c.parentElement.replaceWith(d); return d; });
+    if (ds.length) await m.run({ nodes: ds });
+  }).catch(() => {});
   ambient(art(n.title));
   scrollTo({ top: 0 });
 }
@@ -487,11 +529,17 @@ function flashcard() {
   const n = queue[pos];
   if (!n) {
     const next = D.notes.filter((x) => x.review_on > D.today).sort((a, b) => a.review_on.localeCompare(b.review_on));
-    const outside = D.notes.filter((x) => !x.review_on && x.summary && x.type !== "daily").sort((a, b) => b.mtime - a.mtime).slice(0, 8);
+    // What to learn first: concepts, the most linked first (the vocabulary the other notes lean on).
+    const inLinks = {};
+    for (const x of D.notes) for (const l of new Set(x.links)) inLinks[l] = (inLinks[l] || 0) + 1;
+    const pool = D.notes.filter((x) => !x.review_on && x.summary && x.type !== "daily");
+    const outside = (pool.some((x) => x.type === "concept") ? pool.filter((x) => x.type === "concept") : pool)
+      .sort((a, b) => (inLinks[nameOf(b.path)] || 0) - (inLinks[nameOf(a.path)] || 0) || a.title.localeCompare(b.title)).slice(0, 8);
+    const five = outside.slice(0, 5).map((x) => x.path);
     main.innerHTML = `<div class="ph"><h1>${done ? `${done} reviewed. Done.` : "Nothing due today"}</h1>
         <p>Remembered doubles the interval; forgot resets it to 1 day.</p></div>
       <h3>Coming up</h3><div class="list glass">${next.slice(0, 8).map((x) => `<a class="row" href="${noteHref(x.path)}"><span class="t">${esc(x.title)}</span><span class="x">${x.review_on} · ${x.interval} d</span></a>`).join("") || '<p class="empty">No notes in the cycle yet.</p>'}</div>
-      <h3>Add to the cycle</h3><div class="list glass">${outside.map((x) => `<div class="row hov"><a class="t" href="${noteHref(x.path)}">${esc(x.title)}<small>${esc(plain(x.summary))}</small></a>
+      <div class="rv-head"><h3>Add to the cycle</h3>${five.length > 1 ? `<button class="btn peach" data-act="enroll-5" data-ps="${esc(JSON.stringify(five))}" title="Five a day keeps the daily review short">Add the top ${five.length}</button>` : ""}</div><div class="list glass">${outside.map((x) => `<div class="row hov"><a class="t" href="${noteHref(x.path)}">${esc(x.title)}<small>${esc(plain(x.summary))}</small></a>
         <button class="btn glass" data-act="enroll" data-p="${esc(x.path)}">Add</button></div>`).join("") || '<p class="empty">All of them already are.</p>'}</div>`;
     ambient(art("review"));
     return;
@@ -518,27 +566,29 @@ async function answer(remembered) {
 // The canvas can't read CSS variables, so the graph takes the theme's colours when it draws.
 const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const alpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
-let PALETTE = [];
-const areaColor = (a) => PALETTE[hash(a) % PALETTE.length];
+let PALETTE = [], AREAS = [];
+// One colour per area while the palette lasts, then the same colours fainter (hashing put 9 areas on 6 colours).
+const areaColor = (a) => { const i = Math.max(0, AREAS.indexOf(a)), c = PALETTE[i % PALETTE.length]; return i < PALETTE.length ? c : alpha(c, .5); };
 let graphStop = null;
 function graph() {
   main.innerHTML = `<div class="ph"><h1>Graph</h1><p>Click opens the note. Drag to move, scroll to zoom.</p></div>
-    <section class="graph glass"><canvas id="cv"></canvas><div class="legend" id="leg"></div></section>`;
+    <section class="graph glass"><canvas id="cv"></canvas></section>`;
   const cv = $("#cv"), ctx = cv.getContext("2d"), dpr = devicePixelRatio || 1;
-  const areas = [...new Set(D.notes.map((n) => n.area).filter(Boolean))].sort();
+  AREAS = [...new Set(D.notes.map((n) => n.area).filter(Boolean))].sort();
   PALETTE = ["--p1", "--p2", "--p3", "--p4", "--p5", "--p6"].map(tok);
-  const ink = tok("--ink"), accent = tok("--accent");
-  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, c: n.area ? areaColor(n.area) : alpha(ink, .8) }));
+  const ink = tok("--ink"), accent = tok("--accent"), bg = tok("--bg");
+  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, a: n.area, c: n.area ? areaColor(n.area) : alpha(ink, .8) }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
   for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: alpha(ink, .25), ghost: true }; nodes.push(g); byId.set(v.target, g); }
   const edges = [];
   for (const n of D.notes) for (const l of new Set(n.links)) { const a = byId.get(nameOf(n.path)), b = byId.get(l); if (a && b && a !== b) edges.push([a, b]); }
   const deg = new Map();
   for (const [a, b] of edges) { deg.set(a, (deg.get(a) || 0) + 1); deg.set(b, (deg.get(b) || 0) + 1); }
+  const byDeg = [...nodes].sort((a, b) => (deg.get(b) || 0) - (deg.get(a) || 0));
   let W, H, panX = 0, panY = 0, zoom = 1;
   const size = () => { W = cv.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; };
   size();
-  nodes.forEach((n, i) => { const a = i * 2.4; n.x = W / 2 + Math.cos(a) * (60 + i * 6); n.y = H / 2 + Math.sin(a) * (60 + i * 6); n.vx = n.vy = 0; n.r = 4 + Math.sqrt(deg.get(n) || 0) * 2.5; });
+  nodes.forEach((n, i) => { const a = i * 2.4; n.x = W / 2 + Math.cos(a) * (60 + i * 6); n.y = H / 2 + Math.sin(a) * (60 + i * 6); n.vx = n.vy = 0; n.r = 2.5 + Math.sqrt(deg.get(n) || 0) * 0.9; n.m = alpha(ink, .3 + .45 * Math.min(1, (deg.get(n) || 0) / 25)); });
   let hover = null, drag = null, pan = null, down = null, heat = 1;
   // ponytail: O(n²) repulsion; fine up to ~500 notes, quadtree if the vault grows.
   function step() {
@@ -553,6 +603,8 @@ function graph() {
     }
     for (const n of nodes) {
       n.vx += (W / 2 - n.x) * 0.002; n.vy += (H / 2 - n.y) * 0.002;
+      // Springs grow with distance², so a note with dozens of links overshoots and the layout blows up to NaN: cap the step.
+      const sp = Math.hypot(n.vx, n.vy); if (sp > 40) { n.vx *= 40 / sp; n.vy *= 40 / sp; }
       if (n !== drag) { n.x += n.vx * heat; n.y += n.vy * heat; }
       n.vx *= 0.6; n.vy *= 0.6;
     }
@@ -564,19 +616,37 @@ function graph() {
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * panX, dpr * panY);
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
     for (const [a, b] of edges) {
-      ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .7) : alpha(ink, .1);
+      ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .55) : alpha(ink, .06);
       ctx.lineWidth = 1 / zoom; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     for (const n of nodes) {
-      ctx.globalAlpha = near && !near.has(n) && n !== hover ? 0.25 : 1;
-      ctx.fillStyle = n.c; ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
-      if (n === hover || (!hover && (deg.get(n) || 0) >= 5) || near?.has(n)) {
-        ctx.fillStyle = alpha(ink, n.ghost ? .45 : .85);
-        ctx.font = "500 12px Inter, sans-serif"; ctx.fillText(n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, n.x + n.r + 5, n.y + 4);
-      }
+      // Grey at rest; hovering a note gives it and its neighbours their area's colour. A missing note is just a ring.
+      const lit = n === hover || near?.has(n);
+      ctx.globalAlpha = near && !lit ? 0.2 : 1;
+      ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7);
+      if (n.ghost) { ctx.strokeStyle = alpha(ink, .35); ctx.lineWidth = 1 / zoom; ctx.stroke(); }
+      else { ctx.fillStyle = lit ? n.c : n.m; ctx.fill(); }
     }
     ctx.globalAlpha = 1;
+    // Labels after the dots, the most linked first (all of them when zoomed in); one that would overlap is skipped.
+    const want = hover ? [hover, ...byDeg.filter((n) => n !== hover && near.has(n))] : zoom > 1.8 ? byDeg : byDeg.slice(0, 25);
+    const placed = [], k = 1 / Math.min(zoom, 1); // zoomed out, labels keep 12px on screen instead of shrinking with the dots
+    ctx.font = `500 ${12 * k}px Inter, sans-serif`; ctx.lineJoin = "round"; ctx.lineWidth = 3 * k; ctx.strokeStyle = bg;
+    for (const n of want) {
+      const t = n.t.length > 34 ? n.t.slice(0, 32) + "…" : n.t, label = n === hover && n.a ? `${t} · ${n.a}` : t, x = n.x + n.r + 5 * k, y = n.y + 4 * k, w = ctx.measureText(label).width;
+      if (placed.some(([px, py, pw]) => x < px + pw + 4 * k && x + w + 4 * k > px && Math.abs(y - py) < 14 * k)) continue;
+      placed.push([x, y, w]);
+      ctx.strokeText(label, x, y);
+      ctx.fillStyle = alpha(ink, n.ghost ? .45 : .9); ctx.fillText(label, x, y);
+    }
   }
+  // Settle most of the layout before the first frame (300 ms at most), then frame it: no flying start, nothing off the canvas.
+  const t0 = performance.now();
+  while (heat > 0.12 && performance.now() - t0 < 300) step();
+  const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
+  const x0 = Math.min(...xs) - 30, x1 = Math.max(...xs) + 150, y0 = Math.min(...ys) - 30, y1 = Math.max(...ys) + 30; // labels sit to the right
+  const top = 16, base = 90, h = H - top - base; // the dock floats over the bottom
+  if (nodes.length) { zoom = Math.min(1.5, W / (x1 - x0), h / (y1 - y0)); panX = (W - (x0 + x1) * zoom) / 2; panY = top + (h - (y0 + y1) * zoom) / 2; }
   let alive = true;
   // Stops once it settles: only animates again with the mouse over it (saves CPU while the tab sits idle).
   let idle = false;
@@ -585,7 +655,7 @@ function graph() {
   loop();
   graphStop = () => { alive = false; };
   const world = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left - panX) / zoom, (e.clientY - r.top - panY) / zoom]; };
-  const find = (e) => { const [x, y] = world(e); return nodes.find((n) => Math.hypot(n.x - x, n.y - y) < n.r + 4 / zoom); };
+  const find = (e) => { const [x, y] = world(e); return nodes.find((n) => Math.hypot(n.x - x, n.y - y) < n.r + 6 / zoom); };
   let moved = false;
   cv.onpointermove = (e) => {
     if (drag) { [drag.x, drag.y] = world(e); if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 3) moved = true; heat = Math.max(heat, 0.3); wake(); }
@@ -608,8 +678,7 @@ function graph() {
     panX = sx - (sx - panX) * (k / zoom); panY = sy - (sy - panY) * (k / zoom); zoom = k;
     draw();
   };
-  $("#leg").innerHTML = areas.map((k) => `<span><i style="background:${areaColor(k)}"></i>${esc(k)}</span>`).join("") + '<span><i style="background:rgba(255,255,255,.25)"></i>gap</span>';
-  ambient(art("graph"));
+    ambient(art("graph"));
 }
 
 // ---------------------------------------------------------------- Agents (Maestro Orchestrator)
@@ -2830,6 +2899,16 @@ const ACTIONS = {
     try { await api("/api/trash", { path: el.dataset.p }); } catch (e) { return toast(e.message); }
     D = await api("/api"); toast("Moved to .trash"); location.hash = "#/notes";
   },
+  "start-day": async () => {
+    const agent = (S.runners || []).find((r) => r.ready)?.id;
+    if (!agent) return toast("No agent is ready: add one in Settings");
+    try { const r = await api("/api/routine", { name: "morning", agent }); S = await api("/api/system"); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
+  },
+  "enroll-5": async (el) => {
+    const ps = JSON.parse(el.dataset.ps);
+    for (const path of ps) await api("/api/review", { path, remembered: false });
+    toast(`${ps.length} in the cycle: first review tomorrow`); D = await api("/api"); render();
+  },
   enroll: async (el) => { await api("/api/review", { path: el.dataset.p, remembered: false }); toast("In the cycle: first review tomorrow"); D = await api("/api"); render(); },
   routine: async (el) => {
     try {
@@ -3416,7 +3495,7 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }
   if (e.key === "v" || e.key === "V") { e.preventDefault(); ACTIONS["ui-toggle"](); }
-  if (e.key === "/" && pg === "notes") { e.preventDefault(); $("#search").focus(); }
+  if (e.key === "/" && pg !== "agents") { e.preventDefault(); if (pg !== "notes") location.hash = "#/notes"; setTimeout(() => $("#search")?.focus(), pg === "notes" ? 0 : 80); }
   if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
   if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }
   if (pg === "review" && queue[pos]) {
