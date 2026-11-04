@@ -99,8 +99,6 @@ export function loadTasks(dir: string = tasksDir): Task[] {
     return [];
   }
 }
-loadTasks();
-
 export const taskList = () => [...tasks.values()].reverse().map(({ events, stop, ...t }) => ({ ...t, prompt: clip(t.prompt, 160) }));
 export const getTask = (id: string) => { const t = tasks.get(id); if (!t) return null; const { stop, ...rest } = t; return rest; };
 export const stopTask = (id: string) => { const t = tasks.get(id); if (!t?.stop || t.end) return false; t.stop(); return true; };
@@ -311,8 +309,10 @@ async function cli(a: Agent, cwd: string, task: Task, prompt: string, resumed: b
     args.push(v);
   }
   if (resumed && task.session && (a.process === "agy" || cmd === "agy") && !args.includes("--conversation")) args.push("--conversation", task.session);
-  const p = Bun.spawn([bin(cmd)!, ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  task.stop = () => { ctrl.abort(); p.kill(); };
+  // Its own process group, so Stop (and the timeout) also ends what the agent started (a tool's shell, an MCP server),
+  // which would otherwise keep the pipes open and the task running forever.
+  const p = Bun.spawn([bin(cmd)!, ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
+  task.stop = () => { ctrl.abort(); try { process.kill(-p.pid, "SIGTERM"); } catch { p.kill(); } };
   await Promise.all([
     lines(p.stdout, (l) => onCliLine(task, l)),
     lines(p.stderr, (l) => { checkQuota(task, l); log(task, { t: task.quota ? "error" : "result", txt: clip(l, 400) }); }),

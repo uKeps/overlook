@@ -5,6 +5,7 @@
 //   bun server.ts today   -> what the Home shows, as short text for an agent
 import { resolve, basename, dirname } from "node:path";
 import { readlinkSync, readFileSync, writeFileSync, existsSync, statSync, mkdirSync, rmSync, renameSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
@@ -28,23 +29,23 @@ let VAULT = basename(ROOT);
 const LAYOUTS = {
   en: {
     daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md",
-    keys: { type: "type", review: "review_on", interval: "interval" }, types: {} as Record<string, string>,
+    keys: { type: "type", review: "review_on", interval: "interval", confidence: "confidence", updated: "updated" }, types: {} as Record<string, string>,
     routines: { morning: "Follow the morning routine in the Routines section of AGENTS.md.", inbox: "Follow the inbox routine in the Routines section of AGENTS.md." },
     memoTitle: "Voice memo",
     memo: (title: string, file: string, text: string) => `---\ntags: [voice-memo]\n---\n\n# ${title}\n\n> [!abstract]\n> Automatic transcript of "${file}", not processed yet.\n\n${text}\n`,
     voice: (path: string) => `Process ${path}: the automatic transcript of a voice memo. File it following AGENTS.md, as anything I hand you to note: fix obvious recognition errors, never add what wasn't said.`,
     voiceFailed: (name: string, err: string) => `Voice memo "${name}" was not noted: ${err}`,
-    noteAgent: (topic: string) => `Create a note in the vault about: "${topic}". Follow AGENTS.md strictly: choose the right folder (e.g. 3 Concepts/ or 4 Ideas/), use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.`,
+    noteAgent: (topic: string) => `Create a note in the vault about: "${topic}". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.`,
   },
   pt: {
     daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
-    keys: { type: "tipo", review: "revisar_em", interval: "intervalo" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
+    keys: { type: "tipo", review: "revisar_em", interval: "intervalo", confidence: "confianca", updated: "atualizado" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
     memoTitle: "Memo de voz",
     memo: (title: string, file: string, text: string) => `---\ntags: [memo-de-voz]\n---\n\n# ${title}\n\n> [!abstract] Em uma frase\n> Transcrição automática de "${file}", ainda não processada.\n\n${text}\n`,
     voice: (path: string) => `Processe ${path}: é a transcrição automática de um memo de voz. Siga a rotina inbox do AGENTS.md só para este arquivo: corrija erros óbvios de reconhecimento, nunca acrescente o que não foi dito.`,
     voiceFailed: (name: string, err: string) => `Memo de voz "${name}" não foi anotado: ${err}`,
-    noteAgent: (topic: string) => `Crie uma nota no vault sobre: "${topic}". Siga o AGENTS.md rigorosamente: decida a pasta correta (ex: 3 Conceitos/ ou 4 Ideias/), use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.`,
+    noteAgent: (topic: string) => `Crie uma nota no vault sobre: "${topic}". Siga o AGENTS.md rigorosamente: decida a pasta correta pelo AGENTS.md, use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.`,
   },
 };
 let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
@@ -53,7 +54,7 @@ let ROUTINES: Record<string, string> = L.routines;
 
 type Note = {
   path: string; title: string; folder: string; type: string; area: string; tags: string[];
-  summary: string; review_on: string; interval: number; mtime: number; links: string[];
+  summary: string; review_on: string; interval: number; mtime: number; links: string[]; confidence: string; updated: string; body?: string;
 };
 
 const today = (days = 0) => new Date(Date.now() + days * 864e5).toLocaleDateString("sv");
@@ -69,27 +70,51 @@ function frontmatter(txt: string) {
 }
 
 // User notes: folders 1-8, minus drawings (7) and templates.
-async function notes(): Promise<Note[]> {
-  const out: Note[] = [];
+async function notes(withBody = false): Promise<Note[]> {
+  const paths: string[] = [];
   for await (const path of new Bun.Glob("*/*.md").scan(ROOT)) {
     const folder = dirname(path);
     if (!/^[1-8] /.test(folder) || folder.startsWith("7 ") || path.endsWith(".excalidraw.md") || basename(path).startsWith("_")) continue;
-    const f = Bun.file(`${ROOT}/${path}`);
-    if (!(await f.exists())) continue;
-    let txt = "";
-    try { txt = await f.text(); } catch { continue; }
+    paths.push(path);
+  }
+  for await (const path of new Bun.Glob("*.md").scan(ROOT))
+    if (!/^(AGENTS|CLAUDE|GEMINI|README)\.md$/i.test(path) && path !== L.calendar && !path.startsWith("_")) paths.push(path);
+  // In parallel: on a vault under WSL's /mnt/c every file access is a round trip, and one by one they took ~0.8 s.
+  const read = await Promise.all(paths.map(async (path) => {
+    try {
+      const [txt, st] = await Promise.all([Bun.file(`${ROOT}/${path}`).text(), stat(`${ROOT}/${path}`)]);
+      return { path, txt, mtime: Math.round(st.mtimeMs) };
+    } catch { return null; } // gone between the scan and the read
+  }));
+  return read.filter((r) => r !== null).map(({ path, txt, mtime }) => {
     const { fm, body } = frontmatter(txt);
     const type = fm[L.keys.type] ?? "";
-    out.push({
-      path, folder,
+    return {
+      path, folder: dirname(path),
       title: body.match(/^# (.+)$/m)?.[1] ?? basename(path, ".md"),
       type: L.types[type] ?? type, area: fm.area ?? "",
       tags: (fm.tags ?? "").replace(/[\[\]]/g, "").split(",").map((t) => t.trim()).filter(Boolean),
       summary: body.match(/> \[!abstract\][^\n]*\n> (.+)/)?.[1] ?? "",
       review_on: fm[L.keys.review] ?? "", interval: Number(fm[L.keys.interval]) || 0,
-      mtime: f.lastModified,
+      mtime, confidence: fm[L.keys.confidence] ?? "", updated: fm[L.keys.updated] ?? "",
       links: [...body.matchAll(/\[\[([^\]|#^]+)/g)].map((x) => x[1].trim().split("/").pop()!),
-    });
+      ...(withBody ? { body } : {}),
+    };
+  });
+}
+
+// Full-text search: every term must appear in the body, accents and case ignored. Up to 30 notes, each with its first matching line.
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+async function search(q: string) {
+  const terms = fold(q.slice(0, 200)).split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  const out: { path: string; title: string; line: string }[] = [];
+  for (const n of await notes(true)) {
+    const body = fold(n.body!);
+    if (!terms.every((t) => body.includes(t))) continue;
+    const line = n.body!.split("\n").find((l) => fold(l).includes(terms[0])) ?? "";
+    out.push({ path: n.path, title: n.title, line: line.replace(/[#>*`|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 160) });
+    if (out.length === 30) break;
   }
   return out;
 }
@@ -115,7 +140,8 @@ async function section(name: string) {
   const f = Bun.file(`${ROOT}/${L.daily}/${today()}.md`);
   if (!(await f.exists())) return null;
   const sec = (await f.text()).match(new RegExp(`^## ${name}\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m"))?.[1] ?? "";
-  return sec.split("\n").filter((l) => /^\s*- /.test(l)).map((l) => l.replace(/^\s*- (\[.\] )?/, ""));
+  // Done items leave the Home: a checked box, or a capture already filed as `→ [[Note]]`.
+  return sec.split("\n").filter((l) => /^\s*- /.test(l) && !/^\s*- \[[xX]\]/.test(l) && !/→\s*\[\[/.test(l)).map((l) => l.replace(/^\s*- (\[.\] )?/, ""));
 }
 
 // Calendar.md at the vault root: one line per item, `- YYYY-MM-DD HH:MM · what` (the time is optional). Plain Markdown,
@@ -203,10 +229,12 @@ async function note(path: string) {
   const md = body
     .replace(/^# .+\n/m, "")
     .replace(/!\[\[([^\]]+)\]\]/g, (_, a) => `*Drawing: ${a.replace(/\.excalidraw(\.md)?$/, "")} (open in Obsidian)*`)
-    .replace(/\[\[([^\]|#^]+)[^\]|]*(?:\|([^\]]+))?\]\]/g, (_, a, b) => `[${b ?? a}](#/w/${encodeURIComponent(a.trim())})`);
+    .replace(/\[\[([^\]|#^]+)[^\]|]*(?:\|([^\]]+))?\]\]/g, (_, a, b) => `[${b ?? a}](#/w/${encodeURIComponent(a.trim().split("/").pop()!)})`);
   const name = basename(path, ".md");
   return {
-    ...n, html: Bun.markdown.html(md),
+    // Notes are written by agents that read the web: raw HTML shows as text, and a link keeps only a safe scheme.
+    ...n, html: Bun.markdown.html(md, { noHtmlBlocks: true, noHtmlSpans: true })
+      .replace(/href="([^"]*)"/g, (m, u) => /^[^/?#]*:/.test(u) && !/^(https?|mailto|obsidian):/i.test(u) ? 'href="#"' : m),
     backlinks: ns.filter((x) => x.links.includes(name)).map(({ path, title }) => ({ path, title })),
   };
 }
@@ -531,6 +559,9 @@ const page = (t: string, msg: string) => new Response(`<!doctype html><meta char
 <main style="max-width:520px"><h1 style="font-weight:400">${t}</h1><p style="color:#A3A19C">${msg.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!)}</p><p><a style="color:#F2B48C" href="/#/services">Back to Services →</a></p></main>`, { headers: { "content-type": "text/html; charset=utf-8" } });
 
 loadTasks(import.meta.dir);
+// Agents run in their own process group, so Ctrl+C on this terminal no longer reaches them: stop them, then exit as usual.
+for (const sig of ["SIGINT", "SIGTERM"] as const)
+  process.once(sig, () => { for (const t of taskList()) if (!t.end) stopTask(t.id); process.kill(process.pid, sig); });
 startScheduler(ROOT, import.meta.dir);
 startPinterest(`${TAILNET ? `https://${TAILNET}` : `http://127.0.0.1:${PORT}`}/auth/pinterest/callback`); // Tailscale HTTPS redirect
 
@@ -645,6 +676,7 @@ async function handle(req: Request, port: number) {
     });
   }
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
+  if (p === "/api/search") return json(await search(url.searchParams.get("q") ?? ""));
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/dirs") { const d = listDirs(ROOT, url.searchParams.get("path") ?? undefined, url.searchParams.get("hidden") === "1"); return d ? json(d) : new Response("invalid cwd", { status: 400 }); }
@@ -667,6 +699,10 @@ async function handle(req: Request, port: number) {
 Bun.serve({
   hostname: "127.0.0.1", port: PORT,
   fetch(req, server) {
+    // Host blocks DNS rebinding; Origin blocks other pages, which browsers let send GETs and open WebSockets to localhost.
+    const origin = req.headers.get("origin");
+    if (!hostOk(req.headers.get("host") ?? "", PORT) || (origin && !hostOk(origin.replace(/^https?:\/\//, ""), PORT)))
+      return new Response("forbidden", { status: 403 });
     const url = new URL(req.url);
     if (url.pathname === "/ws/terminal") {
       const id = url.searchParams.get("id");
