@@ -45,6 +45,7 @@ const I = {
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   terminal: '<polyline points="4 17 10 12 4 7"/><path d="M12 19h8"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
@@ -1328,7 +1329,15 @@ function renderMultiChips() {
 }
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
 // before ghostty-web sees the key) without taking keys a shell or TUI uses.
-const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · / this help";
+const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · Z full screen · / this help";
+// Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen); Esc leaves.
+function canvasFull(on = !document.body.classList.contains("canvas-full")) {
+  document.body.classList.toggle("canvas-full", on);
+  if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  orchSigs.clear(); setTimeout(() => orchPaint(true), 60); // terminals refit to the new size
+}
+document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && document.body.classList.contains("canvas-full")) canvasFull(false); });
 window.addEventListener("keydown", (e) => {
   if (!e.ctrlKey || !e.altKey || e.metaKey || route().pg !== "agents") return;
   const keys = orchPanes.map(paneKey), i = keys.indexOf(orchActive);
@@ -1340,6 +1349,7 @@ window.addEventListener("keydown", (e) => {
     KeyN: () => ACTIONS["orch-new"](),
     KeyW: () => orchActive && ACTIONS["orch-unpin"]({ dataset: { key: orchActive } }),
     KeyF: () => { if (orchMode === "free") { fitCanvasView(); saveCanvas(); } },
+    KeyZ: () => canvasFull(),
     Slash: () => toast(PANE_KEYS),
   }[e.code];
   const digit = /^Digit([1-9])$/.exec(e.code);
@@ -1933,14 +1943,16 @@ async function orchPaint(force) {
   // canvas-only tools (select/pan, arrange, fit, zoom) show on the free canvas.
   if (hud) {
     const b = (act, ic, tip, extra = "", on = false) => `<button type="button" class="hud-btn ${on ? "on" : ""}" data-act="${act}" ${extra} title="${tip}" aria-label="${tip}">${icon(ic, 14)}</button>`;
+    const full = b("canvas-full", "expand", document.body.classList.contains("canvas-full") ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", document.body.classList.contains("canvas-full"));
     const make = b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note");
-    const hudHtml = !isFree ? make : `${b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select")}${b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan")}
+    const hudHtml = !isFree ? `${make}<span class="orch-hud-sep"></span>${full}` : `${b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select")}${b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan")}
         <span class="orch-hud-sep"></span>${make}<span class="orch-hud-sep"></span>
         ${b("orch-arrange", "grid", "Arrange the windows")}${b("orch-fit", "max", "Fit everything in view (Ctrl+Alt+F)")}
         <span class="orch-hud-sep"></span>
         <button type="button" class="hud-btn" data-act="orch-zoom" data-d="-0.15" title="Zoom out" aria-label="Zoom out">−</button>
         <button type="button" class="hud-btn hud-zoom" data-act="orch-zoom" data-d="0" id="orch-zoom-lbl" title="Back to 100%">${Math.round(orchZoom * 100)}%</button>
         <button type="button" class="hud-btn" data-act="orch-zoom" data-d="0.15" title="Zoom in" aria-label="Zoom in">+</button>
+        <span class="orch-hud-sep"></span>${full}
         <span class="hud-sel" id="orch-sel-cnt" ${orchSelected.size ? "" : "hidden"}>${orchSelected.size} selected</span>
         <button type="button" class="hud-btn danger" data-act="orch-del-sel" id="orch-del-sel" title="Close the selected cards (Delete)" ${orchSelected.size ? "" : "hidden"}>${icon("trash", 14)}</button>`;
     // Rewritten only when it changes: a rewrite every tick drops clicks that straddle it.
@@ -2738,6 +2750,7 @@ function render() {
   if (document.activeElement?.closest?.("#dockwrap")) document.activeElement.blur(); // a floating dock folds after you pick a page
   graphStop?.(); graphStop = null; clearInterval(orchTimer);
   const { pg, arg } = route();
+  if (pg !== "agents" && document.body.classList.contains("canvas-full")) canvasFull(false); // full screen is the canvas's
   $("#crumb").textContent = pg === "a" ? S.background?.find((x) => x.key === arg)?.title || AGENT_NAME[S.agents.find((x) => x.key === arg)?.name]?.[0] || "Agent" : pg === "s" ? S.services.find((s) => s.id === arg)?.name || "Service" : PAGES[pg][1];
   document.body.classList.toggle("home", !pg);
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
@@ -2973,6 +2986,7 @@ const ACTIONS = {
     orchSigs.delete(el.dataset.key);
     orchPaint(true);
   },
+  "canvas-full": () => canvasFull(),
   "orch-collapse": (el) => {
     const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
     if (!p) return;

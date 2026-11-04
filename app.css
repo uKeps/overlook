@@ -1929,3 +1929,11 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 /* a wire an agent just used to hand off: it flows from sender to receiver for a few seconds */
 .orch-links path.ln.hot { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; animation: wire-flow .6s linear infinite; }
 @keyframes wire-flow { to { stroke-dashoffset: -11; } }
+
+/* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD and the Fleet stay on it */
+body.canvas-full { padding: 0; }
+body.canvas-full :is(.top, .cal, #dockwrap, .orch-deck) { display: none !important; }
+body.canvas-full main { max-width: none; margin: 0; padding: 0; }
+body.canvas-full .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
+body.canvas-full .orch-canvas { border-radius: 0; border: 0; }
+body.canvas-full .orch-work { gap: 0; }
