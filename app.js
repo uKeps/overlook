@@ -1521,7 +1521,7 @@ function bindPaneDragResize(card, p) {
       e.preventDefault(); e.stopPropagation();
       try { r.setPointerCapture(e.pointerId); } catch {}
       ensurePaneRect(p);
-      const corner = r.dataset.corner || "se";
+      const corner = c; // which edge or corner this handle moves: n/s/e/w and their pairs
       const x0 = e.clientX, y0 = e.clientY;
       const startX = p.x, startY = p.y, startW = p.w, startH = p.h;
       const move = (ev) => {
