@@ -6,8 +6,8 @@
 <title>Overlook</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='5' fill='%23f4b88f'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
-<script>try { document.documentElement.dataset.theme = localStorage.getItem("overlook.theme") || "overlook"; document.documentElement.dataset.ui = localStorage.getItem("overlook.ui") || "classic"; } catch {}</script>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wdth,wght@75..100,400..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("overlook.theme") || "overlook"; document.documentElement.dataset.ui = localStorage.getItem("overlook.ui") || "minimal"; } catch {}</script>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -17,6 +17,7 @@
   <div class="crumb"><b>Overlook</b><span>/</span><span id="crumb">Home</span></div>
   <div class="svcbar" id="svcbar"></div>
   <div class="clock"><span id="time"></span></div>
+  <button class="glass btn search-btn" data-act="cmdk" title="Search notes, pages and actions (/ or Ctrl+K)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Search</span><kbd>/</kbd></button>
   <button class="glass btn ui-btn" data-act="ui-toggle" id="ui-btn" title="Switch interface (V)">Minimal <kbd>V</kbd></button>
   <button class="glass btn" data-act="capture">Capture <kbd>C</kbd></button>
 </header>
@@ -56,6 +57,11 @@
     <small id="capture-hint">Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
     <button type="button" class="btn peach" id="capture-submit-btn" data-act="capture-save">Save</button>
   </div>
+</dialog>
+<dialog id="cmdk" aria-label="Search notes, pages and actions">
+  <div class="ck-field"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="cmdk-q" placeholder="Search notes, pages and actions" autocomplete="off" spellcheck="false" aria-controls="cmdk-list"></div>
+  <div class="ck-list" id="cmdk-list" role="listbox"></div>
+  <div class="ck-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
 </dialog>
 <dialog id="picker" class="glass" aria-label="Choose an image"></dialog>
 <div class="toast glass" id="toast" role="status"></div>
