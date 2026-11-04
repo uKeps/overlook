@@ -1925,3 +1925,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-pane[data-kind="sticky"] { --win-bg: color-mix(in srgb, var(--accent) 7%, color-mix(in srgb, var(--surface) 88%, #000)); }
 .orch-term-view { padding: 6px 8px; }
 
+
+/* a wire an agent just used to hand off: it flows from sender to receiver for a few seconds */
+.orch-links path.ln.hot { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; animation: wire-flow .6s linear infinite; }
+@keyframes wire-flow { to { stroke-dashoffset: -11; } }

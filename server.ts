@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, wireCount } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -462,7 +462,7 @@ async function ptySpec(q: URLSearchParams) {
     if (!s.session) return "this task has no session to resume";
     if (sessionBusy(s.session)) return "this session is running (task or another pane)";
     const argv = agentArgv(s.a, s.session);
-    return typeof argv === "string" ? argv : { argv, cwd: s.cwd, title: s.a.name, session: s.session };
+    return typeof argv === "string" ? argv : { argv: withCanvas(s.a, argv), cwd: s.cwd, title: s.a.name, session: s.session };
   }
   if (q.has("agent")) {
     const a = loadAgents(import.meta.dir).find((x) => x.id === q.get("agent"));
@@ -476,7 +476,7 @@ async function ptySpec(q: URLSearchParams) {
     const ms = models(a), model = ms.find((m) => m.id === q.get("model"))?.id ?? "";
     const effort = (ms.find((m) => m.id === model)?.efforts ?? efforts(a)).includes(q.get("effort") ?? "") ? q.get("effort")! : "";
     const argv = sid && !q.has("fresh") && sessionStarted(sid) ? agentArgv(a, sid) : tuiArgv(a, sid, q.has("fresh") ? prompt : "", model, effort);
-    return typeof argv === "string" ? argv : { argv, cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid };
+    return typeof argv === "string" ? argv : { argv: withCanvas(a, argv), cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid };
   }
   const sh = shellPath(q.get("shell") ?? undefined);
   return { argv: [sh], cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: basename(sh) };
@@ -674,6 +674,11 @@ async function handle(req: Request, port: number) {
       return typeof r === "string" ? new Response(r, { status: 400 }) : json(r);
     }
     if (p === "/api/pty/close") return typeof b.id === "string" ? json({ ok: closePty(b.id) }) : new Response("missing id", { status: 400 });
+    // Agent hand-off: the canvas sends its wires; a pane (from + its token) lists, reads and messages the panes wired to it.
+    if (p === "/api/canvas/wires") { setWires(b.wires, b.names); return json({ ok: true }); }
+    if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
+    if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     if (p === "/api/calendar" || p === "/api/calendar/delete") {
       const e = calItem(b);
       if (typeof e === "string") return new Response(e, { status: 400 });
@@ -692,7 +697,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/images") return json(imagesState());
   if (p === "/api/settings") return json(settings());
-  if (p === "/api/pty") return json({ sessions: listPtys() });
+  if (p === "/api/pty") return json({ sessions: listPtys(), wires: wireCount(), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
   if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {
     const terminals = detectTerminals();
@@ -764,7 +769,9 @@ Bun.serve({
     open(ws: any) {
       const { id, spec, cols, rows } = ws.data;
       // spec is null when the PTY was alive at upgrade: attach to it whatever its state since (exited ones show their end).
-      const t = spec === null ? getPty(id) : openPty(id, spec.argv, spec.cwd, cols, rows, spec.title, spec.session);
+      // The `overlook` command (bin/) on the PATH, and where to reach this server, for the pane's hand-offs.
+      const t = spec === null ? getPty(id) : openPty(id, spec.argv, spec.cwd, cols, rows, spec.title, spec.session,
+        { OVERLOOK_URL: `http://127.0.0.1:${PORT}`, PATH: `${import.meta.dir}/bin:${process.env.PATH ?? ""}` });
       if (!t) return ws.close(4000, "gone");
       // The replay stays under the socket's 2 MiB backpressure limit even when every character is 3 UTF-8 bytes (TUI borders).
       if (t.tail) ws.send(t.tail.length > 400_000 ? "\x1b[0m" + t.tail.slice(-400_000) : t.tail);
@@ -772,13 +779,13 @@ Bun.serve({
       t.ends.add((ws.data.end = () => ws.close(4001, "exited")));
       ws.data.sub = (d: string) => { try { ws.send(d); } catch {} };
       t.subs.add(ws.data.sub);
-      if (getPty(id) === t && spec === null) t.proc.terminal?.resize(cols, rows);
+      if (getPty(id) === t && spec === null) resizePty(t, cols, rows);
     },
     message(ws: any, m: string | Buffer) {
       const t = getPty(ws.data.id), s = String(m);
       if (!t || t.code !== undefined) return;
       // "\0" + JSON is a resize from the pane; everything else is keystrokes.
-      if (s.startsWith("\0")) { try { const r = JSON.parse(s.slice(1)); t.proc.terminal?.resize(dim(r.cols, 80), dim(r.rows, 24)); } catch {} }
+      if (s.startsWith("\0")) { try { const r = JSON.parse(s.slice(1)); resizePty(t, dim(r.cols, 80), dim(r.rows, 24)); } catch {} }
       else t.proc.terminal?.write(s);
     },
     close(ws: any) {

@@ -4,6 +4,7 @@
 import { resolve, dirname, relative, isAbsolute, sep, join, basename } from "node:path";
 import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
+import { Ghostty } from "ghostty-web";
 
 // models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults).
 // A model is an id or { id, label, efforts } when it has a display name or its own effort levels;
@@ -14,6 +15,7 @@ import { homedir, userInfo } from "node:os";
 export type Agent = {
   id: string; name: string; process?: string; run?: string[]; api?: "anthropic" | "openai"; url?: string; key?: string;
   model?: string; models?: (string | Model)[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>; tui?: string[];
+  canvas?: string[]; // extra args for a TUI on the canvas, {canvas} = how to reach the cards wired to it (CANVAS_HINT)
 };
 type Model = { id: string; label?: string; efforts?: string[] };
 export type QuotaInfo = { exhausted: boolean; resetsIn?: string; message: string };
@@ -25,7 +27,8 @@ const DEFAULTS: Agent[] = [
   { id: "claude", name: "Claude Code", process: "claude", efforts: EFFORTS, effort: "high",
     models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }, { id: "haiku", label: "Haiku" }],
     run: ["claude", "-p", "{prompt}", "--session-id", "{session}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
-    open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] }, tui: ["claude", "--model", "{model}", "--effort", "{effort}", "--session-id", "{session}", "{prompt}"] },
+    open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] }, tui: ["claude", "--model", "{model}", "--effort", "{effort}", "--session-id", "{session}", "{prompt}"],
+    canvas: ["--append-system-prompt", "{canvas}"] },
   { id: "agy", name: "Antigravity", process: "agy", efforts: EFFORTS, effort: "high",
     run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "accept-edits", "--output-format", "stream-json", "--print-timeout", "10m"],
     open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] }, tui: ["agy", "-i", "{prompt}"] },
@@ -524,9 +527,15 @@ export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: str
 // ---------------------------------------------------------------- Embedded terminals: real PTYs (Bun.Terminal)
 // Each canvas terminal pane is a real pseudo-terminal, so shells, vim and agent TUIs (claude, agy) run as in Ghostty.
 // A PTY outlives its WebSocket (page reload, pane re-render) and replays the tail of its output on reconnect.
-type Pty = { id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number };
+type Pty = {
+  id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number;
+  token: string; screen?: ReturnType<Ghostty["createTerminal"]>;
+};
 const ptys = new Map<string, Pty>();
 const TAIL = 512_000;
+// A headless copy of each terminal (Ghostty's VT core, the one the pane renders with), so another agent can read what a
+// pane shows: TUIs redraw in place, so the raw output stream says little.
+const vt = await Ghostty.load(`${import.meta.dir}/node_modules/ghostty-web/ghostty-vt.wasm`).catch(() => null);
 
 // A known shell (by id or path) or the user's default; a cwd that exists, or the fallback.
 export function shellPath(shell?: string) {
@@ -558,13 +567,14 @@ export const tuiResumes = (a: Agent) => !!a.tui?.some((x) => x.includes("{sessio
 // nothing to resume, so it starts again with the same id. ponytail: claude's layout; other agents with {session} resume blindly.
 export const sessionStarted = (sid: string) => { try { return [...new Bun.Glob(`*/${sid}.jsonl`).scanSync(`${homedir()}/.claude/projects`)].length > 0; } catch { return false; } };
 
-export function openPty(id: string, argv: string[], cwd: string, cols: number, rows: number, title: string, session = ""): Pty {
+export function openPty(id: string, argv: string[], cwd: string, cols: number, rows: number, title: string, session = "", env: Record<string, string> = {}): Pty {
   const old = ptys.get(id);
   if (old && old.code === undefined) return old;
   const dec = new TextDecoder();
-  const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set() } as unknown as Pty;
+  const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set(), token: crypto.randomUUID(), screen: vt?.createTerminal(cols, rows) } as unknown as Pty;
   const emit = (s: string) => {
     t.tail += s;
+    if (t.screen) { t.screen.write(s); while (t.screen.hasResponse()) t.screen.readResponse(); } // the real pane answers queries
     // Trimmed in batches (not a 512KB copy per chunk), at a line start, with attributes reset for the replay.
     // ponytail: a line start can still sit inside a TUI's escape sequence (one garbled cell at worst).
     if (t.tail.length > 2 * TAIL) { const cut = t.tail.indexOf("\n", t.tail.length - TAIL); t.tail = "\x1b[0m" + t.tail.slice(cut < 0 ? -TAIL : cut + 1); }
@@ -572,7 +582,9 @@ export function openPty(id: string, argv: string[], cwd: string, cols: number, r
   };
   t.proc = Bun.spawn(argv, {
     // Without Claude Code's own markers: Overlook started from inside a claude session would make the TUI a "child" (no transcript).
-    cwd, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", CLAUDECODE: undefined, CLAUDE_CODE_CHILD_SESSION: undefined, CLAUDE_CODE_ENTRYPOINT: undefined },
+    // OVERLOOK_PANE/OVERLOOK_TOKEN: who this pane is, for the `overlook` command (bin/overlook) its agent can run.
+    cwd, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", CLAUDECODE: undefined, CLAUDE_CODE_CHILD_SESSION: undefined, CLAUDE_CODE_ENTRYPOINT: undefined,
+      OVERLOOK_PANE: id, OVERLOOK_TOKEN: t.token, ...env },
     terminal: { cols, rows, data: (_, d) => emit(dec.decode(d, { stream: true })) },
   });
   t.proc.exited.then((code) => {
@@ -592,10 +604,77 @@ export function closePty(id: string) {
   if (!t) return false;
   // Interactive shells ignore SIGTERM: closing the PTY sends SIGHUP like closing a terminal window; KILL if that is ignored too.
   try { t.proc.terminal?.close(); t.proc.kill("SIGHUP"); } catch {}
+  t.screen?.free(); t.screen = undefined;
   setTimeout(() => { if (t.code === undefined) try { t.proc.kill(9); } catch {} }, 3000);
   return ptys.delete(id);
 }
 export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, running: t.code === undefined }));
+export function resizePty(t: Pty, cols: number, rows: number) { t.proc.terminal?.resize(cols, rows); t.screen?.resize(cols, rows); }
+
+// What a pane shows: its screen plus recent scrollback, as plain text (wide characters' spacer cells skipped).
+export function screenText(t: Pty, max = 60) {
+  const s = t.screen;
+  const text = !s ? t.tail.replace(/\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b./g, "").replace(/\r/g, "")
+    : (() => {
+      const row = (cells: { codepoint: number; width: number }[] | null) => (cells ?? []).map((c) => (c.width === 0 ? "" : c.codepoint ? String.fromCodePoint(c.codepoint) : " ")).join("").trimEnd();
+      const sb = s.getScrollbackLength(), lines: string[] = [];
+      for (let i = Math.max(0, sb - max); i < sb; i++) lines.push(row(s.getScrollbackLine(i)));
+      for (let y = 0; y < s.getDimensions().rows; y++) lines.push(row(s.getLine(y)));
+      return lines.join("\n");
+    })();
+  return text.replace(/\n{3,}/g, "\n\n").trim().split("\n").slice(-max).join("\n");
+}
+
+// ---------------------------------------------------------------- Agent hand-off between wired terminals
+// A wire between two terminal cards on the canvas lets the programs in them talk, both ways: `overlook send <card> "…"`
+// types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
+// screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
+export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task.";
+const wires = new Set<string>(), names = new Map<string, string>(), sent = new Map<string, number[]>();
+export const handoffs: { from: string; to: string; at: number }[] = [];
+const pair = (a: string, b: string) => [a, b].sort().join("|");
+export function setWires(list: unknown, titles: unknown) {
+  wires.clear(); names.clear();
+  if (Array.isArray(list)) for (const w of list) if (Array.isArray(w) && typeof w[0] === "string" && typeof w[1] === "string") wires.add(pair(w[0], w[1]));
+  if (titles && typeof titles === "object") for (const [k, v] of Object.entries(titles)) if (typeof v === "string") names.set(k, v.slice(0, 80));
+}
+const nameOf = (t: Pty) => names.get(t.id) || t.title;
+export const wireCount = () => wires.size;
+const callerOf = (from: unknown, token: unknown) => { const t = typeof from === "string" ? ptys.get(from) : undefined; return t && typeof token === "string" && token === t.token ? t : null; };
+const peersOf = (me: Pty) => [...ptys.values()].filter((p) => p !== me && wires.has(pair(me.id, p.id)));
+const findPeer = (me: Pty, to: string) => { const ps = peersOf(me), q = to.toLowerCase(); return ps.find((p) => p.id === to) ?? ps.find((p) => nameOf(p).toLowerCase().includes(q)); };
+export function ptyPeers(from: unknown, token: unknown) {
+  const me = callerOf(from, token);
+  return me ? peersOf(me).map((p) => ({ id: p.id, name: nameOf(p), running: p.code === undefined })) : "unknown pane or token";
+}
+export function ptyRead(from: unknown, token: unknown, to: unknown, max = 60) {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  const p = findPeer(me, String(to ?? ""));
+  return p ? { id: p.id, name: nameOf(p), text: screenText(p, Math.min(400, Math.max(5, max))) } : `no card wired to this one matches "${to}" (overlook peers lists them)`;
+}
+export function ptySend(from: unknown, token: unknown, to: unknown, text: unknown): true | string {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  const p = findPeer(me, String(to ?? ""));
+  if (!p) return `no card wired to this one matches "${to}" (overlook peers lists them)`;
+  if (p.code !== undefined) return `${nameOf(p)} is not running`;
+  // Plain text only: control characters (escape sequences, Ctrl-C, a carriage return that would submit early) are dropped.
+  const clean = String(text ?? "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").trim().slice(0, 8000);
+  if (!clean) return "empty message";
+  // Two agents could answer each other forever: at most 6 messages a minute from one card to another.
+  const k = `${me.id}>${p.id}`, now = Date.now(), recent = (sent.get(k) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= 6) return "rate limit: 6 messages a minute to one card; wait or ask the user";
+  sent.set(k, [...recent, now]);
+  const msg = `[Message from "${nameOf(me)}" (card ${me.id}) on the Overlook canvas; reply with: overlook send ${me.id} "..."]\n${clean}`;
+  p.proc.terminal?.write(p.screen?.hasBracketedPaste() ? `\x1b[200~${msg}\x1b[201~` : msg);
+  setTimeout(() => { if (p.code === undefined) p.proc.terminal?.write("\r"); }, 150);
+  handoffs.push({ from: me.id, to: p.id, at: now });
+  if (handoffs.length > 50) handoffs.shift();
+  return true;
+}
+// A TUI on the canvas learns how to reach its wired cards (agents with a `canvas` template, e.g. claude's system prompt).
+export const withCanvas = (a: Agent, argv: string[]) => [...argv, ...(a.canvas ?? []).map((x) => x.replaceAll("{canvas}", CANVAS_HINT))];
 
 export const openers = (a: Agent) => Object.entries(a.open ?? {}).map(([label, cmd]) => ({ label, session: cmd.some((x) => x.includes("{session}")) }));
 // Launches detached; the caller has already validated session and cwd.

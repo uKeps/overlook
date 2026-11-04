@@ -1739,6 +1739,35 @@ test("adversarial verification: terminal & shell launcher, emulator detection, f
   expect(appJs).toContain("set-terminal");
 });
 
+test("agent hand-off: a terminal talks to the terminals wired to it, and only to those", async () => {
+  // Two shells; A drives everything through the `overlook` command Overlook puts on its PATH.
+  const open = (id: string) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=${id}&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=120&rows=30`, { headers: { origin: BASE } } as any);
+    const st = { ws, out: "" };
+    ws.onmessage = (e) => { st.out += e.data; };
+    return new Promise<typeof st>((res) => { ws.onopen = () => res(st); });
+  };
+  const until = async (st: { out: string }, re: RegExp, ms = 15000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(100)) if (re.test(st.out)) return;
+    throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
+  };
+  const a = await open("t_ha"), b = await open("t_hb");
+  expect((await post("/api/canvas/wires", { wires: [["t_ha", "t_hb"]], names: { t_ha: "Alpha", t_hb: "Beta" } })).status).toBe(200);
+
+  a.ws.send("overlook peers; overlook send Beta 'echo HANDOFF_$((6*7))'; sleep 1; overlook read Beta 40\r");
+  await until(a, /--- Beta \(t_hb\)[\s\S]*HANDOFF_42/); // A read B's screen: B ran what A sent
+  expect(a.out).toMatch(/t_hb\tBeta/);
+  expect(b.out).toContain("[Message from \"Alpha\" (card t_ha)");
+
+  // Only a pane's own token speaks for it; no wire, no talking.
+  expect((await post("/api/pty/send", { from: "t_ha", token: "not-the-token", to: "t_hb", text: "x" })).status).toBe(400);
+  await post("/api/canvas/wires", { wires: [], names: {} });
+  a.ws.send("overlook send Beta hi\r");
+  await until(a, /no card wired to this one matches "Beta"/);
+  a.ws.close(); b.ws.close();
+  for (const id of ["t_ha", "t_hb"]) await post("/api/pty/close", { id });
+});
+
 test("canvas terminal: a real PTY over /ws/pty, only for Overlook's own pages", async () => {
   const url = `ws://127.0.0.1:${PORT}/ws/pty?id=t_pty&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=90&rows=20`;
   const upgrade = (u: string, origin: string) => fetch(u.replace("ws:", "http:"), { headers: { origin, upgrade: "websocket", connection: "Upgrade", "sec-websocket-key": btoa("the sample nonce"), /* RFC 6455's example nonce, built here so no key-like literal sits in the source */ "sec-websocket-version": "13" } });

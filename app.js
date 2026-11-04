@@ -747,7 +747,22 @@ try {
     if (c.ratio) orchRatio = c.ratio;
   }
 } catch {}
+// The server only lets terminals talk across wires it knows (agent hand-off): send the terminal↔terminal wires and
+// the cards' names whenever they change.
+let wiresSent = "";
+function syncWires() {
+  const term = (k) => (k.startsWith("terminal:") ? k.slice(9) : "");
+  const wires = orchLinks.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
+  const names = Object.fromEntries(orchPanes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
+  const body = JSON.stringify({ wires, names });
+  if (body === wiresSent) return;
+  wiresSent = body;
+  api("/api/canvas/wires", { wires, names }).catch(() => { wiresSent = ""; });
+}
+// A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
+const termName = (p) => (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
 function saveCanvas() {
+  syncWires();
   try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio })); } catch {}
 }
 // Canvas terminal panes: Ghostty's own terminal core (ghostty-web, WASM) on a real PTY (/ws/pty), in the user's Ghostty colors.
@@ -1121,6 +1136,16 @@ function addPane(item, x, y) {
   agentsBody();
   return true;
 }
+// Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
+let hotWires = new Set();
+async function pollHandoffs() {
+  if (!orchLinks.length || !orchPanes.some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
+  const r = await api("/api/pty").catch(() => null);
+  // A restarted server forgot the wires: send them again.
+  if (r && r.wires !== new Set(JSON.parse(wiresSent || '{"wires":[]}').wires.map((w) => [...w].sort().join("|"))).size) { wiresSent = ""; syncWires(); }
+  const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [`terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
+  if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
+}
 // Links are drawn in canvas coordinates, from the right edge of the source to the left edge of the target.
 function drawLinks(tmp) {
   const plane = $("#orch-plane");
@@ -1149,7 +1174,8 @@ function drawLinks(tmp) {
       const x1 = fromLeft ? a.x : a.x + a.w, y1 = a.y + a.h / 2;
       const x2 = fromLeft ? b.x + b.w : b.x, y2 = b.y + b.h / 2;
       const d = curve(x1, y1, x2, y2);
-      return `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln" d="${d}" marker-end="url(#orch-arrow)"/>`;
+      const hot = hotWires.has([l.a, l.b].sort().join("|"));
+      return `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln ${hot ? "hot" : ""}" d="${d}" marker-end="url(#orch-arrow)"/>`;
     }).join("")
     + (tmp ? `<path class="ln tmp" d="${curve(...tmp)}"/>` : "");
 }
@@ -1157,7 +1183,7 @@ const htmlText = (h) => { const d = document.createElement("div"); d.innerHTML =
 // What the cards linked into `key` say, shaped as a preamble for the next message (fits within `budget` chars).
 async function linkedContext(key, budget) {
   const srcs = orchLinks.filter((l) => l.b === key).map((l) => orchPanes.find((p) => paneKey(p) === l.a)).filter(Boolean);
-  if (!srcs.length || budget < 300) return "";
+  if (budget < 300 || (!srcs.length && !orchLinks.some((l) => l.a === key || l.b === key))) return "";
   const parts = await Promise.all(srcs.map(async (p) => {
     if (p.kind === "sticky") return p.text?.trim() ? `### Sticky note\n${p.text.trim()}` : "";
     if (p.kind === "note") {
@@ -1173,9 +1199,12 @@ async function linkedContext(key, budget) {
     const last = r?.events?.filter((e) => e.t === "text").at(-1)?.txt;
     return last ? `### Latest answer from ${p.kind === "task" ? `task "${String(r.prompt).slice(0, 80)}"` : r.title || r.name}\n${last}` : "";
   }));
-  const each = Math.floor((budget - 140) / srcs.length);
+  const each = Math.floor((budget - 140) / Math.max(1, srcs.length));
   const body = parts.filter(Boolean).map((s) => (s.length > each ? `${s.slice(0, each)}…` : s)).join("\n\n");
-  return body ? `Context from cards linked to this one on the Overlook canvas:\n\n${body}\n\n---\n\n` : "";
+  // A terminal wired to other terminals can talk to them itself: say how (the ids are what `overlook` takes).
+  const peers = key.startsWith("terminal:") ? orchLinks.filter((l) => l.a === key || l.b === key).map((l) => (l.a === key ? l.b : l.a)).filter((k) => k.startsWith("terminal:")) : [];
+  const how = peers.length ? `You can also talk to the wired terminals yourself: ${peers.map((k) => `"${termName(orchPanes.find((p) => paneKey(p) === k) || { id: k.slice(9) })}" = card ${k.slice(9)}`).join(", ")}. Run \`overlook send <card> "message"\` to hand work to one (it lands there as a prompt), \`overlook read <card>\` to see its screen.\n\n` : "";
+  return body || how ? `${body ? `Context from cards linked to this one on the Overlook canvas:\n\n${body}\n\n` : ""}${how}---\n\n` : "";
 }
 const linkCount = (key) => orchLinks.filter((l) => l.b === key).length;
 
@@ -1281,7 +1310,7 @@ function agents() {
   loadTerminals();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
-  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); }, 2000);
+  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); }, 2000);
   ambient(art("agents"));
 }
 function renderMultiChips() {
