@@ -1835,7 +1835,6 @@ test("adversarial verification: canvas multiselect deletion via Delete key, traf
   expect(appJs).toContain('e.key === "Delete" && orchSelected.size > 0');
 
   // Traffic lights unpin & empty canvas protection
-  expect(appJs).toContain('if (!orchPanes.length && orchMode !== "free")');
   // Window chrome: traffic lights close/minimize/maximize, and resize handles on all 8 edges and corners
   expect(appJs).toContain('data-act="orch-unpin"');
   expect(appJs).toContain('data-act="orch-collapse"');
