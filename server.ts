@@ -282,7 +282,9 @@ async function claudeSessions() {
 async function background() {
   return (await claudeSessions()).filter((x) => x.kind === "background" && !x.pid).sort((a, b) => b.startedAt - a.startedAt).slice(0, 8)
     .map((x) => ({ key: `c:${x.sessionId}`, title: x.name ?? x.id, state: x.state ?? "", cwd: String(x.cwd ?? "").replace(homedir(), "~"), since: x.startedAt,
-      needs: x.state === "blocked" ? readJson(`${homedir()}/.claude/jobs/${x.id}/state.json`)?.needs ?? "" : "" }));
+      needs: x.state === "blocked" ? readJson(`${homedir()}/.claude/jobs/${x.id}/state.json`)?.needs ?? "" : "",
+      // Claude Code deletes transcripts after 30 days: an old job is still listed, but there is nothing to resume.
+      resumable: sessionStarted(x.sessionId) }));
 }
 
 type Service = { id: string; name: string; url: string; desc: string; icon?: string; dock?: boolean; width?: number; max?: number; proxy?: number; tailnet?: number; internal?: string };
@@ -366,7 +368,7 @@ async function agent(key: string) {
     events = tl.split("\n").flatMap((l) => { try { const d = JSON.parse(l); return [{ t: "text" as const, txt: clip(d.text || `${d.state}: ${d.detail}`, MESSAGE), at: d.at }]; } catch { return []; } }).slice(-80);
   }
   if (!events.length && !live && !s) return null;
-  return { name: "claude", key, live: !!live, pid: live?.pid, seconds: live?.seconds, cwd: live?.cwd ?? String(s?.cwd ?? "").replace(homedir(), "~"),
+  return { name: "claude", key, live: !!live, pid: live?.pid, seconds: live?.seconds, cwd: live?.cwd ?? String(s?.cwd ?? "").replace(homedir(), "~"), resumable: sessionStarted(key.slice(2)),
     title: s?.name, state: s?.state, needs: job?.needs ?? "", events };
 }
 
@@ -461,6 +463,7 @@ async function ptySpec(q: URLSearchParams) {
     if (typeof s === "string") return s;
     if (!s.session) return "this task has no session to resume";
     if (sessionBusy(s.session)) return "this session is running (task or another pane)";
+    if (tuiResumes(s.a) && !sessionStarted(s.session)) return "this conversation's transcript is gone (Claude Code deletes them after 30 days), so it can't be resumed";
     const argv = agentArgv(s.a, s.session);
     return typeof argv === "string" ? argv : { argv: withCanvas(s.a, argv), cwd: s.cwd, title: s.a.name, session: s.session };
   }
@@ -698,6 +701,8 @@ async function handle(req: Request, port: number) {
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/images") return json(imagesState());
   if (p === "/api/settings") return json(settings());
+  // Why /ws/pty would refuse these parameters (a browser can't read a refused upgrade's reason).
+  if (p === "/api/pty/check") { const id = url.searchParams.get("id") ?? ""; if (getPty(id)?.code === undefined && getPty(id)) return json({ ok: true }); const s = await ptySpec(url.searchParams); return typeof s === "string" ? new Response(s, { status: 400 }) : json({ ok: true }); }
   if (p === "/api/pty") return json({ sessions: listPtys(), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
   if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {

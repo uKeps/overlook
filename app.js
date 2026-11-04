@@ -800,21 +800,29 @@ function termConnect(st, p) {
   // The first prompt runs once: from now on the pane resumes its session (see ptySpec).
   ws.onopen = () => { if (p.run?.fresh) { delete p.run.fresh; delete p.run.prompt; delete p.run.model; delete p.run.effort; saveCanvas(); } };
   ws.onmessage = (e) => st.term.write(e.data);
-  // A refused upgrade (task gone, session busy) or a dropped socket: say so, and reconnect on the next key
-  // (the server resumes the session, or replays a live PTY's screen).
-  ws.onclose = (e) => {
+  const note = (m) => st.term.write(`\r\n\x1b[2m[${m}]\x1b[0m\r\n`);
+  ws.onclose = async (e) => {
     if (st.ws !== ws || !terms.has(p.id)) return;
-    st.ws = null; st.dead = true;
-    const why = e.code === 4001 ? "process ended · press Enter to start it again" : e.code === 1006 && !st.opened ? "could not start — is this session already open somewhere? · press Enter to retry" : "disconnected · press Enter to reconnect";
-    st.term.write(`\r\n\x1b[2m[${why}]\x1b[0m\r\n`);
+    st.ws = null;
+    if (e.code === 4001) { st.dead = true; return note("process ended · press Enter to start it again"); }
+    // A drop after it worked (Overlook restarting, the network): reconnect quietly, like a terminal that just keeps
+    // going; the server replays the screen (or resumes the session), onto a clean screen.
+    if (st.opened && (st.retry ?? 0) < 6) {
+      setTimeout(() => { if (terms.get(p.id) === st && !st.ws) { st.term.reset(); termConnect(st, p); } }, Math.min(8000, 400 * 2 ** ++st.retry));
+      return;
+    }
+    // Refused (session expired or busy, agent gone): the browser can't read why, so ask.
+    st.dead = true;
+    const why = await fetch(`/api/pty/check?${q}`).then((r) => (r.ok ? "" : r.text())).catch(() => "");
+    note(`${why || "can't reach Overlook"} · press Enter to retry`);
   };
-  ws.addEventListener("open", () => { st.opened = true; st.dead = false; });
+  ws.addEventListener("open", () => { st.opened = true; st.dead = false; st.retry = 0; });
   st.ws = ws;
 }
 const termSend = (st, d) => {
   if (st.ws?.readyState === 1) st.ws.send(d);
   // The server replays the PTY's history on connect: start from a clean screen, or everything shows twice.
-  else if (st.dead && d === "\r") { st.dead = false; st.term.reset(); termConnect(st, orchPanes.find((x) => x.kind === "terminal" && terms.get(x.id) === st)); }
+  else if (st.dead && d === "\r") { st.dead = false; st.retry = 0; st.term.reset(); termConnect(st, orchPanes.find((x) => x.kind === "terminal" && terms.get(x.id) === st)); }
 };
 
 function termClose(id) {
@@ -1237,15 +1245,15 @@ function fleetItems() {
   }
   for (const f of S.background || []) {
     if (seen.has(f.key) || dismissedSessions.has(f.key)) continue;
-    const wait = f.state === "blocked" || !!f.needs;
+    const gone = f.resumable === false, wait = !gone && (f.state === "blocked" || !!f.needs);
     const act = f.state === "working" || f.state === "running";
     items.push({
       kind: "agent", id: f.key, agent: "claude", ic: "agents",
-      title: f.title, sub: `Claude Code · ${f.cwd} · ${ago(f.since)}`,
-      group: wait ? "waiting" : act ? "active" : "done",
+      title: f.title, sub: `${gone ? "transcript expired · " : ""}Claude Code · ${f.cwd} · ${ago(f.since)}`,
+      group: wait ? "waiting" : act && !gone ? "active" : "done",
       dot: wait ? "run" : f.state === "done" ? "idle" : "",
-      badge: STATE[f.state] || f.state, peach: wait, needs: f.needs || "",
-      tui: f.state === "done" && S.runners?.find((r) => r.id === "claude")?.tui ? { key: f.key, agent: "claude" } : null,
+      badge: STATE[f.state] || f.state, peach: wait, needs: gone ? "" : f.needs || "",
+      tui: !gone && f.state === "done" && S.runners?.find((r) => r.id === "claude")?.tui ? { key: f.key, agent: "claude" } : null,
     });
   }
   for (const p of orchPanes) {
@@ -2034,7 +2042,8 @@ async function orchPaint(force) {
       ${!isFree && orchPanes.length > 1 && idx > 0 ? `<button type="button" class="btn glass orch-icon-btn" data-act="orch-swap" data-key="${esc(key)}" title="Move pane first">⇄</button>` : ""}
 `;
     const form = card.querySelector(".orch-talk");
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !p.run)) ? "none" : "";
+    // A terminal is typed into directly; its message line only shows when wires bring other cards' context to it.
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !(p.run && inCount))) ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;
@@ -2151,7 +2160,7 @@ async function orchPaint(force) {
       const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
       card.querySelector(".orch-head").innerHTML = winHead(key, name, [AGENT_NAME[a.name]?.[0] || a.name, a.cwd].filter(Boolean).join(" · "), `${paneBtns}
           <span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span>
-          ${S.runners?.find((r) => r.process === a.name)?.tui && !a.live ? `<button class="btn orch-open-btn" data-act="pane-tui" data-key="${esc(key)}" data-agent="${esc(a.name)}" title="Continue this session in the agent's own terminal UI">${icon("terminal", 12)} <span class="orch-btn-lbl">TUI</span></button>` : ""}
+          ${S.runners?.find((r) => r.process === a.name)?.tui && !a.live && a.resumable !== false ? `<button class="btn orch-open-btn" data-act="pane-tui" data-key="${esc(key)}" data-agent="${esc(a.name)}" title="Continue this session in the agent's own terminal UI">${icon("terminal", 12)} <span class="orch-btn-lbl">TUI</span></button>` : ""}
           ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(p.id)}"`, true)}
           <a class="btn orch-icon-btn" href="#/a/${esc(p.id)}" title="Open the session page">${icon("ext", 12)}</a>`);
       card.querySelector(".orch-needs").innerHTML = a.needs ? `<div class="needs orch-needs-bar"><b>Needs you:</b> <span>${fmt(a.needs)}</span></div>` : "";
