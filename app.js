@@ -768,14 +768,19 @@ function saveCanvas() {
   syncWires();
   try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio })); } catch {}
 }
-// Canvas terminal panes: Ghostty's own terminal core (ghostty-web, WASM) on a real PTY (/ws/pty), in the user's Ghostty colors.
+// Canvas terminal panes: xterm.js (the terminal of VS Code) on a real PTY (/ws/pty), in the user's Ghostty colors and font.
 // p.run picks what the PTY runs: { task } / { key } resumes an agent session's TUI, { agent, prompt } starts one, none = a shell.
-let ghosttyP, termBg = ""; // termBg: the Ghostty theme background, also used as the terminal window's color
-const ghosttyLoad = () => (ghosttyP ??= Promise.all([
-  import("/vendor/ghostty-web.js").then(async (m) => { await m.init(); return m; }),
+// (ghostty-web was dropped: its WASM core corrupted rows on a column resize of a colourful screen — a prompt line per
+// resize — and could fault. xterm.js reflows like a native terminal, and its DOM text stays crisp at any canvas zoom.)
+let termLib, termBg = ""; // termBg: the Ghostty theme background, also the terminal window's color
+const termLoad = () => (termLib ??= Promise.all([
+  import("/vendor/xterm.mjs"), import("/vendor/addon-fit.mjs"),
   api("/api/ghostty-theme").catch(() => ({})),
-  document.fonts?.load?.("13px 'JetBrains Mono'").catch(() => {}),
-]).catch((e) => { ghosttyP = null; throw e; }));
+  document.fonts?.load?.("16px 'JetBrainsMono Nerd Font Mono'").catch(() => {}),
+]).then((r) => {
+  if (!$("#xterm-css")) document.head.insertAdjacentHTML("beforeend", '<link id="xterm-css" rel="stylesheet" href="/vendor/xterm.css">');
+  return r;
+}).catch((e) => { termLib = null; throw e; }));
 const terms = new Map(); // pane id -> { el, term, fit, ws, title, dead }
 function newTermPane(cwd) {
   addPane({ kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || shellList[0]?.id || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "" });
@@ -845,6 +850,7 @@ function termClose(id) {
   if (!st) return;
   terms.delete(id);
   st.ws?.close();
+  st.ro?.disconnect();
   st.term?.dispose();
   api("/api/pty/close", { id }).catch(() => {});
 }
@@ -853,13 +859,7 @@ function termText(id, max = 80) {
   const b = terms.get(id)?.term?.buffer?.active;
   if (!b) return "";
   const out = [];
-  // Cell by cell: TUIs skip blank columns with cursor moves, and translateToString drops those cells instead of spacing them.
-  for (let i = Math.max(0, b.length - 400); i < b.length; i++) {
-    const l = b.getLine(i);
-    let txt = "";
-    for (let x = 0; l && x < l.length; x++) { const c = l.getCell(x); if (c?.getWidth() !== 0) txt += c?.getChars() || " "; }
-    out.push(txt.trimEnd());
-  }
+  for (let i = Math.max(0, b.length - 400); i < b.length; i++) out.push(b.getLine(i)?.translateToString(true) ?? "");
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim().split("\n").slice(-max).join("\n");
 }
 // The composer under an agent terminal: pasted (bracketed, so a multi-line prompt stays one message), then Enter.
@@ -914,29 +914,42 @@ async function mountTerminalPane(card, p) {
     st = { el: document.createElement("div") };
     st.el.className = "orch-term-view";
     terms.set(p.id, st);
-    st.ready = ghosttyLoad().then(([m, look]) => {
+    st.ready = termLoad().then(([x, f, look]) => {
       if (terms.get(p.id) !== st) return; // closed while loading
       const theme = look.theme || {};
       termBg = theme.background || termBg;
-      st.el.style.background = theme.background || "";
       if (termBg) st.el.closest(".orch-pane")?.style.setProperty("--win-bg", termBg);
-      st.term = new m.Terminal({
+      st.term = new x.Terminal({
         // Ghostty ships JetBrains Mono plus Nerd Font symbols built in; a browser needs them installed (prompt icons).
         fontFamily: `${look.fontFamily ? `"${look.fontFamily}", ` : ""}"JetBrainsMono Nerd Font Mono", "JetBrains Mono", "Symbols Nerd Font Mono", monospace`,
-        fontSize: look.fontSize ? Math.round(look.fontSize * 4 / 3) : 14, // Ghostty sizes are points
+        fontSize: Math.round((look.fontSize || 12) * 4 / 3), // Ghostty sizes are points; its default is 12
         cursorStyle: ["bar", "underline"].includes(look.cursorStyle) ? look.cursorStyle : "block",
-        cursorBlink: true, scrollback: 10000, theme,
+        cursorBlink: false, scrollback: 10000, allowProposedApi: true,
+        // The card paints the window (95% over a blur, like Ghostty under Hyprland): the terminal itself is see-through.
+        allowTransparency: true, theme: { ...theme, background: "#00000000" },
       });
-      // Belt and braces with overflow: clip: whatever scrolls the terminal's box goes back to the top.
-      st.el.addEventListener("scroll", () => { st.el.scrollTop = 0; st.el.scrollLeft = 0; });
-      st.fit = new m.FitAddon();
+      st.fit = new f.FitAddon();
       st.term.loadAddon(st.fit);
       st.term.open(st.el);
       st.fit.fit();
-      st.fit.observeResize();
+      // Resize once the size settles (end of a drag), not every frame: each resize is a SIGWINCH and a prompt redraw.
+      st.ro = new ResizeObserver(() => { clearTimeout(st.rt); st.rt = setTimeout(() => st.fit?.fit(), 70); });
+      st.ro.observe(st.el);
+      document.fonts?.ready.then(() => st.fit?.fit()); // cell size changes when the real font arrives
       st.term.onData((d) => termSend(st, d));
       st.term.onResize(({ cols, rows }) => termSend(st, "\0" + JSON.stringify({ cols, rows })));
-      st.term.onTitleChange((t) => { if (!t) return; st.title = t; const n = st.el.closest(".orch-pane")?.querySelector(".win-title b"); if (n) n.textContent = t; syncWires(); });
+      st.term.onTitleChange((t) => { if (!t) return; st.title = t; syncWires(); });
+      // Ctrl+Shift+C / V copy and paste (Ctrl+C stays the shell's interrupt); Ctrl/Alt + wheel zooms the canvas.
+      st.term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== "keydown" || !e.ctrlKey || !e.shiftKey || e.altKey) return true;
+        if (e.code === "KeyC") { const sel = st.term.getSelection(); if (sel) navigator.clipboard?.writeText(sel).catch(() => {}); return false; }
+        if (e.code === "KeyV") { navigator.clipboard?.readText().then((t) => t && st.term.paste(t)).catch(() => {}); return false; }
+        return true;
+      });
+      st.term.attachCustomWheelEventHandler((e) => !(e.ctrlKey || e.altKey));
+      // Which card has the keyboard: a ring and a blinking cursor on that one only.
+      st.el.addEventListener("focusin", () => { st.el.closest(".orch-pane")?.classList.add("typing"); st.term.options.cursorBlink = true; });
+      st.el.addEventListener("focusout", () => { st.el.closest(".orch-pane")?.classList.remove("typing"); st.term.options.cursorBlink = false; });
     });
   }
   if (st.el.parentNode !== feed) { feed.innerHTML = ""; feed.appendChild(st.el); }
@@ -944,7 +957,7 @@ async function mountTerminalPane(card, p) {
   if (terms.get(p.id) !== st || !st.term) return; // closed while loading
   st.fit.fit();
   if (!st.ws) termConnect(st, p);
-  if (orchActive === paneKey(p)) st.term.focus();
+  if (orchActive === paneKey(p) && !document.activeElement?.closest?.(".orch-talk, input, textarea:not(.xterm-helper-textarea)")) st.term.focus();
 }
 
 let termList = [], shellList = [], prefTerm = "", prefShell = "";
@@ -1096,14 +1109,17 @@ function pickCwd(val) {
 }
 
 function ensurePaneRect(p, idx = 0) {
-  if (typeof p.x !== "number") {
-    const col = idx % 2, row = Math.floor(idx / 2);
-    p.x = 24 + col * 580 + (idx > 3 ? (idx - 3) * 36 : 0);
-    p.y = 20 + row * 430 + (idx > 3 ? (idx - 3) * 36 : 0);
-  }
   // A terminal opens at about a Ghostty window's size (~95 columns: a fastfetch greeting fits on one line).
   p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
   p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
+  if (typeof p.x !== "number") {
+    // A new card opens where you're looking (the middle of the visible canvas), stepped down-right off any card there.
+    const r = orchMode === "free" ? $("#orch-canvas")?.getBoundingClientRect() : null;
+    let x = r?.width ? Math.round((r.width / 2 - orchPanX) / orchZoom - p.w / 2) : 24 + (idx % 2) * (p.w + 40);
+    let y = r?.height ? Math.round(((r.height + CANVAS_TOP) / 2 - orchPanY) / orchZoom - p.h / 2) : 20 + Math.floor(idx / 2) * (p.h + 40);
+    for (let n = 0; n < 30 && orchPanes.some((q) => q !== p && typeof q.x === "number" && Math.abs(q.x - x) < 48 && Math.abs(q.y - y) < 48); n++) { x += 40; y += 40; }
+    p.x = x; p.y = y;
+  }
   return p;
 }
 function arrangeCanvasPanes() {
@@ -1354,7 +1370,7 @@ function renderMultiChips() {
   if (sub) sub.innerHTML = `Run${n > 1 ? ` (${n})` : ""} ${icon("play", 14)}`;
 }
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
-// before ghostty-web sees the key) without taking keys a shell or TUI uses.
+// before the terminal sees the key) without taking keys a shell or TUI uses.
 const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · Z full screen · R reload · / this help · Alt+drag moves a card";
 // Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen); Esc leaves.
 function canvasFull(on = !document.body.classList.contains("canvas-full")) {
@@ -1401,7 +1417,9 @@ function bindCanvasInteractions(canvas) {
   canvas.addEventListener("pointerdown", (e) => {
     if (orchMode !== "free" || orchMax) return;
     const isBg = e.target === canvas || e.target.id === "orch-plane" || e.target.classList?.contains("orch-links") || e.target.tagName === "svg";
-    if (!isBg && e.button !== 1 && e.button !== 2) return;
+    // Over a card the mouse belongs to it (a terminal's middle-click paste, right-click, selection): only the
+    // background pans, with the middle or right button, the Pan tool or Space held.
+    if (!isBg && !isSpacePressed) return;
 
     if (e.button === 1 || e.button === 2 || isSpacePressed || (orchTool === "pan" && e.button === 0 && isBg)) {
       e.preventDefault();
@@ -1492,15 +1510,23 @@ function bindCanvasInteractions(canvas) {
   });
 
   canvas.addEventListener("contextmenu", (e) => {
-    if (orchMode === "free" && !orchMax) e.preventDefault();
+    if (orchMode === "free" && !orchMax && !e.target.closest(".orch-pane")) e.preventDefault(); // right-drag pans the background
   });
 
   canvas.addEventListener("wheel", (e) => {
     if (orchMode !== "free" || orchMax) return;
     const isBg = e.target === canvas || e.target.id === "orch-plane" || e.target.classList?.contains("orch-links") || e.target.tagName === "svg";
-    if (!isBg && !e.ctrlKey && !e.metaKey) return;
+    // Like Maestri: the wheel (or a two-finger swipe) pans the background; Ctrl/Alt + wheel (or a pinch) zooms, over a
+    // card too. A plain wheel over a card is the card's (a terminal scrolls back).
+    const zoom = e.ctrlKey || e.metaKey || e.altKey;
+    if (!isBg && !zoom) return;
     e.preventDefault();
-
+    if (!zoom) {
+      orchPanX = Math.round(orchPanX - (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX));
+      orchPanY = Math.round(orchPanY - (e.shiftKey && !e.deltaX ? 0 : e.deltaY));
+      applyCanvasTransform(); drawLinks(); saveCanvas();
+      return;
+    }
     const r = canvas.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
     const k = Math.min(2.5, Math.max(0.2, orchZoom * Math.exp(-e.deltaY * 0.002)));
     orchPanX = Math.round(sx - (sx - orchPanX) * (k / orchZoom));
@@ -2067,7 +2093,10 @@ async function orchPaint(force) {
 `;
     const form = card.querySelector(".orch-talk");
     // A terminal is typed into directly; its message line only shows when wires bring other cards' context to it.
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !(p.run && inCount))) ? "none" : "";
+    // Between terminals a wire is a hand-off (overlook send), so a terminal's message line only shows when a note or a
+    // sticky is wired into it, to bring their text along.
+    const ctxIn = orchLinks.filter((l) => l.b === key && !l.a.startsWith("terminal:")).length;
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;

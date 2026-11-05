@@ -1761,7 +1761,7 @@ test("agent hand-off: a terminal talks to the terminals wired to it, and only to
   a.ws.send("overlook peers; overlook send Beta 'echo HANDOFF_$((6*7))'; sleep 1; overlook read Beta 40\r");
   await until(a, /--- Beta \(t_hb\)[\s\S]*HANDOFF_42/); // A read B's screen: B ran what A sent
   expect(a.out).toMatch(/t_hb\tBeta/);
-  expect(b.out).toContain("[Message from \"Alpha\" (card t_ha)");
+  expect(b.out).not.toContain("[Message from"); // B is a shell at its prompt: it gets the command alone, no header line
 
   // Only a pane's own token speaks for it; no wire, no talking.
   expect((await post("/api/pty/send", { from: "t_ha", token: "not-the-token", to: "t_hb", text: "x" })).status).toBe(400);

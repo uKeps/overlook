@@ -4,7 +4,9 @@
 import { resolve, dirname, relative, isAbsolute, sep, join, basename } from "node:path";
 import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { Ghostty } from "ghostty-web";
+import { readFileSync as readProc } from "node:fs";
+import xtermHeadless from "@xterm/headless";
+const { Terminal: Headless } = xtermHeadless;
 
 // models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults).
 // A model is an id or { id, label, efforts } when it has a display name or its own effort levels;
@@ -529,14 +531,16 @@ export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: str
 // A PTY outlives its WebSocket (page reload, pane re-render) and replays the tail of its output on reconnect.
 type Pty = {
   id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number;
-  token: string; screen?: ReturnType<Ghostty["createTerminal"]>;
+  token: string; screen?: InstanceType<typeof Headless>; size: string; resizing?: Timer;
 };
 const ptys = new Map<string, Pty>();
 const TAIL = 512_000;
-// A headless copy of each terminal (Ghostty's VT core, the one the pane renders with), so another agent can read what a
+// A headless copy of each terminal (xterm.js, the engine the pane renders with), so another agent can read what a
 // pane shows: TUIs redraw in place, so the raw output stream says little.
-const GHOSTTY_TERM = ["/usr/share/terminfo/x/xterm-ghostty", `${homedir()}/.terminfo/x/xterm-ghostty`].some(existsSync) ? "xterm-ghostty" : "xterm-256color";
-const vt = await Ghostty.load(`${import.meta.dir}/node_modules/ghostty-web/ghostty-vt.wasm`).catch(() => null);
+export const GHOSTTY_TERM = ["/usr/share/terminfo/x/xterm-ghostty", `${homedir()}/.terminfo/x/xterm-ghostty`].some(existsSync) ? "xterm-ghostty" : "xterm-256color";
+// (ghostty-web's WASM core was dropped: it corrupted rows on a column resize of a colourful screen, then faulted and
+// could loop forever, freezing the server. xterm.js reflows correctly and has no shared heap to poison.)
+const mirrorOf = (cols: number, rows: number) => new Headless({ cols, rows, scrollback: 1000, allowProposedApi: true });
 
 // A known shell (by id or path) or the user's default; a cwd that exists, or the fallback.
 export function shellPath(shell?: string) {
@@ -571,13 +575,13 @@ export const sessionStarted = (sid: string) => { try { return [...new Bun.Glob(`
 export function openPty(id: string, argv: string[], cwd: string, cols: number, rows: number, title: string, session = "", env: Record<string, string> = {}): Pty {
   const old = ptys.get(id);
   if (old && old.code === undefined) return old;
-  old?.screen?.free();
+  old?.screen?.dispose();
   const dec = new TextDecoder();
-  const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set(), token: crypto.randomUUID(), screen: vt?.createTerminal(cols, rows) } as unknown as Pty;
+  const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set(), token: crypto.randomUUID(), screen: mirrorOf(cols, rows), size: `${cols}x${rows}` } as unknown as Pty;
   const emit = (s: string) => {
     t.tail += s;
     // ponytail: every chunk is parsed twice (pane + mirror); fine for agent TUIs, build it lazily if a flood ever shows up.
-    if (t.screen) { t.screen.write(s); while (t.screen.hasResponse()) t.screen.readResponse(); } // the real pane answers queries
+    try { t.screen?.write(s); } catch {} // the mirror is best effort: the panes already have the output
     // Trimmed in batches (not a 512KB copy per chunk), at a line start, with attributes reset for the replay.
     // ponytail: a line start can still sit inside a TUI's escape sequence (one garbled cell at worst).
     if (t.tail.length > 2 * TAIL) { const cut = t.tail.indexOf("\n", t.tail.length - TAIL); t.tail = "\x1b[0m" + t.tail.slice(cut < 0 ? -TAIL : cut + 1); }
@@ -589,6 +593,8 @@ export function openPty(id: string, argv: string[], cwd: string, cols: number, r
     // The pane runs Ghostty's own terminal core, so it says so (TERM=xterm-ghostty when that terminfo is installed):
     // shell configs that check for Ghostty (a fastfetch greeting, keys) behave as in the real one.
     cwd, env: { ...process.env, TERM: GHOSTTY_TERM, ...(GHOSTTY_TERM === "xterm-ghostty" ? { TERM_PROGRAM: "ghostty" } : {}), COLORTERM: "truecolor", CLAUDECODE: undefined, CLAUDE_CODE_CHILD_SESSION: undefined, CLAUDE_CODE_ENTRYPOINT: undefined,
+      // Overlook started from a Ghostty window would hand that window's identity to every pane.
+      GHOSTTY_SURFACE_ID: undefined, GHOSTTY_SHELL_FEATURES: undefined, GHOSTTY_RESOURCES_DIR: undefined, GHOSTTY_BIN_DIR: undefined, TERM_PROGRAM_VERSION: undefined,
       OVERLOOK_PANE: id, OVERLOOK_TOKEN: t.token, ...env },
     terminal: { cols, rows, data: (_, d) => emit(dec.decode(d, { stream: true })) },
   });
@@ -596,7 +602,7 @@ export function openPty(id: string, argv: string[], cwd: string, cols: number, r
     t.code = code;
     emit(`\r\n\x1b[2m[process exited with code ${code}]\x1b[0m\r\n`);
     for (const end of t.ends) end(); // the panes' sockets close, so they offer to start it again
-    if (!t.subs.size && ptys.get(id) === t) { ptys.delete(id); t.screen?.free(); t.screen = undefined; } // nobody watching: reopening the pane respawns it anyway
+    if (!t.subs.size && ptys.get(id) === t) { ptys.delete(id); t.screen?.dispose(); t.screen = undefined; } // nobody watching: reopening the pane respawns it anyway
   });
   ptys.set(id, t);
   return t;
@@ -609,24 +615,33 @@ export function closePty(id: string) {
   if (!t) return false;
   // Interactive shells ignore SIGTERM: closing the PTY sends SIGHUP like closing a terminal window; KILL if that is ignored too.
   try { t.proc.terminal?.close(); t.proc.kill("SIGHUP"); } catch {}
-  t.screen?.free(); t.screen = undefined;
+  clearTimeout(t.resizing); t.screen?.dispose(); t.screen = undefined;
   setTimeout(() => { if (t.code === undefined) try { t.proc.kill(9); } catch {} }, 3000);
   return ptys.delete(id);
 }
 export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, running: t.code === undefined }));
-export function resizePty(t: Pty, cols: number, rows: number) { t.proc.terminal?.resize(cols, rows); t.screen?.resize(cols, rows); }
+// A drag resizes the pane every frame, and each resize is a SIGWINCH (the shell redraws its prompt): only the last size
+// in 80 ms is applied, and only if it changed.
+export function resizePty(t: Pty, cols: number, rows: number) {
+  clearTimeout(t.resizing);
+  t.resizing = setTimeout(() => {
+    if (t.code !== undefined || t.size === `${cols}x${rows}`) return;
+    t.size = `${cols}x${rows}`;
+    t.proc.terminal?.resize(cols, rows);
+    try { t.screen?.resize(cols, rows); } catch {}
+  }, 80);
+}
+// Is the pane's shell at its prompt (nothing running in the foreground)? The terminal's foreground process group
+// (/proc stat field 8) is then the shell's own. Linux only; elsewhere it says no.
+function atPrompt(t: Pty) {
+  try { return Number(readProc(`/proc/${t.proc.pid}/stat`, "utf8").split(") ")[1].split(" ")[5]) === t.proc.pid; } catch { return false; }
+}
 
 // What a pane shows: its screen plus recent scrollback, as plain text (wide characters' spacer cells skipped).
 export function screenText(t: Pty, max = 60) {
-  const s = t.screen;
-  const text = !s ? t.tail.replace(/\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b./g, "").replace(/\r/g, "")
-    : (() => {
-      const row = (cells: { codepoint: number; width: number }[] | null) => (cells ?? []).map((c) => (c.width === 0 ? "" : c.codepoint ? String.fromCodePoint(c.codepoint) : " ")).join("").trimEnd();
-      const sb = s.getScrollbackLength(), lines: string[] = [];
-      for (let i = Math.max(0, sb - max); i < sb; i++) lines.push(row(s.getScrollbackLine(i)));
-      for (let y = 0; y < s.getDimensions().rows; y++) lines.push(row(s.getLine(y)));
-      return lines.join("\n");
-    })();
+  const b = t.screen?.buffer.active;
+  const text = !b ? t.tail.replace(/\x1b\[[0-?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b./g, "").replace(/\r/g, "")
+    : Array.from({ length: Math.min(b.length, max + (t.screen?.rows ?? 0)) }, (_, i) => b.getLine(b.length - Math.min(b.length, max + (t.screen?.rows ?? 0)) + i)?.translateToString(true) ?? "").join("\n");
   return text.replace(/\n{3,}/g, "\n\n").trim().split("\n").slice(-max).join("\n");
 }
 
@@ -684,10 +699,12 @@ export function ptySend(from: unknown, token: unknown, to: unknown, text: unknow
   const k = `${me.id}>${p.id}`, now = Date.now(), recent = (sent.get(k) ?? []).filter((t) => now - t < 60_000);
   if (recent.length >= 6) return "rate limit: 6 messages a minute to one card; wait or ask the user";
   sent.set(k, [...recent, now]);
-  const msg = `[Message from "${nameOf(me)}" (card ${me.id}) on the Overlook canvas; reply with: overlook send ${me.id} "..."]\n${clean}`;
+  // To an agent, a message says who sent it and how to answer; to a shell at its prompt it is a command line, so it
+  // goes alone (a header there would be a failed command in the user's history).
+  const msg = atPrompt(p) ? clean : `[Message from "${nameOf(me)}" (card ${me.id}) on the Overlook canvas; reply with: overlook send ${me.id} "..."]\n${clean}`;
   // Bracketed paste keeps a multi-line message one prompt; a program that doesn't ask for it would take each newline as
   // Enter, so it gets the message on one line.
-  p.proc.terminal?.write(p.screen?.hasBracketedPaste() ? `\x1b[200~${msg}\x1b[201~` : msg.replace(/\n+/g, " "));
+  p.proc.terminal?.write(p.screen?.modes.bracketedPasteMode ? `\x1b[200~${msg}\x1b[201~` : msg.replace(/\n+/g, " "));
   setTimeout(() => { if (p.code === undefined) p.proc.terminal?.write("\r"); }, 150);
   handoffs.push({ from: me.id, to: p.id, at: now });
   if (handoffs.length > 50) handoffs.shift();

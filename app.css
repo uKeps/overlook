@@ -933,14 +933,6 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-bar #run-submit { flex: none; height: 32px; padding: 0 14px; border-radius: 8px; gap: 6px; }
 @media (max-width: 760px) { .orch-ctx-group .orch-cwd-btn span { display: none; } .orch-ctx-group > select.pick { max-width: 110px; } }
 
-/* Embedded terminal panes: ghostty-web draws the screen on a canvas; the window chrome is a plain Ghostty-style title bar. */
-.orch-pane[data-kind="terminal"] { min-width: 320px; min-height: 200px; }
-/* clip, not hidden: a hidden overflow can still be scrolled by the browser (focusing the terminal's input), which
-   pushed the first row out of the top of the card. A clipped one can't scroll at all. */
-.orch-pane[data-kind="terminal"] .orch-feed { padding: 0; overflow: clip; display: flex; gap: 0; }
-/* 2px = Ghostty's default window-padding; the background comes from the user's Ghostty theme. */
-.orch-term-view { flex: 1; min-width: 0; min-height: 0; padding: 2px; background: #000; outline: none; cursor: text; }
-.orch-term-view canvas { display: block; }
 
 /* Fleet sidebar quick action */
 
@@ -1909,7 +1901,6 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-sticky-input { background: transparent; border-radius: 0; padding: 12px 14px; font: 400 13px/1.6 var(--body); }
 .orch-sticky-input:focus { background: transparent; }
 .orch-pane[data-kind="sticky"] { --win-bg: color-mix(in srgb, var(--accent) 7%, color-mix(in srgb, var(--surface) 88%, #000)); }
-.orch-term-view { padding: 6px 8px; }
 
 
 /* a wire an agent just used to hand off: it flows from sender to receiver for a few seconds */
@@ -1924,11 +1915,6 @@ body.canvas-full .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
 body.canvas-full .orch-canvas { border-radius: 0; border: 0; }
 body.canvas-full .orch-work { gap: 0; }
 
-/* A terminal window is the terminal: a slim title bar in the terminal's own color, no line under it */
-.orch-pane[data-kind="terminal"] > .orch-head { height: 28px; background: var(--win-bg); border-bottom: 0; }
-.orch-pane[data-kind="terminal"] .win-title { font-size: 11.5px; color: var(--faint); }
-.orch-pane[data-kind="terminal"].active .win-title { color: var(--muted); }
-.orch-pane[data-kind="terminal"] .orch-talk { border-top-color: rgba(255, 255, 255, .06); }
 
 /* "+" in the HUD: which agent to open in a new terminal (or a plain shell) */
 .orch-newmenu {
@@ -1942,12 +1928,30 @@ body.canvas-full .orch-work { gap: 0; }
 /* empty canvas: just the hint over the dot grid */
 .orch-empty { background: none !important; border: 0 !important; box-shadow: none !important; }
 
-/* A terminal card is just the terminal: no frame, no title bar. */
-.orch-pane[data-kind="terminal"] { border-color: transparent; border-radius: 8px; box-shadow: 0 12px 34px rgba(0, 0, 0, .4); }
-.orch-pane[data-kind="terminal"].active { border-color: transparent; box-shadow: 0 16px 44px rgba(0, 0, 0, .5); }
-.orch-plane.free .orch-pane[data-kind="terminal"].selected { border-color: var(--accent); }
-/* No title bar at all, like Ghostty under Hyprland: Alt+drag moves it, its edges resize it, `exit` closes it,
-   Ctrl+Alt+W / Enter close / maximize it. 95% opaque over a blur of the canvas, as the Ghostty window over the desktop. */
+/* ---------- Terminal cards: a Ghostty window under Hyprland (decorations.lua, lucid-glass.lua) ----------
+   No title bar: Alt+drag moves it, its edges resize it, `exit` closes it, Ctrl+Alt+W / Enter close / maximize it.
+   No border either: a border's width follows the canvas zoom (--bw), so the terminal's box changed size on every zoom
+   step and the shell redrew its prompt each time. The ring and the shadow are box-shadows: they never take room. */
+.orch-pane[data-kind="terminal"] {
+  --ring: rgba(255, 255, 255, .07);
+  min-width: 320px; min-height: 160px; border: 0; border-radius: 18px; background: transparent;
+  backdrop-filter: blur(20px) saturate(1.17);
+  box-shadow: 0 0 0 calc(2 * var(--bw, 1px)) var(--ring), 0 0 20px rgba(0, 0, 0, .6);
+}
+.orch-pane[data-kind="terminal"].typing { --ring: color-mix(in srgb, var(--ink) 40%, transparent); } /* has the keyboard */
+.orch-plane.free .orch-pane[data-kind="terminal"].selected { --ring: var(--accent); }
 .orch-pane[data-kind="terminal"] > .orch-head { display: none; }
-.orch-pane[data-kind="terminal"] { border-radius: 12px; backdrop-filter: blur(18px); background: color-mix(in srgb, var(--win-bg) 92%, transparent); }
-.orch-pane[data-kind="terminal"] .orch-term-view { border-radius: 12px; overflow: clip; padding: 10px 12px; caret-color: transparent; opacity: .95; background: transparent !important; }
+/* the window surface: the theme background at 95%, text included (Hyprland's window opacity) */
+.orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: var(--win-bg); opacity: .95; }
+.orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 18px; }
+.orch-pane[data-kind="terminal"]:has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 18px 18px 0 0; }
+.orch-pane[data-kind="terminal"] > .orch-talk { border-radius: 0 0 18px 18px; border-top-color: rgba(255, 255, 255, .06); }
+/* clip, not hidden: a hidden overflow can still be scrolled by the browser (focusing the terminal's input) */
+.orch-term-view { flex: 1; min-width: 0; min-height: 0; overflow: clip; cursor: text; }
+/* The padding sits on xterm's own element: its FitAddon subtracts that padding from the box it measures, so every
+   row and column it counts is on screen (padding on the outer box made it count cells that were then cut off). */
+.orch-term-view .xterm { height: 100%; padding: 10px 12px; }
+.orch-term-view .xterm-viewport { background: transparent !important; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .18) transparent; }
+/* the canvas chrome stays quiet until it's used */
+.orch-hud { opacity: .45; transition: opacity .2s; }
+.orch-hud:is(:hover, :focus-within) { opacity: 1; }

@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -460,10 +460,13 @@ async function open(b: any) {
 // An agent runs inside the user's shell, like typing it in Ghostty: when it exits (Ctrl+C, /exit, an error) the pane
 // is a shell prompt in the same folder, ready for the next command. A note, if any, prints first.
 const shq = (x: string) => `'${x.replaceAll("'", `'\\''`)}'`;
+// The first shell starts with a plain TERM so a Ghostty greeting in the shell config (fastfetch) doesn't print before
+// the agent takes the screen; the agent and the shell after it get Ghostty's TERM back (spawn env: AGENT_ENV).
+const AGENT_ENV = { TERM: "xterm-256color" };
 function inShell(argv: string[], note = "") {
   const sh = shellPath();
   const pre = note ? `printf '\\033[2m%s\\033[0m\\n' ${shq(note)}; ` : "";
-  return [sh, "-ic", `${pre}${argv.length ? `${argv.map(shq).join(" ")}; ` : ""}exec ${shq(sh)} -i`];
+  return [sh, "-ic", `export TERM=${GHOSTTY_TERM}; ${pre}${argv.length ? `${argv.map(shq).join(" ")}; ` : ""}exec ${shq(sh)} -i`];
 }
 async function ptySpec(q: URLSearchParams) {
   if (q.has("task") || q.has("key")) {
@@ -473,9 +476,9 @@ async function ptySpec(q: URLSearchParams) {
     if (sessionBusy(s.session)) return "this session is running (task or another pane)";
     // Nothing to resume (Claude Code deletes transcripts after 30 days): a shell in its folder, saying why.
     if (tuiResumes(s.a) && !sessionStarted(s.session))
-      return { argv: inShell([], "This conversation's transcript is gone (Claude Code deletes them after 30 days). Start a new one: claude"), cwd: s.cwd, title: s.a.name };
+      return { argv: inShell([], "This conversation's transcript is gone (Claude Code deletes them after 30 days). Start a new one: claude"), cwd: s.cwd, title: s.a.name, env: AGENT_ENV };
     const argv = agentArgv(s.a, s.session);
-    return typeof argv === "string" ? argv : { argv: inShell(withCanvas(s.a, argv)), cwd: s.cwd, title: s.a.name, session: s.session };
+    return typeof argv === "string" ? argv : { argv: inShell(withCanvas(s.a, argv)), cwd: s.cwd, title: s.a.name, session: s.session, env: AGENT_ENV };
   }
   if (q.has("agent")) {
     const a = loadAgents(import.meta.dir).find((x) => x.id === q.get("agent"));
@@ -489,7 +492,7 @@ async function ptySpec(q: URLSearchParams) {
     const ms = models(a), model = ms.find((m) => m.id === q.get("model"))?.id ?? "";
     const effort = (ms.find((m) => m.id === model)?.efforts ?? efforts(a)).includes(q.get("effort") ?? "") ? q.get("effort")! : "";
     const argv = sid && !q.has("fresh") && sessionStarted(sid) ? agentArgv(a, sid) : tuiArgv(a, sid, q.has("fresh") ? prompt : "", model, effort);
-    return typeof argv === "string" ? argv : { argv: inShell(withCanvas(a, argv)), cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid };
+    return typeof argv === "string" ? argv : { argv: inShell(withCanvas(a, argv)), cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid, env: AGENT_ENV };
   }
   const sh = shellPath(q.get("shell") ?? undefined);
   return { argv: [sh], cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: basename(sh) };
@@ -743,8 +746,12 @@ async function handle(req: Request, port: number) {
     return /^[\w-]+(\/[\w-]+)?\.js$/.test(rel) && (await f.exists())
       ? new Response(f, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 });
   }
-  // ghostty-web (MIT): Ghostty's terminal core compiled to WASM (inlined in the module), from node_modules.
-  if (p === "/vendor/ghostty-web.js") return new Response(Bun.file(`${import.meta.dir}/node_modules/ghostty-web/dist/ghostty-web.js`), { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "max-age=86400" } });
+  // xterm.js (MIT) for the canvas terminals, from node_modules.
+  const XTERM: Record<string, [string, string]> = {
+    "/vendor/xterm.mjs": ["@xterm/xterm/lib/xterm.mjs", "text/javascript"], "/vendor/xterm.css": ["@xterm/xterm/css/xterm.css", "text/css"],
+    "/vendor/addon-fit.mjs": ["@xterm/addon-fit/lib/addon-fit.mjs", "text/javascript"],
+  };
+  if (XTERM[p]) return new Response(Bun.file(`${import.meta.dir}/node_modules/${XTERM[p][0]}`), { headers: { "content-type": `${XTERM[p][1]}; charset=utf-8`, "cache-control": "max-age=86400" } });
   if (p.startsWith("/avatar/")) { const f = /^[\w-]+$/.test(p.slice(8)) ? avatarPath(p.slice(8)) : null; return f ? new Response(Bun.file(f), { headers: { "cache-control": "max-age=31536000" } }) : new Response("404", { status: 404 }); }
   if (p.startsWith("/pin/")) { const f = await imageFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }
@@ -787,7 +794,7 @@ Bun.serve({
       // spec is null when the PTY was alive at upgrade: attach to it whatever its state since (exited ones show their end).
       // The `overlook` command (bin/) on the PATH, and where to reach this server, for the pane's hand-offs.
       const t = spec === null ? getPty(id) : openPty(id, spec.argv, spec.cwd, cols, rows, spec.title, spec.session,
-        { OVERLOOK_URL: `http://127.0.0.1:${PORT}`, PATH: `${import.meta.dir}/bin:${dirname(process.execPath)}:${process.env.PATH ?? ""}` }); // bun for bin/overlook's shebang
+        { OVERLOOK_URL: `http://127.0.0.1:${PORT}`, PATH: `${import.meta.dir}/bin:${dirname(process.execPath)}:${process.env.PATH ?? ""}`, ...(spec.env ?? {}) }); // bun for bin/overlook's shebang
       if (!t) return ws.close(4000, "gone");
       // The replay stays under the socket's 2 MiB backpressure limit even when every character is 3 UTF-8 bytes (TUI borders).
       if (t.tail) ws.send(t.tail.length > 400_000 ? "\x1b[0m" + t.tail.slice(-400_000) : t.tail);
