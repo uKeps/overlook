@@ -1194,7 +1194,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 
 .orch-plane.grid > .orch-pane:last-of-type:nth-of-type(odd) { grid-column: 1 / -1; } /* 3 or 5 cards: no empty quadrant (of-type: the wires' svg is a sibling) */
 /* focusPane: a short ring so the eye finds the card it jumped to */
-.orch-pane.flash { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash .7s ease-out; } /* outline: the shadows are !important */
+.orch-pane.pane-flash { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash .7s ease-out; } /* outline: the shadows are !important */
 @keyframes pane-flash { 0% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
 
 /* Free 2D Maestri Canvas mode */

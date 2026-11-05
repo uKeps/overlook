@@ -896,7 +896,7 @@ function focusPane(k) {
   saveCanvas(); orchSigs.clear(); orchPaint(true);
   setTimeout(() => {
     const card = $(`.orch-pane[data-key="${CSS.escape(k)}"]`);
-    card?.classList.add("flash"); setTimeout(() => card?.classList.remove("flash"), 700);
+    card?.classList.add("pane-flash"); setTimeout(() => card?.classList.remove("pane-flash"), 700); // not "flash": the Home's card uses that name
     const st = p.kind === "terminal" && terms.get(p.id);
     if (st?.term) st.term.focus(); else card?.querySelector(".orch-msg:not([disabled])")?.focus();
   }, 60);
@@ -930,11 +930,15 @@ async function mountTerminalPane(card, p) {
       });
       // Fit: as many whole cells as the box holds inside xterm's padding. (FitAddon also kept 14px for a scrollbar, but
       // xterm 6's scrollbar floats over the text: that left a wide empty band on the right.)
+      // The space left over by whole cells is shared out evenly around them, like Ghostty's balanced padding.
+      const PX = 12, PY = 10;
       st.fit = { fit: () => {
-        const cell = st.term?._core?._renderService?.dimensions?.css?.cell, cs = st.term?.element && getComputedStyle(st.term.element);
-        if (!cell?.width || !cell?.height || !cs) return;
-        const w = st.el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), h = st.el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+        const cell = st.term?._core?._renderService?.dimensions?.css?.cell;
+        if (!cell?.width || !cell?.height || !st.term.element) return;
+        const w = st.el.clientWidth - 2 * PX, h = st.el.clientHeight - 2 * PY;
         const cols = Math.max(2, Math.floor(w / cell.width)), rows = Math.max(1, Math.floor(h / cell.height));
+        const rx = Math.max(0, w - cols * cell.width) / 2, ry = Math.max(0, h - rows * cell.height) / 2;
+        st.term.element.style.padding = `${PY + Math.floor(ry)}px ${PX + Math.ceil(rx)}px ${PY + Math.ceil(ry)}px ${PX + Math.floor(rx)}px`;
         if (cols !== st.term.cols || rows !== st.term.rows) st.term.resize(cols, rows);
       } };
       st.term.open(st.el);
