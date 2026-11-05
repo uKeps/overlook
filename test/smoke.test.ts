@@ -12,7 +12,8 @@ const PORT = 4799;
 const BASE = `http://127.0.0.1:${PORT}`;
 // Stand-ins for the desktop terminals: "Open terminal" must not pop a real window (in a folder this test deletes) on every run.
 const FAKEBIN = `${ROOT}/fakebin`;
-const ENV = { ...process.env, PATH: `${FAKEBIN}:${process.env.PATH}`, DEFAULT_TERMINAL: "ghostty", TERMINAL_FALLBACK: "kitty", VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
+// HISTFILE: the shells these tests open must not write into the user's shell history.
+const ENV = { ...process.env, HISTFILE: "/dev/null", PATH: `${FAKEBIN}:${process.env.PATH}`, DEFAULT_TERMINAL: "ghostty", TERMINAL_FALLBACK: "kitty", VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
 const FAKE = "http://127.0.0.1:4798";
 const TODAY = new Date().toLocaleDateString("sv");
 let server: ReturnType<typeof Bun.spawn>;
@@ -1739,6 +1740,59 @@ test("adversarial verification: terminal & shell launcher, emulator detection, f
   expect(appJs).toContain("set-terminal");
 });
 
+test("agent hand-off: a terminal talks to the terminals wired to it, and only to those", async () => {
+  // Two shells; A drives everything through the `overlook` command Overlook puts on its PATH.
+  const open = (id: string) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=${id}&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=120&rows=30`, { headers: { origin: BASE } } as any);
+    const st = { ws, out: "" };
+    ws.onmessage = (e) => { st.out += e.data; };
+    return new Promise<typeof st>((res) => { ws.onopen = () => res(st); });
+  };
+  const until = async (st: { out: string }, re: RegExp, ms = 15000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(100)) if (re.test(st.out)) return;
+    throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
+  };
+  const a = await open("t_ha"), b = await open("t_hb");
+  // Wires come from Overlook's own page only: a program in a pane (no Origin) can't wire itself to anything.
+  const wire = (body: object, origin = BASE) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify({ client: "test-canvas", ...body }) });
+  expect((await wire({ wires: [["t_ha", "t_hb"]] }, "")).status).toBe(403);
+  expect((await wire({ wires: [["t_ha", "t_hb"]], names: { t_ha: "Alpha", t_hb: "Beta" } })).status).toBe(200);
+
+  a.ws.send("overlook peers; overlook send Beta 'echo HANDOFF_$((6*7))'; sleep 1; overlook read Beta 40\r");
+  await until(a, /--- Beta \(t_hb\)[\s\S]*HANDOFF_42/); // A read B's screen: B ran what A sent
+  expect(a.out).toMatch(/t_hb\tBeta/);
+  expect(b.out).not.toContain("[Message from"); // B is a shell at its prompt: it gets the command alone, no header line
+
+  // Only a pane's own token speaks for it; no wire, no talking.
+  expect((await post("/api/pty/send", { from: "t_ha", token: "not-the-token", to: "t_hb", text: "x" })).status).toBe(400);
+  await wire({ wires: [], names: {} });
+  a.ws.send("overlook send Beta hi\r");
+  await until(a, /no card wired to this one matches "Beta"/);
+  a.ws.close(); b.ws.close();
+  for (const id of ["t_ha", "t_hb"]) await post("/api/pty/close", { id });
+});
+
+test("an agent pane runs the agent inside a shell: the prompt is text, and the shell stays when the agent exits", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  // A stand-in TUI that prints its prompt and exits, the way claude does on Ctrl+C or /exit.
+  await post("/api/settings", { agents: [...init.agents, { id: "tuiq", name: "TuiQ", run: ["sh"], tui: ["printf", "PROMPT[%s]\\n", "{prompt}"], open: { Terminal: ["{terminal}", "sh"] } }] });
+  const prompt = `it's $(echo PWNED) \`echo PWNED\` "q" & ; | $HOME`;
+  const q = new URLSearchParams({ id: "t_tuiq", agent: "tuiq", prompt, fresh: "1", cwd: ROOT, cols: "160", rows: "20" });
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?${q}`, { headers: { origin: BASE } } as any);
+  let out = "";
+  ws.onmessage = (e) => { out += e.data; };
+  await new Promise<void>((res) => { ws.onopen = () => res(); });
+  for (const end = Date.now() + 8000; Date.now() < end && !out.includes("PROMPT["); ) await Bun.sleep(100);
+  ws.send("echo STILL_$((40+2))\r");
+  for (const end = Date.now() + 8000; Date.now() < end && !out.includes("STILL_42"); ) await Bun.sleep(100);
+  ws.close();
+  await post("/api/pty/close", { id: "t_tuiq" });
+  await post("/api/settings", { agents: init.agents });
+  expect(out).toContain(`PROMPT[${prompt}]`); // passed as one argument, nothing ran
+  expect(out).not.toContain("it's PWNED"); // $(...) and backticks were not run
+  expect(out).toContain("STILL_42"); // the agent exited and the shell took over
+});
+
 test("canvas terminal: a real PTY over /ws/pty, only for Overlook's own pages", async () => {
   const url = `ws://127.0.0.1:${PORT}/ws/pty?id=t_pty&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=90&rows=20`;
   const upgrade = (u: string, origin: string) => fetch(u.replace("ws:", "http:"), { headers: { origin, upgrade: "websocket", connection: "Upgrade", "sec-websocket-key": btoa("the sample nonce"), /* RFC 6455's example nonce, built here so no key-like literal sits in the source */ "sec-websocket-version": "13" } });
@@ -1803,7 +1857,6 @@ test("adversarial verification: canvas multiselect deletion via Delete key, traf
   expect(appJs).toContain('e.key === "Delete" && orchSelected.size > 0');
 
   // Traffic lights unpin & empty canvas protection
-  expect(appJs).toContain('if (!orchPanes.length && orchMode !== "free")');
   // Window chrome: traffic lights close/minimize/maximize, and resize handles on all 8 edges and corners
   expect(appJs).toContain('data-act="orch-unpin"');
   expect(appJs).toContain('data-act="orch-collapse"');

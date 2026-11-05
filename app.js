@@ -45,6 +45,7 @@ const I = {
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   terminal: '<polyline points="4 17 10 12 4 7"/><path d="M12 19h8"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
@@ -747,31 +748,63 @@ try {
     if (c.ratio) orchRatio = c.ratio;
   }
 } catch {}
+// The server only lets terminals talk across wires it knows (agent hand-off): send the terminal↔terminal wires and
+// the cards' names whenever they change.
+let wiresSent = "", wiresAt = 0;
+// One id per browser, so the server keeps each open canvas's wires apart (see setWires).
+const CANVAS_CLIENT = (() => { try { let id = localStorage.getItem("overlook.client"); if (!id) localStorage.setItem("overlook.client", (id = crypto.randomUUID())); return id; } catch { return crypto.randomUUID(); } })();
+function syncWires(force) {
+  const term = (k) => (k.startsWith("terminal:") ? k.slice(9) : "");
+  const wires = orchLinks.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
+  const names = Object.fromEntries(orchPanes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
+  const body = JSON.stringify({ wires, names });
+  if (body === wiresSent && !force) return;
+  wiresSent = body; wiresAt = Date.now();
+  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names }).catch(() => { wiresSent = ""; });
+}
+// A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
+const termName = (p) => (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
 function saveCanvas() {
+  syncWires();
   try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio })); } catch {}
 }
-// Canvas terminal panes: Ghostty's own terminal core (ghostty-web, WASM) on a real PTY (/ws/pty), in the user's Ghostty colors.
+// Canvas terminal panes: xterm.js (the terminal of VS Code) on a real PTY (/ws/pty), in the user's Ghostty colors and font.
 // p.run picks what the PTY runs: { task } / { key } resumes an agent session's TUI, { agent, prompt } starts one, none = a shell.
-let ghosttyP, termBg = ""; // termBg: the Ghostty theme background, also used as the terminal window's color
-const ghosttyLoad = () => (ghosttyP ??= Promise.all([
-  import("/vendor/ghostty-web.js").then(async (m) => { await m.init(); return m; }),
+// (ghostty-web was dropped: its WASM core corrupted rows on a column resize of a colourful screen — a prompt line per
+// resize — and could fault. xterm.js reflows like a native terminal, and its DOM text stays crisp at any canvas zoom.)
+let termLib, termBg = ""; // termBg: the Ghostty theme background, also the terminal window's color
+const termLoad = () => (termLib ??= Promise.all([
+  import("/vendor/xterm.mjs"),
   api("/api/ghostty-theme").catch(() => ({})),
-  document.fonts?.load?.("13px 'JetBrains Mono'").catch(() => {}),
-]).catch((e) => { ghosttyP = null; throw e; }));
+  document.fonts?.load?.("16px 'JetBrainsMono Nerd Font Mono'").catch(() => {}),
+]).then((r) => {
+  if (!$("#xterm-css")) document.head.insertAdjacentHTML("beforeend", '<link id="xterm-css" rel="stylesheet" href="/vendor/xterm.css">');
+  return r;
+}).catch((e) => { termLib = null; throw e; }));
 const terms = new Map(); // pane id -> { el, term, fit, ws, title, dead }
 function newTermPane(cwd) {
-  addPane({ kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || shellList[0]?.id || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "" });
-  saveCanvas();
+  const p = { kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "" };
+  if (addPane(p)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p)); }
 }
-// Turns a pane into a terminal running the agent's own TUI, in place (same spot, size and links).
-function paneToTui(p, run) {
-  const old = paneKey(p);
-  Object.assign(p, { kind: "terminal", id: `term_${Date.now()}`, run });
+// Turns a pane into a terminal running the agent's own TUI, in place (same spot, size and links); a pane for a session
+// that already has its terminal on the canvas just goes.
+function tuiInPlace(p, run) {
+  const old = paneKey(p), twin = orchPanes.find((x) => x !== p && x.kind === "terminal" && x.run && ((run.task && x.run.task === run.task) || (run.key && x.run.key === run.key)));
+  if (twin) { orchPanes = orchPanes.filter((x) => x !== p); rekey(old, paneKey(twin)); if (orchActive === old) orchActive = paneKey(twin); return; }
+  Object.assign(p, { kind: "terminal", id: `term_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, run });
   rekey(old, paneKey(p));
   if (orchActive === old) orchActive = paneKey(p);
   if (orchMax === old) orchMax = paneKey(p);
-  saveCanvas(); orchSigs.clear(); agentsBody();
 }
+function paneToTui(p, run) { tuiInPlace(p, run); saveCanvas(); orchSigs.clear(); agentsBody(); }
+// A new agent is a terminal running it (in the bar's folder); one without a TUI opens a shell.
+function newAgentTerm(agent) {
+  $("#orch-newmenu")?.setAttribute("hidden", "");
+  if (!S.runners?.find((r) => r.id === agent)?.tui) return newTermPane();
+  const p = { kind: "terminal", id: `term_${Date.now()}`, cwd: $("#run-cwd")?.value || orchCwd || "", run: newTuiRun(agent) };
+  if (addPane(p)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p)); }
+}
+const defaultAgent = () => [$("#run-agent")?.value, "claude", ...(S.runners || []).map((r) => r.id)].find((id) => S.runners?.find((r) => r.id === id)?.tui);
 // A new agent TUI: claude gets --session-id up front so the pane can resume it later.
 const newTuiRun = (agent, prompt, model, effort) => ({ agent, session: crypto.randomUUID(), fresh: "1", ...(prompt ? { prompt } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
 function termConnect(st, p) {
@@ -782,21 +815,34 @@ function termConnect(st, p) {
   // The first prompt runs once: from now on the pane resumes its session (see ptySpec).
   ws.onopen = () => { if (p.run?.fresh) { delete p.run.fresh; delete p.run.prompt; delete p.run.model; delete p.run.effort; saveCanvas(); } };
   ws.onmessage = (e) => st.term.write(e.data);
-  // A refused upgrade (task gone, session busy) or a dropped socket: say so, and reconnect on the next key
-  // (the server resumes the session, or replays a live PTY's screen).
-  ws.onclose = (e) => {
+  const note = (m) => st.term.write(`\r\n\x1b[2m[${m}]\x1b[0m\r\n`);
+  ws.onclose = async (e) => {
     if (st.ws !== ws || !terms.has(p.id)) return;
-    st.ws = null; st.dead = true;
-    const why = e.code === 4001 ? "process ended · press Enter to start it again" : e.code === 1006 && !st.opened ? "could not start — is this session already open somewhere? · press Enter to retry" : "disconnected · press Enter to reconnect";
-    st.term.write(`\r\n\x1b[2m[${why}]\x1b[0m\r\n`);
+    st.ws = null;
+    // The shell ended (`exit`, Ctrl+D): the card closes, like a terminal window does.
+    if (e.code === 4001) {
+      orchPanes = orchPanes.filter((x) => !(x.kind === "terminal" && x.id === p.id));
+      termClose(p.id); saveCanvas(); orchSigs.clear(); agentsBody();
+      return;
+    }
+    // A drop after it worked (Overlook restarting, the network): reconnect quietly, like a terminal that just keeps
+    // going; the server replays the screen (or resumes the session), onto a clean screen.
+    if (st.opened && (st.retry ?? 0) < 6) {
+      setTimeout(() => { if (terms.get(p.id) === st && !st.ws) { st.term.reset(); termConnect(st, p); } }, Math.min(8000, 400 * 2 ** ++st.retry));
+      return;
+    }
+    // Refused (session expired or busy, agent gone): the browser can't read why, so ask.
+    st.dead = true;
+    const why = await fetch(`/api/pty/check?${q}`).then((r) => (r.ok ? "" : r.text())).catch(() => "");
+    note(`${why || "can't reach Overlook"} · press Enter to retry`);
   };
-  ws.addEventListener("open", () => { st.opened = true; st.dead = false; });
+  ws.addEventListener("open", () => { st.opened = true; st.dead = false; st.retry = 0; });
   st.ws = ws;
 }
 const termSend = (st, d) => {
   if (st.ws?.readyState === 1) st.ws.send(d);
   // The server replays the PTY's history on connect: start from a clean screen, or everything shows twice.
-  else if (st.dead && d === "\r") { st.dead = false; st.term.reset(); termConnect(st, orchPanes.find((x) => x.kind === "terminal" && terms.get(x.id) === st)); }
+  else if (st.dead && d === "\r") { st.dead = false; st.retry = 0; st.term.reset(); termConnect(st, orchPanes.find((x) => x.kind === "terminal" && terms.get(x.id) === st)); }
 };
 
 function termClose(id) {
@@ -804,6 +850,7 @@ function termClose(id) {
   if (!st) return;
   terms.delete(id);
   st.ws?.close();
+  st.ro?.disconnect();
   st.term?.dispose();
   api("/api/pty/close", { id }).catch(() => {});
 }
@@ -812,13 +859,7 @@ function termText(id, max = 80) {
   const b = terms.get(id)?.term?.buffer?.active;
   if (!b) return "";
   const out = [];
-  // Cell by cell: TUIs skip blank columns with cursor moves, and translateToString drops those cells instead of spacing them.
-  for (let i = Math.max(0, b.length - 400); i < b.length; i++) {
-    const l = b.getLine(i);
-    let txt = "";
-    for (let x = 0; l && x < l.length; x++) { const c = l.getCell(x); if (c?.getWidth() !== 0) txt += c?.getChars() || " "; }
-    out.push(txt.trimEnd());
-  }
+  for (let i = Math.max(0, b.length - 400); i < b.length; i++) out.push(b.getLine(i)?.translateToString(true) ?? "");
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim().split("\n").slice(-max).join("\n");
 }
 // The composer under an agent terminal: pasted (bracketed, so a multi-line prompt stays one message), then Enter.
@@ -855,7 +896,7 @@ function focusPane(k) {
   saveCanvas(); orchSigs.clear(); orchPaint(true);
   setTimeout(() => {
     const card = $(`.orch-pane[data-key="${CSS.escape(k)}"]`);
-    card?.classList.add("flash"); setTimeout(() => card?.classList.remove("flash"), 700);
+    card?.classList.add("pane-flash"); setTimeout(() => card?.classList.remove("pane-flash"), 700); // not "flash": the Home's card uses that name
     const st = p.kind === "terminal" && terms.get(p.id);
     if (st?.term) st.term.focus(); else card?.querySelector(".orch-msg:not([disabled])")?.focus();
   }, 60);
@@ -873,27 +914,53 @@ async function mountTerminalPane(card, p) {
     st = { el: document.createElement("div") };
     st.el.className = "orch-term-view";
     terms.set(p.id, st);
-    st.ready = ghosttyLoad().then(([m, look]) => {
+    st.ready = termLoad().then(([x, look]) => {
       if (terms.get(p.id) !== st) return; // closed while loading
       const theme = look.theme || {};
       termBg = theme.background || termBg;
-      st.el.style.background = theme.background || "";
       if (termBg) st.el.closest(".orch-pane")?.style.setProperty("--win-bg", termBg);
-      st.term = new m.Terminal({
+      st.term = new x.Terminal({
         // Ghostty ships JetBrains Mono plus Nerd Font symbols built in; a browser needs them installed (prompt icons).
         fontFamily: `${look.fontFamily ? `"${look.fontFamily}", ` : ""}"JetBrainsMono Nerd Font Mono", "JetBrains Mono", "Symbols Nerd Font Mono", monospace`,
-        fontSize: look.fontSize ? Math.round(look.fontSize * 4 / 3) : 14, // Ghostty sizes are points
-        cursorStyle: ["bar", "underline"].includes(look.cursorStyle) ? look.cursorStyle : "block",
-        cursorBlink: true, scrollback: 10000, theme,
+        fontSize: Math.round((look.fontSize || 12) * 4 / 3), // Ghostty sizes are points; its default is 12
+        cursorStyle: ["block", "underline"].includes(look.cursorStyle) ? look.cursorStyle : "bar", // Ghostty shows a bar at a prompt
+        cursorBlink: false, scrollback: 10000, allowProposedApi: true,
+        // The card paints the window (95% over a blur, like Ghostty under Hyprland): the terminal itself is see-through.
+        allowTransparency: true, theme: { ...theme, background: "#00000000" },
       });
-      st.fit = new m.FitAddon();
-      st.term.loadAddon(st.fit);
+      // Fit: as many whole cells as the box holds inside xterm's padding. (FitAddon also kept 14px for a scrollbar, but
+      // xterm 6's scrollbar floats over the text: that left a wide empty band on the right.)
+      // The space left over by whole cells is shared out evenly around them, like Ghostty's balanced padding.
+      const PX = 12, PY = 10;
+      st.fit = { fit: () => {
+        const cell = st.term?._core?._renderService?.dimensions?.css?.cell;
+        if (!cell?.width || !cell?.height || !st.term.element) return;
+        const w = st.el.clientWidth - 2 * PX, h = st.el.clientHeight - 2 * PY;
+        const cols = Math.max(2, Math.floor(w / cell.width)), rows = Math.max(1, Math.floor(h / cell.height));
+        const rx = Math.max(0, w - cols * cell.width) / 2, ry = Math.max(0, h - rows * cell.height) / 2;
+        st.term.element.style.padding = `${PY + Math.floor(ry)}px ${PX + Math.ceil(rx)}px ${PY + Math.ceil(ry)}px ${PX + Math.floor(rx)}px`;
+        if (cols !== st.term.cols || rows !== st.term.rows) st.term.resize(cols, rows);
+      } };
       st.term.open(st.el);
       st.fit.fit();
-      st.fit.observeResize();
+      // Resize once the size settles (end of a drag), not every frame: each resize is a SIGWINCH and a prompt redraw.
+      st.ro = new ResizeObserver(() => { clearTimeout(st.rt); st.rt = setTimeout(() => st.fit?.fit(), 70); });
+      st.ro.observe(st.el);
+      document.fonts?.ready.then(() => st.fit?.fit()); // cell size changes when the real font arrives
       st.term.onData((d) => termSend(st, d));
       st.term.onResize(({ cols, rows }) => termSend(st, "\0" + JSON.stringify({ cols, rows })));
-      st.term.onTitleChange((t) => { if (!t) return; st.title = t; const n = st.el.closest(".orch-pane")?.querySelector(".win-title b"); if (n) n.textContent = t; });
+      st.term.onTitleChange((t) => { if (!t) return; st.title = t; syncWires(); });
+      // Ctrl+Shift+C / V copy and paste (Ctrl+C stays the shell's interrupt); Ctrl/Alt + wheel zooms the canvas.
+      st.term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== "keydown" || !e.ctrlKey || !e.shiftKey || e.altKey) return true;
+        if (e.code === "KeyC") { const sel = st.term.getSelection(); if (sel) navigator.clipboard?.writeText(sel).catch(() => {}); return false; }
+        if (e.code === "KeyV") { navigator.clipboard?.readText().then((t) => t && st.term.paste(t)).catch(() => {}); return false; }
+        return true;
+      });
+      st.term.attachCustomWheelEventHandler((e) => !(e.ctrlKey || e.altKey));
+      // Which card has the keyboard: a ring and a blinking cursor on that one only.
+      st.el.addEventListener("focusin", () => { st.el.closest(".orch-pane")?.classList.add("typing"); st.term.options.cursorBlink = true; });
+      st.el.addEventListener("focusout", () => { st.el.closest(".orch-pane")?.classList.remove("typing"); st.term.options.cursorBlink = false; });
     });
   }
   if (st.el.parentNode !== feed) { feed.innerHTML = ""; feed.appendChild(st.el); }
@@ -901,7 +968,7 @@ async function mountTerminalPane(card, p) {
   if (terms.get(p.id) !== st || !st.term) return; // closed while loading
   st.fit.fit();
   if (!st.ws) termConnect(st, p);
-  if (orchActive === paneKey(p)) st.term.focus();
+  if (orchActive === paneKey(p) && !document.activeElement?.closest?.(".orch-talk, input, textarea:not(.xterm-helper-textarea)")) st.term.focus();
 }
 
 let termList = [], shellList = [], prefTerm = "", prefShell = "";
@@ -914,7 +981,7 @@ async function loadTerminals() {
     termList = data.terminals || [];
     shellList = data.shells || [];
     if (!prefTerm) prefTerm = data.defaultTerminal || (termList[0]?.id || "ghostty");
-    if (!prefShell && prefShell !== "") prefShell = data.defaultShell || "bash";
+    if (!prefShell) prefShell = data.defaultShell || "";
   } catch {}
 }
 
@@ -1053,13 +1120,19 @@ function pickCwd(val) {
 }
 
 function ensurePaneRect(p, idx = 0) {
+  // A terminal opens at about a Ghostty window's size (~95 columns: a fastfetch greeting fits on one line).
+  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
+  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
   if (typeof p.x !== "number") {
-    const col = idx % 2, row = Math.floor(idx / 2);
-    p.x = 24 + col * 580 + (idx > 3 ? (idx - 3) * 36 : 0);
-    p.y = 20 + row * 430 + (idx > 3 ? (idx - 3) * 36 : 0);
+    // A new card opens where you're looking (the middle of the visible canvas), stepped down-right off any card there.
+    const r = orchMode === "free" ? $("#orch-canvas")?.getBoundingClientRect() : null;
+    let x = r?.width ? Math.round((r.width / 2 - orchPanX) / orchZoom - p.w / 2) : 24 + (idx % 2) * (p.w + 40);
+    let y = r?.height ? Math.round(((r.height + CANVAS_TOP) / 2 - orchPanY) / orchZoom - p.h / 2) : 20 + Math.floor(idx / 2) * (p.h + 40);
+    // Not on top of another card: step right past whatever it would cover (the view then goes to it, see focusPane).
+    const hit = () => orchPanes.find((q) => q !== p && typeof q.x === "number" && x < q.x + q.w + 24 && x + p.w + 24 > q.x && y < q.y + q.h + 24 && y + p.h + 24 > q.y);
+    for (let n = 0, q; n < 40 && (q = hit()); n++) x = q.x + q.w + 40;
+    p.x = x; p.y = y;
   }
-  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 640 : 580);
-  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 420 : 430);
   return p;
 }
 function arrangeCanvasPanes() {
@@ -1121,6 +1194,16 @@ function addPane(item, x, y) {
   agentsBody();
   return true;
 }
+// Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
+let hotWires = new Set();
+async function pollHandoffs() {
+  if (!orchLinks.length || !orchPanes.some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
+
+  if (Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
+  const r = await api("/api/pty").catch(() => null);
+  const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [`terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
+  if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
+}
 // Links are drawn in canvas coordinates, from the right edge of the source to the left edge of the target.
 function drawLinks(tmp) {
   const plane = $("#orch-plane");
@@ -1149,7 +1232,8 @@ function drawLinks(tmp) {
       const x1 = fromLeft ? a.x : a.x + a.w, y1 = a.y + a.h / 2;
       const x2 = fromLeft ? b.x + b.w : b.x, y2 = b.y + b.h / 2;
       const d = curve(x1, y1, x2, y2);
-      return `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln" d="${d}" marker-end="url(#orch-arrow)"/>`;
+      const hot = hotWires.has([l.a, l.b].sort().join("|"));
+      return `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln ${hot ? "hot" : ""}" d="${d}" marker-end="url(#orch-arrow)"/>`;
     }).join("")
     + (tmp ? `<path class="ln tmp" d="${curve(...tmp)}"/>` : "");
 }
@@ -1157,7 +1241,7 @@ const htmlText = (h) => { const d = document.createElement("div"); d.innerHTML =
 // What the cards linked into `key` say, shaped as a preamble for the next message (fits within `budget` chars).
 async function linkedContext(key, budget) {
   const srcs = orchLinks.filter((l) => l.b === key).map((l) => orchPanes.find((p) => paneKey(p) === l.a)).filter(Boolean);
-  if (!srcs.length || budget < 300) return "";
+  if (budget < 300 || (!srcs.length && !orchLinks.some((l) => l.a === key || l.b === key))) return "";
   const parts = await Promise.all(srcs.map(async (p) => {
     if (p.kind === "sticky") return p.text?.trim() ? `### Sticky note\n${p.text.trim()}` : "";
     if (p.kind === "note") {
@@ -1166,16 +1250,21 @@ async function linkedContext(key, budget) {
     }
     if (p.kind === "terminal") {
       const txt = termText(p.id);
-      return txt ? `### Screen of terminal "${terms.get(p.id)?.title || (p.run ? runnerName(p.run.agent) : p.shell || "shell")}" (last lines)\n${txt}` : "";
+      return txt ? `### Screen of terminal "${termName(p)}" (last lines)\n${txt}` : "";
     }
     if (p.kind !== "task" && p.kind !== "agent") return "";
     const r = await api(p.kind === "task" ? `/api/task?id=${encodeURIComponent(p.id)}` : `/api/agent?key=${encodeURIComponent(p.id)}`).catch(() => null);
     const last = r?.events?.filter((e) => e.t === "text").at(-1)?.txt;
     return last ? `### Latest answer from ${p.kind === "task" ? `task "${String(r.prompt).slice(0, 80)}"` : r.title || r.name}\n${last}` : "";
   }));
-  const each = Math.floor((budget - 140) / srcs.length);
+  const each = Math.floor((budget - 140) / Math.max(1, srcs.length));
   const body = parts.filter(Boolean).map((s) => (s.length > each ? `${s.slice(0, each)}…` : s)).join("\n\n");
-  return body ? `Context from cards linked to this one on the Overlook canvas:\n\n${body}\n\n---\n\n` : "";
+  // A terminal wired to other terminals can talk to them itself: say how (the ids are what `overlook` takes).
+  // (agents told at start, through their `canvas` args, don't need it on every message)
+  const target = orchPanes.find((p) => paneKey(p) === key), knows = S.runners?.find((r) => r.id === target?.run?.agent)?.canvas;
+  const peers = key.startsWith("terminal:") && !knows ? orchLinks.filter((l) => l.a === key || l.b === key).map((l) => (l.a === key ? l.b : l.a)).filter((k) => k.startsWith("terminal:")) : [];
+  const how = peers.length ? `You can also talk to the wired terminals yourself: ${peers.map((k) => `"${termName(orchPanes.find((p) => paneKey(p) === k) || { id: k.slice(9) })}" = card ${k.slice(9)}`).join(", ")}. Run \`overlook send <card> "message"\` to hand work to one (it lands there as a prompt), \`overlook read <card>\` to see its screen.\n\n` : "";
+  return body || how ? `${body ? `Context from cards linked to this one on the Overlook canvas:\n\n${body}\n\n` : ""}${how}---\n\n` : "";
 }
 const linkCount = (key) => orchLinks.filter((l) => l.b === key).length;
 
@@ -1203,15 +1292,15 @@ function fleetItems() {
   }
   for (const f of S.background || []) {
     if (seen.has(f.key) || dismissedSessions.has(f.key)) continue;
-    const wait = f.state === "blocked" || !!f.needs;
+    const gone = f.resumable === false, wait = !gone && (f.state === "blocked" || !!f.needs);
     const act = f.state === "working" || f.state === "running";
     items.push({
       kind: "agent", id: f.key, agent: "claude", ic: "agents",
-      title: f.title, sub: `Claude Code · ${f.cwd} · ${ago(f.since)}`,
-      group: wait ? "waiting" : act ? "active" : "done",
+      title: f.title, sub: `${gone ? "transcript expired · " : ""}Claude Code · ${f.cwd} · ${ago(f.since)}`,
+      group: wait ? "waiting" : act && !gone ? "active" : "done",
       dot: wait ? "run" : f.state === "done" ? "idle" : "",
-      badge: STATE[f.state] || f.state, peach: wait, needs: f.needs || "",
-      tui: f.state === "done" && S.runners?.find((r) => r.id === "claude")?.tui ? { key: f.key, agent: "claude" } : null,
+      badge: STATE[f.state] || f.state, peach: wait, needs: gone ? "" : f.needs || "",
+      tui: !gone && f.state === "done" && S.runners?.find((r) => r.id === "claude")?.tui ? { key: f.key, agent: "claude" } : null,
     });
   }
   for (const p of orchPanes) {
@@ -1281,7 +1370,7 @@ function agents() {
   loadTerminals();
   $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
   agentsBody();
-  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); }, 2000);
+  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); }, 2000);
   ambient(art("agents"));
 }
 function renderMultiChips() {
@@ -1294,8 +1383,16 @@ function renderMultiChips() {
   if (sub) sub.innerHTML = `Run${n > 1 ? ` (${n})` : ""} ${icon("play", 14)}`;
 }
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
-// before ghostty-web sees the key) without taking keys a shell or TUI uses.
-const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · / this help";
+// before the terminal sees the key) without taking keys a shell or TUI uses.
+const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · Z full screen · R reload · / this help · Alt+drag moves a card";
+// Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen); Esc leaves.
+function canvasFull(on = !document.body.classList.contains("canvas-full")) {
+  document.body.classList.toggle("canvas-full", on);
+  if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  orchSigs.clear(); setTimeout(() => orchPaint(true), 60); // terminals refit to the new size
+}
+document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && document.body.classList.contains("canvas-full")) canvasFull(false); });
 window.addEventListener("keydown", (e) => {
   if (!e.ctrlKey || !e.altKey || e.metaKey || route().pg !== "agents") return;
   const keys = orchPanes.map(paneKey), i = keys.indexOf(orchActive);
@@ -1304,9 +1401,11 @@ window.addEventListener("keydown", (e) => {
     ArrowLeft: () => keys.length && focusPane(keys[(i - 1 + keys.length) % keys.length]),
     Enter: () => { if (orchActive) { orchMax = orchMax ? "" : orchActive; orchSigs.clear(); agentsBody(); setTimeout(() => focusPane(orchActive), 80); } },
     KeyT: () => newTermPane(),
-    KeyN: () => ACTIONS["orch-new"](),
+    KeyN: () => newAgentTerm(defaultAgent()),
     KeyW: () => orchActive && ACTIONS["orch-unpin"]({ dataset: { key: orchActive } }),
     KeyF: () => { if (orchMode === "free") { fitCanvasView(); saveCanvas(); } },
+    KeyZ: () => canvasFull(),
+    KeyR: () => location.reload(),
     Slash: () => toast(PANE_KEYS),
   }[e.code];
   const digit = /^Digit([1-9])$/.exec(e.code);
@@ -1331,7 +1430,9 @@ function bindCanvasInteractions(canvas) {
   canvas.addEventListener("pointerdown", (e) => {
     if (orchMode !== "free" || orchMax) return;
     const isBg = e.target === canvas || e.target.id === "orch-plane" || e.target.classList?.contains("orch-links") || e.target.tagName === "svg";
-    if (!isBg && e.button !== 1 && e.button !== 2) return;
+    // Over a card the mouse belongs to it (a terminal's middle-click paste, right-click, selection): only the
+    // background pans, with the middle or right button, the Pan tool or Space held.
+    if (!isBg && !isSpacePressed) return;
 
     if (e.button === 1 || e.button === 2 || isSpacePressed || (orchTool === "pan" && e.button === 0 && isBg)) {
       e.preventDefault();
@@ -1422,15 +1523,24 @@ function bindCanvasInteractions(canvas) {
   });
 
   canvas.addEventListener("contextmenu", (e) => {
-    if (orchMode === "free" && !orchMax) e.preventDefault();
+    if (orchMode === "free" && !orchMax && !e.target.closest(".orch-pane")) e.preventDefault(); // right-drag pans the background
   });
 
   canvas.addEventListener("wheel", (e) => {
     if (orchMode !== "free" || orchMax) return;
     const isBg = e.target === canvas || e.target.id === "orch-plane" || e.target.classList?.contains("orch-links") || e.target.tagName === "svg";
-    if (!isBg && !e.ctrlKey && !e.metaKey) return;
+    // Like Maestri: the wheel (or a two-finger swipe) pans the background; Ctrl/Alt + wheel (or a pinch) zooms, over a
+    // card too. A plain wheel over a card is the card's (a terminal scrolls back).
+    const zoom = e.ctrlKey || e.metaKey || e.altKey;
+    if (!isBg && !zoom) return;
     e.preventDefault();
-
+    if (!zoom) {
+      orchPanX = Math.round(orchPanX - (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX));
+      orchPanY = Math.round(orchPanY - (e.shiftKey && !e.deltaX ? 0 : e.deltaY));
+      applyCanvasTransform(); drawLinks(); saveCanvas();
+      return;
+    }
+    e.stopPropagation(); // a terminal under the pointer must not scroll as well
     const r = canvas.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
     const k = Math.min(2.5, Math.max(0.2, orchZoom * Math.exp(-e.deltaY * 0.002)));
     orchPanX = Math.round(sx - (sx - orchPanX) * (k / orchZoom));
@@ -1438,7 +1548,7 @@ function bindCanvasInteractions(canvas) {
     orchZoom = Math.round(k * 1000) / 1000;
     applyCanvasTransform();
     saveCanvas();
-  }, { passive: false });
+  }, { passive: false, capture: true }); // capture: xterm's scroller stops the wheel before it bubbles
   // Fleet chats and vault notes are dragged in from the left rail (HTML drag and drop).
   canvas.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes(PANE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; canvas.classList.add("drop"); } });
   canvas.addEventListener("dragleave", (e) => { if (!canvas.contains(e.relatedTarget)) canvas.classList.remove("drop"); });
@@ -1454,10 +1564,10 @@ function bindCanvasInteractions(canvas) {
 function bindPaneDragResize(card, p) {
   const head = card.querySelector(".orch-head"), port = card.querySelector(".orch-port");
   if (head) {
-    head.addEventListener("pointerdown", (e) => {
+    const startMove = (e) => {
       if (orchMode !== "free" || orchMax || e.target.closest("button, a, select, input")) return;
       e.preventDefault();
-      try { head.setPointerCapture(e.pointerId); } catch {}
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
       const curKey = paneKey(p);
       if (e.shiftKey || e.metaKey || e.ctrlKey) {
         if (orchSelected.has(curKey)) orchSelected.delete(curKey);
@@ -1509,7 +1619,10 @@ function bindPaneDragResize(card, p) {
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
-    });
+    };
+    head.addEventListener("pointerdown", startMove);
+    // Alt+drag moves a card from anywhere, like a window manager: a bare terminal has no title bar to grab.
+    card.addEventListener("pointerdown", (e) => { if (e.altKey && e.button === 0) { e.stopPropagation(); startMove(e); } }, true);
   }
   // Invisible edges and corners: only the cursor says "resize" (no highlight, no tooltip).
   ["nw", "ne", "sw", "se", "n", "s", "e", "w"].forEach((c) => {
@@ -1603,15 +1716,12 @@ function agentsBody() {
   const all = fleetItems();
   const counts = { all: all.length };
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p && (p.kind === "new" || p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
-  if (!orchPanes.length && orchMode !== "free") {
-    const first = all[0];
-    if (first) {
-      orchPanes = [ensurePaneRect({ kind: first.kind, id: first.id }, 0)];
-    } else {
-      const newId = String(++orchSeq);
-      orchPanes = [ensurePaneRect({ kind: "new", id: newId, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd }, 0)];
-    }
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
+  // Agents run in terminals (like Maestri): a task or session card turns into its own TUI as soon as nothing else
+  // drives it; only a session running elsewhere (another terminal, a waiting background job) stays a read-only card.
+  for (const p of [...orchPanes]) if (p.kind === "task" || p.kind === "agent") {
+    const run = all.find((x) => x.kind === p.kind && x.id === p.id)?.tui;
+    if (run) tuiInPlace(p, run);
   }
   orchPanes.forEach(ensurePaneRect);
   if (!orchPanes.some((p) => paneKey(p) === orchActive)) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
@@ -1644,6 +1754,7 @@ function agentsBody() {
       <div class="orch-canvas" id="orch-canvas">
         <div class="orch-plane" id="orch-plane"></div>
         <div class="orch-hud glass" id="orch-hud"></div>
+        <div class="orch-newmenu" id="orch-newmenu" hidden></div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
   }
@@ -1875,14 +1986,36 @@ const winHead = (key, title, sub, acts = "") => `<div class="win-lights">
   </div><div class="win-title" title="${esc(title)}"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="orch-acts">${acts}</div>`;
 // A re-render while the user is selecting text in a card would wipe the selection: wait for the next tick.
 const selectingIn = (el) => { const s = getSelection(); return !!s && !s.isCollapsed && el.contains(s.anchorNode); };
+// The HUD: icons only (names and shortcuts in tooltips). Creating cards works in both layouts; the
+  // canvas-only tools (select/pan, arrange, fit, zoom) show on the free canvas.
+function paintHud(hud, isFree) {
+  if (!hud) return;
+  const b = (act, ic, tip, extra = "", on = false) => `<button type="button" class="hud-btn ${on ? "on" : ""}" data-act="${act}" ${extra} title="${tip}" aria-label="${tip}">${icon(ic, 14)}</button>`;
+  const full = b("canvas-full", "expand", document.body.classList.contains("canvas-full") ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", document.body.classList.contains("canvas-full"));
+  const make = b("orch-new", "plus", "New agent or shell (Ctrl+Alt+N opens your agent)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note");
+  const hudHtml = !isFree ? `${make}<span class="orch-hud-sep"></span>${full}` : `${b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select")}${b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan")}
+      <span class="orch-hud-sep"></span>${make}<span class="orch-hud-sep"></span>
+      ${b("orch-arrange", "grid", "Arrange the windows")}${b("orch-fit", "max", "Fit everything in view (Ctrl+Alt+F)")}
+      <span class="orch-hud-sep"></span>
+      <button type="button" class="hud-btn" data-act="orch-zoom" data-d="-0.15" title="Zoom out" aria-label="Zoom out">−</button>
+      <button type="button" class="hud-btn hud-zoom" data-act="orch-zoom" data-d="0" id="orch-zoom-lbl" title="Back to 100%">${Math.round(orchZoom * 100)}%</button>
+      <button type="button" class="hud-btn" data-act="orch-zoom" data-d="0.15" title="Zoom in" aria-label="Zoom in">+</button>
+      <span class="orch-hud-sep"></span>${full}
+      <span class="hud-sel" id="orch-sel-cnt" ${orchSelected.size ? "" : "hidden"}>${orchSelected.size} selected</span>
+      <button type="button" class="hud-btn danger" data-act="orch-del-sel" id="orch-del-sel" title="Close the selected cards (Delete)" ${orchSelected.size ? "" : "hidden"}>${icon("trash", 14)}</button>`;
+  // Rewritten only when it changes: a rewrite every tick drops clicks that straddle it.
+  if (hud.dataset.sig !== hudHtml) { hud.innerHTML = hudHtml; hud.dataset.sig = hudHtml; }
+}
 async function orchPaint(force) {
   reapTerms();
   const canvas = $("#orch-canvas"), plane = $("#orch-plane"), hud = $("#orch-hud");
   if (!canvas || !plane) return;
   if (!orchPanes.length) {
     orchSigs.clear();
-    canvas.className = "orch-canvas";
-    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Select a session from the Fleet, drag notes from the sidebar, or click <b>+ Tile</b> to launch on Canvas.</p></div>`;
+    canvas.className = `orch-canvas ${orchMode === "free" ? `free tool-${orchTool}` : "tiled"}`; // keeps its size and dot grid
+    plane.className = `orch-plane ${orchMode === "free" ? "free" : "single"}`;
+    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Open an agent with <b>+</b> (or Ctrl+Alt+N), or a session from the Fleet.</p></div>`;
+    paintHud(hud, orchMode === "free");
     drawLinks();
     return;
   }
@@ -1896,23 +2029,7 @@ async function orchPaint(force) {
   canvas.className = `orch-canvas ${isFree ? `free tool-${orchTool}` : "tiled"}`;
   plane.className = `orch-plane ${isFree ? "free" : vis.length === 1 ? "single" : vis.length === 2 ? `split-${orchDir}` : "grid"}`;
   applyCanvasTransform();
-  // The HUD: icons only (names and shortcuts in tooltips). Creating cards works in both layouts; the
-  // canvas-only tools (select/pan, arrange, fit, zoom) show on the free canvas.
-  if (hud) {
-    const b = (act, ic, tip, extra = "", on = false) => `<button type="button" class="hud-btn ${on ? "on" : ""}" data-act="${act}" ${extra} title="${tip}" aria-label="${tip}">${icon(ic, 14)}</button>`;
-    const make = b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note");
-    const hudHtml = !isFree ? make : `${b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select")}${b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan")}
-        <span class="orch-hud-sep"></span>${make}<span class="orch-hud-sep"></span>
-        ${b("orch-arrange", "grid", "Arrange the windows")}${b("orch-fit", "max", "Fit everything in view (Ctrl+Alt+F)")}
-        <span class="orch-hud-sep"></span>
-        <button type="button" class="hud-btn" data-act="orch-zoom" data-d="-0.15" title="Zoom out" aria-label="Zoom out">−</button>
-        <button type="button" class="hud-btn hud-zoom" data-act="orch-zoom" data-d="0" id="orch-zoom-lbl" title="Back to 100%">${Math.round(orchZoom * 100)}%</button>
-        <button type="button" class="hud-btn" data-act="orch-zoom" data-d="0.15" title="Zoom in" aria-label="Zoom in">+</button>
-        <span class="hud-sel" id="orch-sel-cnt" ${orchSelected.size ? "" : "hidden"}>${orchSelected.size} selected</span>
-        <button type="button" class="hud-btn danger" data-act="orch-del-sel" id="orch-del-sel" title="Close the selected cards (Delete)" ${orchSelected.size ? "" : "hidden"}>${icon("trash", 14)}</button>`;
-    // Rewritten only when it changes: a rewrite every tick drops clicks that straddle it.
-    if (hud.dataset.sig !== hudHtml) { hud.innerHTML = hudHtml; hud.dataset.sig = hudHtml; }
-  }
+  paintHud(hud, isFree);
   await Promise.all(vis.map(async (p, idx) => {
     const key = paneKey(p);
     ensurePaneRect(p, idx);
@@ -1989,7 +2106,11 @@ async function orchPaint(force) {
       ${!isFree && orchPanes.length > 1 && idx > 0 ? `<button type="button" class="btn glass orch-icon-btn" data-act="orch-swap" data-key="${esc(key)}" title="Move pane first">⇄</button>` : ""}
 `;
     const form = card.querySelector(".orch-talk");
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !p.run)) ? "none" : "";
+    // A terminal is typed into directly; its message line only shows when wires bring other cards' context to it.
+    // Between terminals a wire is a hand-off (overlook send), so a terminal's message line only shows when a note or a
+    // sticky is wired into it, to bring their text along.
+    const ctxIn = orchLinks.filter((l) => l.b === key && !l.a.startsWith("terminal:")).length;
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;
@@ -2039,44 +2160,6 @@ async function orchPaint(force) {
       mountTerminalPane(card, p);
       return;
     }
-    if (p.kind === "new") {
-      const sig = `new|${p.agent}|${p.cwd}|${p.role}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
-      if (!force && orchSigs.get(key) === sig) return;
-      orchSigs.set(key, sig);
-      const pAgent = p.agent || $("#run-agent")?.value || "agy";
-      const pCwd = p.cwd ?? orchCwd;
-      const pRole = p.role ?? orchRole;
-      card.querySelector(".orch-head").innerHTML = winHead(key, "New agent", "", paneBtns);
-      card.querySelector(".orch-needs").innerHTML = "";
-      card.querySelector(".orch-msg").placeholder = "First prompt for this tile… (Enter)";
-      card.querySelector(".orch-feed").innerHTML = `<div class="orch-new-box">
-        <div class="orch-new-row">
-          <label>Agent</label>
-          <div class="orch-roles">${(S.runners || []).filter((r) => r.ready).map((r) =>
-            `<button type="button" class="fchip ${pAgent === r.id ? "on" : ""}" data-act="pane-agent" data-key="${esc(key)}" data-v="${esc(r.id)}">${esc(r.name)}</button>`).join("")}</div>
-        </div>
-        ${S.runners?.find((r) => r.id === pAgent)?.tui ? `<div class="orch-new-row"><button type="button" class="btn glass" data-act="pane-tui" data-key="${esc(key)}">${icon("terminal", 13)} Open ${esc(runnerName(pAgent))}</button></div>` : ""}
-        <div class="orch-new-row">
-          <label>Folder</label>
-          <button type="button" class="btn glass orch-cwd-btn" data-act="cwd-open" data-pane="${esc(key)}">
-            ${icon("folder", 14)} <span>${esc(cwdLabel(pCwd))}</span> ${icon("fold", 12)}
-          </button>
-        </div>
-        <div class="orch-new-row">
-          <label>Role</label>
-          <div class="orch-roles">${ORCH_ROLES.map(([k, l]) =>
-            `<button type="button" class="fchip ${pRole === k ? "on" : ""}" data-act="pane-role" data-key="${esc(key)}" data-v="${esc(k)}">${esc(l)}</button>`).join("")}</div>
-        </div>
-        <div class="orch-new-row">
-          <label>Or continue a session</label>
-          <div class="orch-new-list">${fleetItems().slice(0, 5).map((it) =>
-            `<button type="button" class="orch-item-mini" data-act="pane-load" data-key="${esc(key)}" data-kind="${it.kind}" data-id="${esc(it.id)}">
-              <span class="live ${it.dot}"></span><b>${esc(it.title)}</b><small>${esc(it.sub)}</small>
-            </button>`).join("")}</div>
-        </div>
-      </div>`;
-      return;
-    }
     if (p.kind === "task") {
       const t = await api(`/api/task?id=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!t || !card.isConnected) return;
@@ -2106,7 +2189,7 @@ async function orchPaint(force) {
       const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
       card.querySelector(".orch-head").innerHTML = winHead(key, name, [AGENT_NAME[a.name]?.[0] || a.name, a.cwd].filter(Boolean).join(" · "), `${paneBtns}
           <span class="live ${a.live ? "" : a.state === "blocked" ? "run" : "idle"}"></span>
-          ${S.runners?.find((r) => r.process === a.name)?.tui && !a.live ? `<button class="btn orch-open-btn" data-act="pane-tui" data-key="${esc(key)}" data-agent="${esc(a.name)}" title="Continue this session in the agent's own terminal UI">${icon("terminal", 12)} <span class="orch-btn-lbl">TUI</span></button>` : ""}
+          ${S.runners?.find((r) => r.process === a.name)?.tui && !a.live && a.resumable !== false ? `<button class="btn orch-open-btn" data-act="pane-tui" data-key="${esc(key)}" data-agent="${esc(a.name)}" title="Continue this session in the agent's own terminal UI">${icon("terminal", 12)} <span class="orch-btn-lbl">TUI</span></button>` : ""}
           ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(p.id)}"`, true)}
           <a class="btn orch-icon-btn" href="#/a/${esc(p.id)}" title="Open the session page">${icon("ext", 12)}</a>`);
       card.querySelector(".orch-needs").innerHTML = a.needs ? `<div class="needs orch-needs-bar"><b>Needs you:</b> <span>${fmt(a.needs)}</span></div>` : "";
@@ -2131,28 +2214,10 @@ async function orchSend(p, card) {
     if (p.kind === "terminal") {
       if (!termPrompt(p.id, fullText)) return toast("This terminal is not connected — press Enter in it to reconnect");
       t.value = ""; p.draft = ""; saveCanvas();
-      if (ctx) toast(`Sent with context from ${linkCount(oldKey)} linked card(s)`);
+      if (ctx && linkCount(oldKey)) toast(`Sent with context from ${linkCount(oldKey)} linked card(s)`);
       return;
     }
-    if (p.kind === "new") {
-      const agent = p.agent || $("#run-agent")?.value || "agy";
-      const cwd = (p.cwd ?? orchCwd) || undefined, role = (p.role ?? orchRole) || undefined;
-      if (S.runners?.find((x) => x.id === agent)?.tui) {
-        t.value = "";
-        p.cwd = cwd || "";
-        return paneToTui(p, newTuiRun(agent, role ? `[Role: ${role}]\n\n${fullText}` : fullText));
-      }
-      const r = await api("/api/run", { agent, prompt: fullText, cwd, role });
-      t.value = ""; toast("Task started in tile");
-      orchSigs.delete(oldKey);
-      p.kind = "task"; p.id = r.id;
-      rekey(oldKey, paneKey(p));
-      card.dataset.key = paneKey(p);
-      if (orchActive === oldKey) orchActive = paneKey(p);
-      if (orchMax === oldKey) orchMax = paneKey(p);
-      saveCanvas();
-      S = await api("/api/system"); agentsBody(); orchPaint(true);
-    } else if (p.kind === "task") {
+    if (p.kind === "task") {
       await api("/api/task/talk", { id: p.id, text: fullText });
       t.value = ""; toast("Follow-up started");
       orchSigs.delete(oldKey);
@@ -2705,6 +2770,7 @@ function render() {
   if (document.activeElement?.closest?.("#dockwrap")) document.activeElement.blur(); // a floating dock folds after you pick a page
   graphStop?.(); graphStop = null; clearInterval(orchTimer);
   const { pg, arg } = route();
+  if (pg !== "agents" && document.body.classList.contains("canvas-full")) canvasFull(false); // full screen is the canvas's
   $("#crumb").textContent = pg === "a" ? S.background?.find((x) => x.key === arg)?.title || AGENT_NAME[S.agents.find((x) => x.key === arg)?.name]?.[0] || "Agent" : pg === "s" ? S.services.find((s) => s.id === arg)?.name || "Service" : PAGES[pg][1];
   document.body.classList.toggle("home", !pg);
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
@@ -2835,7 +2901,7 @@ const ACTIONS = {
     document.querySelectorAll('[data-act="orch-deck-toggle"]').forEach((b) => b.classList.toggle("on", orchDeckOpen));
     if (!orchDeckOpen && el) el.blur();
   },
-  "term-canvas": (el) => newTermPane(el?.dataset?.cwd),
+  "term-canvas": (el) => { $("#orch-newmenu")?.setAttribute("hidden", ""); newTermPane(el?.dataset?.cwd); },
   "term-new-pane": () => newTermPane(),
   "term-launch-app": async (el) => {
     const key = el.dataset.key;
@@ -2867,16 +2933,14 @@ const ACTIONS = {
     agentsBody();
     if (orchMode === "free" && orchPanX === 24 && orchPanY === CANVAS_TOP && orchZoom === 1) fitCanvasView();
   },
-  "orch-new": () => {
-    orchMax = "";
-    if (!makeRoom()) return;
-    const id = String(++orchSeq);
-    const p = { kind: "new", id, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd };
-    if (orchMode === "free") ensurePaneRect(p, orchPanes.length);
-    orchPanes.push(p);
-    orchActive = paneKey(p);
-    orchSigs.clear();
-    agentsBody();
+  "orch-new": (el) => {
+    if (el?.dataset?.agent) return newAgentTerm(el.dataset.agent);
+    const menu = $("#orch-newmenu");
+    if (!menu) return newAgentTerm(defaultAgent());
+    if (!menu.hidden) return menu.setAttribute("hidden", "");
+    menu.innerHTML = [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => `<button type="button" data-act="orch-new" data-agent="${esc(r.id)}">${icon("agents", 14)} ${esc(r.name)}</button>`),
+      `<button type="button" data-act="term-canvas">${icon("terminal", 14)} Shell</button>`].join("");
+    menu.removeAttribute("hidden");
   },
   "orch-dir": () => {
     orchDir = orchDir === "cols" ? "rows" : "cols";
@@ -2926,20 +2990,7 @@ const ACTIONS = {
     orchSigs.clear();
     orchPaint(true);
   },
-  "pane-agent": (el) => {
-    const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
-    if (!p) return;
-    p.agent = el.dataset.v || el.dataset.agent;
-    orchSigs.delete(el.dataset.key);
-    orchPaint(true);
-  },
-  "pane-role": (el) => {
-    const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
-    if (!p) return;
-    p.role = el.dataset.v ?? el.dataset.role ?? "";
-    orchSigs.delete(el.dataset.key);
-    orchPaint(true);
-  },
+  "canvas-full": () => canvasFull(),
   "orch-collapse": (el) => {
     const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
     if (!p) return;
@@ -2950,22 +3001,9 @@ const ACTIONS = {
   "pane-tui": (el) => {
     const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
     if (!p) return;
-    if (p.kind === "new") { p.cwd = (p.cwd ?? orchCwd) || ""; return paneToTui(p, newTuiRun(p.agent || $("#run-agent")?.value)); }
     const agent = p.kind === "task" ? el.dataset.agent : S.runners?.find((r) => r.process === el.dataset.agent)?.id;
     delete p.cwd; // the server takes the folder from the session
     paneToTui(p, p.kind === "task" ? { task: p.id, agent } : { key: p.id, agent });
-  },
-  "pane-load": (el) => {
-    const idx = orchPanes.findIndex((x) => paneKey(x) === el.dataset.key);
-    if (idx < 0) return;
-    const prev = orchPanes[idx];
-    const next = { kind: el.dataset.kind, id: el.dataset.id, x: prev.x, y: prev.y, w: prev.w, h: prev.h };
-    orchPanes[idx] = next;
-    orchActive = paneKey(next);
-    rekey(paneKey(prev), paneKey(next));
-    saveCanvas();
-    orchSigs.clear();
-    agentsBody();
   },
   "link-del": (el) => {
     const i = Number(el.dataset.i);
@@ -2989,24 +3027,6 @@ const ACTIONS = {
     addPane({ kind: "sticky", id, text: "" });
     saveCanvas();
     toast("Sticky note added");
-  },
-  "orch-split": () => {
-    orchMax = "";
-    if (orchPanes.length > 1) {
-      const act = orchPanes.find((p) => paneKey(p) === orchActive) || orchPanes[0];
-      orchPanes = act ? [act] : [];
-    } else {
-      const all = fleetItems();
-      const cur = orchPanes[0] ? paneKey(orchPanes[0]) : "";
-      const next = all.find((x) => paneKey(x) !== cur) || fleetItems().find((x) => paneKey(x) !== cur);
-      if (next) orchPanes = [...orchPanes, { kind: next.kind, id: next.id }];
-      else {
-        const id = String(++orchSeq);
-        orchPanes = [...orchPanes, { kind: "new", id, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd }];
-      }
-    }
-    orchSigs.clear();
-    agentsBody();
   },
   "orch-tab": (el) => { orchFilter = el.dataset.k; agentsBody(); },
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
@@ -3058,21 +3078,7 @@ const ACTIONS = {
       orchPanes = orchPanes.filter((p) => paneKey(p) !== targetKey);
       const paneKeys = new Set(orchPanes.map(paneKey));
       orchLinks = orchLinks.filter((l) => paneKeys.has(l.a) && paneKeys.has(l.b));
-      if (orchPanes.length === 0) {
-        const next = fleetItems().find((x) => paneKey(x) !== targetKey);
-        if (next) {
-          const item = { kind: next.kind, id: next.id };
-          if (orchMode === "free") ensurePaneRect(item, 0);
-          orchPanes = [item];
-          orchActive = paneKey(next);
-        } else {
-          const newId = String(++orchSeq);
-          const item = { kind: "new", id: newId, agent: $("#run-agent")?.value || S.runners?.[0]?.id || "agy", role: orchRole, cwd: orchCwd };
-          if (orchMode === "free") ensurePaneRect(item, 0);
-          orchPanes = [item];
-          orchActive = `new:${newId}`;
-        }
-      } else if (orchActive === targetKey) {
+      if (orchActive === targetKey) {
         orchActive = paneKey(orchPanes[0]);
       }
       if (orchMax === targetKey) orchMax = "";
@@ -3168,6 +3174,7 @@ document.addEventListener("click", (e) => {
   }
   if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
   if (!e.target.closest("#orch-fleet-wrap")) $("#orch-fleet-wrap")?.classList.remove("open");
+  if (!e.target.closest('#orch-newmenu, [data-act="orch-new"]')) $("#orch-newmenu")?.setAttribute("hidden", "");
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const res = e.target.closest(".ev.result");
@@ -3270,7 +3277,7 @@ setInterval(async () => {
   await system(); topBar();
   const { pg } = route();
   if (!pg) tiles();
-  else if (pg === "agents" && !cwdOpen && !document.activeElement?.closest?.(".orch-new-box, .orch-talk, .orch-sticky-wrap")) agentsBody();
+  else if (pg === "agents" && !cwdOpen && !document.activeElement?.closest?.(".orch-talk, .orch-sticky-wrap")) agentsBody();
   else if (pg === "services") services();
 }, 10000);
 setInterval(async () => { await vault(); topBar(); if (!route().pg) tiles(); }, 60000);

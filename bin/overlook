@@ -1,0 +1,28 @@
+#!/usr/bin/env bun
+// overlook: talk to the cards wired to this terminal on the Overlook canvas (Overlook puts it on the PATH of every
+// canvas terminal, with OVERLOOK_URL, OVERLOOK_PANE and OVERLOOK_TOKEN in the environment).
+//   overlook peers                    the cards wired to this one
+//   overlook send <card> <message…>   type the message into that card as a prompt (or pipe it in on stdin)
+//   overlook read <card> [lines]      what that card's screen shows
+// <card> is a card id or part of its name, as `overlook peers` prints them.
+const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
+const [cmd, card, ...rest] = process.argv.slice(2);
+const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines]";
+if (!url || !from || !token) { console.error("overlook: run this inside a terminal card on the Overlook canvas"); process.exit(2); }
+async function call(path: string, body: object) {
+  const r = await fetch(url + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, token, ...body }) }).catch((e) => { console.error(`overlook: ${e.message}`); process.exit(1); });
+  const text = await r.text();
+  if (!r.ok) { console.error(`overlook: ${text}`); process.exit(1); }
+  return JSON.parse(text);
+}
+if (cmd === "peers") {
+  const { peers } = await call("/api/pty/peers", {});
+  console.log(peers.length ? peers.map((p: any) => `${p.id}\t${p.name}${p.running ? "" : " (stopped)"}`).join("\n") : "No cards are wired to this one. Ask the user to draw a wire between the cards on the canvas.");
+} else if (cmd === "send" && card) {
+  const text = rest.length ? rest.join(" ") : await Bun.stdin.text();
+  await call("/api/pty/send", { to: card, text });
+  console.log("sent");
+} else if (cmd === "read" && card) {
+  const r = await call("/api/pty/read", { to: card, lines: Number(rest[0]) || 60 });
+  console.log(`--- ${r.name} (${r.id})\n${r.text}`);
+} else { console.error(usage); process.exit(2); }

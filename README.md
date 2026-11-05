@@ -146,6 +146,25 @@ terminal (`xdg-terminal-exec`, or `$TERMINAL -e`). The built-in ones resume a Cl
 app. Claude Code tasks get a fresh `--session-id`, so a finished task can be picked up in the terminal.
 Any other app works the same way, as long as it can be launched with a command.
 
+**Canvas.** On the Agents page every card is a window. Terminal cards are real terminals (rendered with
+Ghostty's own terminal core, in your Ghostty theme), and an agent with a `tui` command opens there as its own
+TUI: `{prompt}`, `{session}`, `{model}` and `{effort}` work as in `run`, and a `{session}` lets the card
+resume the conversation after a restart. Ctrl+Alt+/ lists the canvas shortcuts.
+
+**Agents talking to each other.** Draw a wire between two terminal cards and the programs in them can talk,
+both ways, with the `overlook` command Overlook puts on every canvas terminal's `PATH`:
+
+```sh
+overlook peers                  # the cards wired to this one
+overlook send <card> "message"  # types the message into that card as a prompt
+overlook read <card>            # what that card's screen shows
+```
+
+A message lands as a prompt that says who sent it and how to answer, so a Claude Code card can delegate to an
+Antigravity card or ask another Claude and get the reply back. An agent's `canvas` args tell it about the
+command when it starts (the example gives Claude Code `--append-system-prompt`); typing in a card's message line
+says it too. No wire, no talking; at most 6 messages a minute from one card to another.
+
 Each agent can have its own picture: Settings → *Agent icons* (PNG, JPEG, WebP or GIF under 2 MB, squared to
 256 px when ImageMagick is installed, kept in `avatars/`).
 

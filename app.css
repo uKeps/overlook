@@ -933,12 +933,6 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-bar #run-submit { flex: none; height: 32px; padding: 0 14px; border-radius: 8px; gap: 6px; }
 @media (max-width: 760px) { .orch-ctx-group .orch-cwd-btn span { display: none; } .orch-ctx-group > select.pick { max-width: 110px; } }
 
-/* Embedded terminal panes: ghostty-web draws the screen on a canvas; the window chrome is a plain Ghostty-style title bar. */
-.orch-pane[data-kind="terminal"] { min-width: 320px; min-height: 200px; }
-.orch-pane[data-kind="terminal"] .orch-feed { padding: 0; overflow: hidden; display: flex; gap: 0; }
-/* 2px = Ghostty's default window-padding; the background comes from the user's Ghostty theme. */
-.orch-term-view { flex: 1; min-width: 0; min-height: 0; padding: 2px; background: #000; outline: none; cursor: text; }
-.orch-term-view canvas { display: block; }
 
 /* Fleet sidebar quick action */
 
@@ -1200,7 +1194,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 
 .orch-plane.grid > .orch-pane:last-of-type:nth-of-type(odd) { grid-column: 1 / -1; } /* 3 or 5 cards: no empty quadrant (of-type: the wires' svg is a sibling) */
 /* focusPane: a short ring so the eye finds the card it jumped to */
-.orch-pane.flash { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash .7s ease-out; } /* outline: the shadows are !important */
+.orch-pane.pane-flash { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash .7s ease-out; } /* outline: the shadows are !important */
 @keyframes pane-flash { 0% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
 
 /* Free 2D Maestri Canvas mode */
@@ -1315,22 +1309,6 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 
 .orch-empty { border-radius: var(--r); display: grid; place-items: center; height: 100%; text-align: center; padding: 32px; pointer-events: auto; }
 
-/* + Tile Interactive New Agent / Session Launcher */
-.orch-new-box {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px;
-  display: flex; flex-direction: column; gap: 14px;
-}
-.orch-new-row { display: flex; flex-direction: column; gap: 6px; }
-.orch-new-row > label { font: 500 11.5px var(--body); color: var(--faint); }
-.orch-new-list { display: flex; flex-direction: column; gap: 5px; }
-.orch-item-mini {
-  display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 28%, transparent);
-  text-align: left; font: 12.5px var(--body); color: var(--ink); transition: border-color .12s, background .12s;
-}
-.orch-item-mini:hover { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--ink) 4%, transparent); }
-.orch-item-mini b { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orch-item-mini small { font: 10.5px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 
 
 /* High-readability full-width chat messages (used in Canvas panes, #/t/:id, and #/a/:key) */
@@ -1923,5 +1901,57 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-sticky-input { background: transparent; border-radius: 0; padding: 12px 14px; font: 400 13px/1.6 var(--body); }
 .orch-sticky-input:focus { background: transparent; }
 .orch-pane[data-kind="sticky"] { --win-bg: color-mix(in srgb, var(--accent) 7%, color-mix(in srgb, var(--surface) 88%, #000)); }
-.orch-term-view { padding: 6px 8px; }
 
+
+/* a wire an agent just used to hand off: it flows from sender to receiver for a few seconds */
+.orch-links path.ln.hot { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; animation: wire-flow .6s linear infinite; }
+@keyframes wire-flow { to { stroke-dashoffset: -11; } }
+
+/* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD and the Fleet stay on it */
+body.canvas-full { padding: 0; }
+body.canvas-full :is(.top, .cal, #dockwrap, .orch-deck) { display: none !important; }
+body.canvas-full main { max-width: none; margin: 0; padding: 0; }
+body.canvas-full .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
+body.canvas-full .orch-canvas { border-radius: 0; border: 0; }
+body.canvas-full .orch-work { gap: 0; }
+
+
+/* "+" in the HUD: which agent to open in a new terminal (or a plain shell) */
+.orch-newmenu {
+  position: absolute; top: 52px; right: 10px; z-index: 16; min-width: 180px; padding: 4px; display: flex; flex-direction: column;
+  border-radius: 10px; border: 1px solid rgba(255, 255, 255, .1); background: color-mix(in srgb, var(--surface) 96%, #000); box-shadow: 0 14px 34px rgba(0, 0, 0, .45);
+}
+.orch-newmenu[hidden] { display: none; }
+.orch-newmenu button { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 500 12.5px var(--body); text-align: left; }
+.orch-newmenu button:hover { background: rgba(255, 255, 255, .07); color: var(--ink); }
+
+/* empty canvas: just the hint over the dot grid */
+.orch-empty { background: none !important; border: 0 !important; box-shadow: none !important; }
+
+/* ---------- Terminal cards: a Ghostty window under Hyprland (decorations.lua, lucid-glass.lua) ----------
+   No title bar: Alt+drag moves it, its edges resize it, `exit` closes it, Ctrl+Alt+W / Enter close / maximize it.
+   No border either: a border's width follows the canvas zoom (--bw), so the terminal's box changed size on every zoom
+   step and the shell redrew its prompt each time. The ring and the shadow are box-shadows: they never take room. */
+.orch-pane[data-kind="terminal"] {
+  --ring: transparent; /* Ghostty has no outline; only the card with the keyboard gets a faint one */
+  min-width: 320px; min-height: 160px; border: 0; border-radius: 18px; background: transparent;
+  backdrop-filter: blur(20px) saturate(1.17);
+  box-shadow: 0 0 0 calc(2 * var(--bw, 1px)) var(--ring), 0 0 20px rgba(0, 0, 0, .6);
+}
+.orch-pane[data-kind="terminal"].typing { --ring: rgba(255, 255, 255, .12); } /* has the keyboard */
+.orch-plane.free .orch-pane[data-kind="terminal"].selected { --ring: var(--accent); }
+.orch-pane[data-kind="terminal"] > .orch-head { display: none; }
+/* the window surface: the theme background at 95% over the blur; the text stays at full strength */
+.orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
+.orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 18px; }
+.orch-pane[data-kind="terminal"]:has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 18px 18px 0 0; }
+.orch-pane[data-kind="terminal"] > .orch-talk { border-radius: 0 0 18px 18px; border-top-color: rgba(255, 255, 255, .06); }
+/* clip, not hidden: a hidden overflow can still be scrolled by the browser (focusing the terminal's input) */
+.orch-term-view { flex: 1; min-width: 0; min-height: 0; overflow: clip; cursor: text; }
+/* The padding sits on xterm's own element: its FitAddon subtracts that padding from the box it measures, so every
+   row and column it counts is on screen (padding on the outer box made it count cells that were then cut off). */
+.orch-term-view .xterm { height: 100%; padding: 10px 12px; }
+.orch-term-view .xterm-viewport { background: transparent !important; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .18) transparent; }
+/* the canvas chrome stays quiet until it's used */
+.orch-hud { opacity: .45; transition: opacity .2s; }
+.orch-hud:is(:hover, :focus-within) { opacity: 1; }
