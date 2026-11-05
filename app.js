@@ -774,7 +774,7 @@ function saveCanvas() {
 // resize — and could fault. xterm.js reflows like a native terminal, and its DOM text stays crisp at any canvas zoom.)
 let termLib, termBg = ""; // termBg: the Ghostty theme background, also the terminal window's color
 const termLoad = () => (termLib ??= Promise.all([
-  import("/vendor/xterm.mjs"), import("/vendor/addon-fit.mjs"),
+  import("/vendor/xterm.mjs"),
   api("/api/ghostty-theme").catch(() => ({})),
   document.fonts?.load?.("16px 'JetBrainsMono Nerd Font Mono'").catch(() => {}),
 ]).then((r) => {
@@ -783,8 +783,8 @@ const termLoad = () => (termLib ??= Promise.all([
 }).catch((e) => { termLib = null; throw e; }));
 const terms = new Map(); // pane id -> { el, term, fit, ws, title, dead }
 function newTermPane(cwd) {
-  addPane({ kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || shellList[0]?.id || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "" });
-  saveCanvas();
+  const p = { kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "" };
+  if (addPane(p)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p)); }
 }
 // Turns a pane into a terminal running the agent's own TUI, in place (same spot, size and links); a pane for a session
 // that already has its terminal on the canvas just goes.
@@ -801,8 +801,8 @@ function paneToTui(p, run) { tuiInPlace(p, run); saveCanvas(); orchSigs.clear();
 function newAgentTerm(agent) {
   $("#orch-newmenu")?.setAttribute("hidden", "");
   if (!S.runners?.find((r) => r.id === agent)?.tui) return newTermPane();
-  addPane({ kind: "terminal", id: `term_${Date.now()}`, cwd: $("#run-cwd")?.value || orchCwd || "", run: newTuiRun(agent) });
-  saveCanvas();
+  const p = { kind: "terminal", id: `term_${Date.now()}`, cwd: $("#run-cwd")?.value || orchCwd || "", run: newTuiRun(agent) };
+  if (addPane(p)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p)); }
 }
 const defaultAgent = () => [$("#run-agent")?.value, "claude", ...(S.runners || []).map((r) => r.id)].find((id) => S.runners?.find((r) => r.id === id)?.tui);
 // A new agent TUI: claude gets --session-id up front so the pane can resume it later.
@@ -914,7 +914,7 @@ async function mountTerminalPane(card, p) {
     st = { el: document.createElement("div") };
     st.el.className = "orch-term-view";
     terms.set(p.id, st);
-    st.ready = termLoad().then(([x, f, look]) => {
+    st.ready = termLoad().then(([x, look]) => {
       if (terms.get(p.id) !== st) return; // closed while loading
       const theme = look.theme || {};
       termBg = theme.background || termBg;
@@ -923,13 +923,20 @@ async function mountTerminalPane(card, p) {
         // Ghostty ships JetBrains Mono plus Nerd Font symbols built in; a browser needs them installed (prompt icons).
         fontFamily: `${look.fontFamily ? `"${look.fontFamily}", ` : ""}"JetBrainsMono Nerd Font Mono", "JetBrains Mono", "Symbols Nerd Font Mono", monospace`,
         fontSize: Math.round((look.fontSize || 12) * 4 / 3), // Ghostty sizes are points; its default is 12
-        cursorStyle: ["bar", "underline"].includes(look.cursorStyle) ? look.cursorStyle : "block",
+        cursorStyle: ["block", "underline"].includes(look.cursorStyle) ? look.cursorStyle : "bar", // Ghostty shows a bar at a prompt
         cursorBlink: false, scrollback: 10000, allowProposedApi: true,
         // The card paints the window (95% over a blur, like Ghostty under Hyprland): the terminal itself is see-through.
         allowTransparency: true, theme: { ...theme, background: "#00000000" },
       });
-      st.fit = new f.FitAddon();
-      st.term.loadAddon(st.fit);
+      // Fit: as many whole cells as the box holds inside xterm's padding. (FitAddon also kept 14px for a scrollbar, but
+      // xterm 6's scrollbar floats over the text: that left a wide empty band on the right.)
+      st.fit = { fit: () => {
+        const cell = st.term?._core?._renderService?.dimensions?.css?.cell, cs = st.term?.element && getComputedStyle(st.term.element);
+        if (!cell?.width || !cell?.height || !cs) return;
+        const w = st.el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), h = st.el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+        const cols = Math.max(2, Math.floor(w / cell.width)), rows = Math.max(1, Math.floor(h / cell.height));
+        if (cols !== st.term.cols || rows !== st.term.rows) st.term.resize(cols, rows);
+      } };
       st.term.open(st.el);
       st.fit.fit();
       // Resize once the size settles (end of a drag), not every frame: each resize is a SIGWINCH and a prompt redraw.
@@ -970,7 +977,7 @@ async function loadTerminals() {
     termList = data.terminals || [];
     shellList = data.shells || [];
     if (!prefTerm) prefTerm = data.defaultTerminal || (termList[0]?.id || "ghostty");
-    if (!prefShell && prefShell !== "") prefShell = data.defaultShell || "bash";
+    if (!prefShell) prefShell = data.defaultShell || "";
   } catch {}
 }
 
@@ -1117,7 +1124,9 @@ function ensurePaneRect(p, idx = 0) {
     const r = orchMode === "free" ? $("#orch-canvas")?.getBoundingClientRect() : null;
     let x = r?.width ? Math.round((r.width / 2 - orchPanX) / orchZoom - p.w / 2) : 24 + (idx % 2) * (p.w + 40);
     let y = r?.height ? Math.round(((r.height + CANVAS_TOP) / 2 - orchPanY) / orchZoom - p.h / 2) : 20 + Math.floor(idx / 2) * (p.h + 40);
-    for (let n = 0; n < 30 && orchPanes.some((q) => q !== p && typeof q.x === "number" && Math.abs(q.x - x) < 48 && Math.abs(q.y - y) < 48); n++) { x += 40; y += 40; }
+    // Not on top of another card: step right past whatever it would cover (the view then goes to it, see focusPane).
+    const hit = () => orchPanes.find((q) => q !== p && typeof q.x === "number" && x < q.x + q.w + 24 && x + p.w + 24 > q.x && y < q.y + q.h + 24 && y + p.h + 24 > q.y);
+    for (let n = 0, q; n < 40 && (q = hit()); n++) x = q.x + q.w + 40;
     p.x = x; p.y = y;
   }
   return p;
@@ -1527,6 +1536,7 @@ function bindCanvasInteractions(canvas) {
       applyCanvasTransform(); drawLinks(); saveCanvas();
       return;
     }
+    e.stopPropagation(); // a terminal under the pointer must not scroll as well
     const r = canvas.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
     const k = Math.min(2.5, Math.max(0.2, orchZoom * Math.exp(-e.deltaY * 0.002)));
     orchPanX = Math.round(sx - (sx - orchPanX) * (k / orchZoom));
@@ -1534,7 +1544,7 @@ function bindCanvasInteractions(canvas) {
     orchZoom = Math.round(k * 1000) / 1000;
     applyCanvasTransform();
     saveCanvas();
-  }, { passive: false });
+  }, { passive: false, capture: true }); // capture: xterm's scroller stops the wheel before it bubbles
   // Fleet chats and vault notes are dragged in from the left rail (HTML drag and drop).
   canvas.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes(PANE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; canvas.classList.add("drop"); } });
   canvas.addEventListener("dragleave", (e) => { if (!canvas.contains(e.relatedTarget)) canvas.classList.remove("drop"); });

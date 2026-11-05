@@ -749,7 +749,6 @@ async function handle(req: Request, port: number) {
   // xterm.js (MIT) for the canvas terminals, from node_modules.
   const XTERM: Record<string, [string, string]> = {
     "/vendor/xterm.mjs": ["@xterm/xterm/lib/xterm.mjs", "text/javascript"], "/vendor/xterm.css": ["@xterm/xterm/css/xterm.css", "text/css"],
-    "/vendor/addon-fit.mjs": ["@xterm/addon-fit/lib/addon-fit.mjs", "text/javascript"],
   };
   if (XTERM[p]) return new Response(Bun.file(`${import.meta.dir}/node_modules/${XTERM[p][0]}`), { headers: { "content-type": `${XTERM[p][1]}; charset=utf-8`, "cache-control": "max-age=86400" } });
   if (p.startsWith("/avatar/")) { const f = /^[\w-]+$/.test(p.slice(8)) ? avatarPath(p.slice(8)) : null; return f ? new Response(Bun.file(f), { headers: { "cache-control": "max-age=31536000" } }) : new Response("404", { status: 404 }); }

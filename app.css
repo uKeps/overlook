@@ -1933,16 +1933,16 @@ body.canvas-full .orch-work { gap: 0; }
    No border either: a border's width follows the canvas zoom (--bw), so the terminal's box changed size on every zoom
    step and the shell redrew its prompt each time. The ring and the shadow are box-shadows: they never take room. */
 .orch-pane[data-kind="terminal"] {
-  --ring: rgba(255, 255, 255, .07);
+  --ring: transparent; /* Ghostty has no outline; only the card with the keyboard gets a faint one */
   min-width: 320px; min-height: 160px; border: 0; border-radius: 18px; background: transparent;
   backdrop-filter: blur(20px) saturate(1.17);
   box-shadow: 0 0 0 calc(2 * var(--bw, 1px)) var(--ring), 0 0 20px rgba(0, 0, 0, .6);
 }
-.orch-pane[data-kind="terminal"].typing { --ring: color-mix(in srgb, var(--ink) 40%, transparent); } /* has the keyboard */
+.orch-pane[data-kind="terminal"].typing { --ring: rgba(255, 255, 255, .12); } /* has the keyboard */
 .orch-plane.free .orch-pane[data-kind="terminal"].selected { --ring: var(--accent); }
 .orch-pane[data-kind="terminal"] > .orch-head { display: none; }
-/* the window surface: the theme background at 95%, text included (Hyprland's window opacity) */
-.orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: var(--win-bg); opacity: .95; }
+/* the window surface: the theme background at 95% over the blur; the text stays at full strength */
+.orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
 .orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 18px; }
 .orch-pane[data-kind="terminal"]:has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 18px 18px 0 0; }
 .orch-pane[data-kind="terminal"] > .orch-talk { border-radius: 0 0 18px 18px; border-top-color: rgba(255, 255, 255, .06); }
