@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "1.1.0",
-    "ascii.rest": "0.4.0"
+    "ascii.rest": "0.4.0",
+    "ghostty-web": "0.4.0"
   }
 }

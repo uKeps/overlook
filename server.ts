@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, createTermSession, listTermSessions, getTermSession, closeTermSession, interruptTermSession, runInTermSession } from "./tasks";
+import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted } from "./tasks";
 
 const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
 let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
@@ -403,7 +403,7 @@ async function services() {
 
 // Agents you can put to work from the Agents page, from agents.json (or the built-in CLIs).
 const runners = () => loadAgents(import.meta.dir).filter((a) => a.run || a.api)
-  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a), avatar: avatarVersion(a.id) }));
+  .map((a) => ({ id: a.id, name: a.name, kind: a.run ? "cli" : a.api, ready: ready(a), models: models(a), efforts: efforts(a), effort: defaultEffort(a), process: a.process, open: openers(a), tui: tuiOk(a), avatar: avatarVersion(a.id) }));
 
 // Agent avatars: a picture per agent in avatars/<id>.<ext> (personal, not in git), sent from Settings as a data URL so the
 // JSON-only rule for POSTs still holds. Squared to 256 px with ImageMagick when it's there; otherwise kept as sent.
@@ -438,17 +438,66 @@ async function saveAvatar(b: any) {
   }
   return { ok: true };
 }
-// "Open in…" for a task (its session, in the vault) or a live/background session (its own folder). Nothing comes from the client but ids.
-async function open(b: any) {
+// The agent, folder and session behind a task (its session, in the vault) or a live/background session (its own folder).
+// Nothing comes from the client but ids.
+async function sessionOf(b: any) {
   const all = loadAgents(import.meta.dir);
   if (typeof b.task === "string") {
     const t = getTask(b.task), a = t && all.find((x) => x.id === t.agent);
-    return a ? openIn(a, String(b.via), t!.cwd || ROOT, t!.session) : "task not found";
+    return a ? { a, cwd: t!.cwd || ROOT, session: t!.session ?? "" } : "task not found";
   }
   const s = typeof b.key === "string" ? await agent(b.key) : null, a = s && all.find((x) => x.process === s.name);
   if (!s || !a) return "session not found";
-  const cwd = s.cwd.replace(/^~/, homedir());
-  return openIn(a, String(b.via), existsSync(cwd) ? cwd : ROOT, b.key.slice(2));
+  return { a, cwd: dirOr(s.cwd, ROOT), session: b.key.slice(2) };
+}
+async function open(b: any) {
+  const s = await sessionOf(b);
+  return typeof s === "string" ? s : openIn(s.a, String(b.via), s.cwd, s.session);
+}
+// What a canvas terminal pane runs: an agent session's TUI (task/key), a new agent TUI (agent [+ prompt]), or a shell.
+async function ptySpec(q: URLSearchParams) {
+  if (q.has("task") || q.has("key")) {
+    const s = await sessionOf({ task: q.get("task") ?? undefined, key: q.get("key") ?? undefined });
+    if (typeof s === "string") return s;
+    if (!s.session) return "this task has no session to resume";
+    if (sessionBusy(s.session)) return "this session is running (task or another pane)";
+    const argv = agentArgv(s.a, s.session);
+    return typeof argv === "string" ? argv : { argv, cwd: s.cwd, title: s.a.name, session: s.session };
+  }
+  if (q.has("agent")) {
+    const a = loadAgents(import.meta.dir).find((x) => x.id === q.get("agent"));
+    if (!a || !tuiOk(a)) return "unknown agent or no interactive mode";
+    // The pane picks the session id up front (claude: --session-id), so once the PTY exits or Overlook restarts,
+    // reopening the pane resumes that conversation instead of re-running the first prompt.
+    const prompt = q.get("prompt")?.trim() ?? "", sid = tuiResumes(a) ? q.get("session") ?? "" : "";
+    if (sid && !/^[0-9a-f][0-9a-f-]{7,63}$/i.test(sid)) return "bad session id";
+    if (sessionBusy(sid)) return "this session is running (task or another pane)";
+    // Model and effort only from the agent's own lists (they land in argv).
+    const ms = models(a), model = ms.find((m) => m.id === q.get("model"))?.id ?? "";
+    const effort = (ms.find((m) => m.id === model)?.efforts ?? efforts(a)).includes(q.get("effort") ?? "") ? q.get("effort")! : "";
+    const argv = sid && !q.has("fresh") && sessionStarted(sid) ? agentArgv(a, sid) : tuiArgv(a, sid, q.has("fresh") ? prompt : "", model, effort);
+    return typeof argv === "string" ? argv : { argv, cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid };
+  }
+  const sh = shellPath(q.get("shell") ?? undefined);
+  return { argv: [sh], cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: basename(sh) };
+}
+// The user's own Ghostty colors and font (`ghostty +show-config`), so embedded terminals look like their Ghostty.
+let ghosttyLook: any;
+async function ghosttyTheme() {
+  if (ghosttyLook) return ghosttyLook;
+  const g = Bun.which("ghostty");
+  const out = g ? await new Response(Bun.spawn([g, "+show-config"], { stdout: "pipe", stderr: "ignore" }).stdout).text().catch(() => "") : "";
+  const cfg = new Map<string, string>(), pal: string[] = [];
+  for (const l of out.split("\n")) {
+    const m = l.match(/^([\w-]+) = (.*)$/);
+    if (!m) continue;
+    if (m[1] === "palette") { const [i, c] = m[2].split("="); if (+i < 16) pal[+i] = c; } else if (!cfg.has(m[1])) cfg.set(m[1], m[2]);
+  }
+  const names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+  const theme: Record<string, string> = Object.fromEntries(pal.map((c, i) => [i < 8 ? names[i] : `bright${names[i - 8][0].toUpperCase()}${names[i - 8].slice(1)}`, c]).filter(([, c]) => c));
+  for (const [k, v] of [["background", "background"], ["foreground", "foreground"], ["cursor-color", "cursor"], ["cursor-text", "cursorAccent"], ["selection-background", "selectionBackground"], ["selection-foreground", "selectionForeground"]])
+    if (cfg.get(k)) theme[v] = cfg.get(k)!;
+  return (ghosttyLook = { theme, fontFamily: cfg.get("font-family") || "", fontSize: Number(cfg.get("font-size")) || 0, cursorStyle: cfg.get("cursor-style") || "" });
 }
 const str = (x: unknown) => (typeof x === "string" ? x : undefined);
 
@@ -569,8 +618,8 @@ async function handle(req: Request, port: number) {
   const url = new URL(req.url);
   const p = url.pathname;
   if (req.method === "POST") {
-    // Against other sites posting to localhost: JSON forces a preflight (no CORS here) and Host blocks DNS rebinding.
-    if (req.headers.get("content-type") !== "application/json" || !hostOk(req.headers.get("host") ?? "", port))
+    // Against other sites posting to localhost: JSON forces a preflight (no CORS here).
+    if (req.headers.get("content-type") !== "application/json")
       return new Response("forbidden", { status: 403 });
     let b: any;
     try { b = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
@@ -624,24 +673,7 @@ async function handle(req: Request, port: number) {
       const r = spawnTerminal(str(b.terminal), str(b.shell), str(b.cwd) || ROOT);
       return typeof r === "string" ? new Response(r, { status: 400 }) : json(r);
     }
-    if (p === "/api/terminal/session/create") {
-      const s = createTermSession(str(b.shell), str(b.cwd), str(b.id));
-      return json({ ok: true, session: s });
-    }
-    if (p === "/api/terminal/session/run") {
-      if (typeof b.id !== "string" || !b.id.trim()) return new Response("missing id", { status: 400 });
-      if (typeof b.cmd !== "string") return new Response("missing cmd", { status: 400 });
-      const r = await runInTermSession(b.id.trim(), b.cmd);
-      return json(r);
-    }
-    if (p === "/api/terminal/session/kill") {
-      if (typeof b.id !== "string") return new Response("missing id", { status: 400 });
-      return json({ ok: interruptTermSession(b.id) });
-    }
-    if (p === "/api/terminal/session/close") {
-      if (typeof b.id !== "string") return new Response("missing id", { status: 400 });
-      return json({ ok: closeTermSession(b.id) });
-    }
+    if (p === "/api/pty/close") return typeof b.id === "string" ? json({ ok: closePty(b.id) }) : new Response("missing id", { status: 400 });
     if (p === "/api/calendar" || p === "/api/calendar/delete") {
       const e = calItem(b);
       if (typeof e === "string") return new Response(e, { status: 400 });
@@ -660,7 +692,8 @@ async function handle(req: Request, port: number) {
   if (p === "/api/pinterest") return json(pinterestState());
   if (p === "/api/images") return json(imagesState());
   if (p === "/api/settings") return json(settings());
-  if (p === "/api/terminal/sessions") return json({ sessions: listTermSessions() });
+  if (p === "/api/pty") return json({ sessions: listPtys() });
+  if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {
     const terminals = detectTerminals();
     const shells = detectShells();
@@ -681,65 +714,79 @@ async function handle(req: Request, port: number) {
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/dirs") { const d = listDirs(ROOT, url.searchParams.get("path") ?? undefined, url.searchParams.get("hidden") === "1"); return d ? json(d) : new Response("invalid cwd", { status: 400 }); }
   if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
-  if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`));
+  // no-cache: the app window revalidates on every load, so a restart's new UI shows up without a hard refresh.
+  if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`), { headers: { "cache-control": "no-cache" } });
   // ascii.rest (MIT), served from node_modules so the art loads from this machine, not from ascii.rest.
   if (p.startsWith("/vendor/ascii/")) {
     const rel = p.slice(14), f = Bun.file(`${import.meta.dir}/node_modules/ascii.rest/dist/${rel}`);
     return /^[\w-]+(\/[\w-]+)?\.js$/.test(rel) && (await f.exists())
       ? new Response(f, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 });
   }
+  // ghostty-web (MIT): Ghostty's terminal core compiled to WASM (inlined in the module), from node_modules.
+  if (p === "/vendor/ghostty-web.js") return new Response(Bun.file(`${import.meta.dir}/node_modules/ghostty-web/dist/ghostty-web.js`), { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "max-age=86400" } });
   if (p.startsWith("/avatar/")) { const f = /^[\w-]+$/.test(p.slice(8)) ? avatarPath(p.slice(8)) : null; return f ? new Response(Bun.file(f), { headers: { "cache-control": "max-age=31536000" } }) : new Response("404", { status: 404 }); }
   if (p.startsWith("/pin/")) { const f = await imageFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
   if (p === "/auth/pinterest") { const u = authorizeUrl(); return u ? Response.redirect(u, 302) : page("Not configured", "Set PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET in Overlook's .env and restart the server."); }
   if (p === "/auth/pinterest/callback") { const error = await authorizeCallback(url); return page(error ? "Not connected" : "Pinterest connected", error || `${pinterestState().total} images in the cache.`); }
-  if (p === "/") return new Response(Bun.file(`${import.meta.dir}/index.html`));
+  if (p === "/") return new Response(Bun.file(`${import.meta.dir}/index.html`), { headers: { "cache-control": "no-cache" } });
   return new Response("404", { status: 404 });
 }
 
+// /ws/pty runs commands on this machine: on top of the check in fetch, it needs an Origin, and that Origin must be
+// this very host (a missing Origin passes the general check, e.g. curl; here it doesn't).
+const sameOrigin = (req: Request) => {
+  const host = req.headers.get("host") ?? "", origin = req.headers.get("origin") ?? "";
+  return hostOk(host, PORT) && /^https?:\/\//.test(origin) && origin.replace(/^https?:\/\//, "") === host;
+};
+const dim = (v: string | null, d: number) => Math.min(500, Math.max(2, Number(v) || d));
 Bun.serve({
   hostname: "127.0.0.1", port: PORT,
-  fetch(req, server) {
+  async fetch(req, server) {
     // Host blocks DNS rebinding; Origin blocks other pages, which browsers let send GETs and open WebSockets to localhost.
     const origin = req.headers.get("origin");
     if (!hostOk(req.headers.get("host") ?? "", PORT) || (origin && !hostOk(origin.replace(/^https?:\/\//, ""), PORT)))
       return new Response("forbidden", { status: 403 });
     const url = new URL(req.url);
-    if (url.pathname === "/ws/terminal") {
-      const id = url.searchParams.get("id");
-      if (id && server.upgrade(req, { data: { id, shell: url.searchParams.get("shell"), cwd: url.searchParams.get("cwd") } })) {
-        return undefined;
-      }
+    if (url.pathname === "/ws/pty") {
+      const q = url.searchParams, id = q.get("id") ?? "";
+      if (!sameOrigin(req)) return new Response("forbidden", { status: 403 });
+      if (!/^[\w-]{1,80}$/.test(id)) return new Response("bad id", { status: 400 });
+      const spec = getPty(id)?.code === undefined && getPty(id) ? null : await ptySpec(q);
+      if (typeof spec === "string") return new Response(spec, { status: 400 });
+      if (server.upgrade(req, { data: { id, spec, cols: dim(q.get("cols"), 80), rows: dim(q.get("rows"), 24) } })) return undefined;
+      return new Response("upgrade failed", { status: 400 });
     }
     return handle(req, PORT);
   },
   websocket: {
+    // A TUI flooding a slow socket (the phone over the tailnet) closes it instead of dropping frames; the pane reconnects and replays.
+    backpressureLimit: 2 << 20, closeOnBackpressureLimit: true,
     open(ws: any) {
-      const id = ws.data?.id;
-      if (!id) return;
-      let s = getTermSession(id);
-      if (!s) s = createTermSession(ws.data?.shell, ws.data?.cwd, id);
-      ws.send(JSON.stringify({ type: "init", session: { id: s.id, shell: s.shell, cwd: s.cwd } }));
+      const { id, spec, cols, rows } = ws.data;
+      // spec is null when the PTY was alive at upgrade: attach to it whatever its state since (exited ones show their end).
+      const t = spec === null ? getPty(id) : openPty(id, spec.argv, spec.cwd, cols, rows, spec.title, spec.session);
+      if (!t) return ws.close(4000, "gone");
+      // The replay stays under the socket's 2 MiB backpressure limit even when every character is 3 UTF-8 bytes (TUI borders).
+      if (t.tail) ws.send(t.tail.length > 400_000 ? "\x1b[0m" + t.tail.slice(-400_000) : t.tail);
+      if (t.code !== undefined) return ws.close(4001, "exited"); // nothing left to drive: the pane offers to start it again
+      t.ends.add((ws.data.end = () => ws.close(4001, "exited")));
+      ws.data.sub = (d: string) => { try { ws.send(d); } catch {} };
+      t.subs.add(ws.data.sub);
+      if (getPty(id) === t && spec === null) t.proc.terminal?.resize(cols, rows);
     },
-    async message(ws: any, message: string | Buffer) {
-      try {
-        const msg = JSON.parse(String(message));
-        const id = ws.data?.id;
-        if (!id) return;
-        if (msg.type === "run" && typeof msg.cmd === "string") {
-          const r = await runInTermSession(id, msg.cmd, (chunk) => {
-            try { ws.send(JSON.stringify({ type: "chunk", data: chunk })); } catch {}
-          });
-          ws.send(JSON.stringify({ type: "exit", code: r.code, output: r.output, newCwd: r.newCwd }));
-        } else if (msg.type === "kill") {
-          interruptTermSession(id);
-          ws.send(JSON.stringify({ type: "killed" }));
-        }
-      } catch (e: any) {
-        ws.send(JSON.stringify({ type: "error", error: e.message }));
-      }
+    message(ws: any, m: string | Buffer) {
+      const t = getPty(ws.data.id), s = String(m);
+      if (!t || t.code !== undefined) return;
+      // "\0" + JSON is a resize from the pane; everything else is keystrokes.
+      if (s.startsWith("\0")) { try { const r = JSON.parse(s.slice(1)); t.proc.terminal?.resize(dim(r.cols, 80), dim(r.rows, 24)); } catch {} }
+      else t.proc.terminal?.write(s);
     },
-    close() {}
-  }
+    close(ws: any) {
+      const t = getPty(ws.data.id);
+      t?.subs.delete(ws.data.sub); t?.ends.delete(ws.data.end);
+      if (t && t.code !== undefined && !t.subs.size) closePty(t.id); // exited and unwatched
+    },
+  },
 });
 console.log(`Overlook on http://127.0.0.1:${PORT}`);
 

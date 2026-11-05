@@ -9,9 +9,11 @@ import { homedir, userInfo } from "node:os";
 // A model is an id or { id, label, efforts } when it has a display name or its own effort levels;
 // a CLI agent receives the choice through {model} and {effort} in `run`, and {session} gets a fresh UUID per task.
 // open: "Open in…" commands for a session, with {session}, {cwd}, and {terminal} (the user's terminal) as the first token.
+// tui: the interactive command a canvas pane runs for a new session ({prompt}/{session} drop with their flag when empty).
+// With {session} in it, the pane picks the id and later resumes it through the "{terminal}" opener.
 export type Agent = {
   id: string; name: string; process?: string; run?: string[]; api?: "anthropic" | "openai"; url?: string; key?: string;
-  model?: string; models?: (string | Model)[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>;
+  model?: string; models?: (string | Model)[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>; tui?: string[];
 };
 type Model = { id: string; label?: string; efforts?: string[] };
 export type QuotaInfo = { exhausted: boolean; resetsIn?: string; message: string };
@@ -23,10 +25,10 @@ const DEFAULTS: Agent[] = [
   { id: "claude", name: "Claude Code", process: "claude", efforts: EFFORTS, effort: "high",
     models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }, { id: "haiku", label: "Haiku" }],
     run: ["claude", "-p", "{prompt}", "--session-id", "{session}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
-    open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] } },
+    open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] }, tui: ["claude", "--model", "{model}", "--effort", "{effort}", "--session-id", "{session}", "{prompt}"] },
   { id: "agy", name: "Antigravity", process: "agy", efforts: EFFORTS, effort: "high",
     run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "accept-edits", "--output-format", "stream-json", "--print-timeout", "10m"],
-    open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] } },
+    open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] }, tui: ["agy", "-i", "{prompt}"] },
   { id: "codex", name: "Codex", process: "codex", run: ["codex", "exec", "{prompt}"] },
   { id: "gemini", name: "Gemini", process: "gemini", run: ["gemini", "-p", "{prompt}"] },
 ];
@@ -52,6 +54,10 @@ export const defaultEffort = (a: Agent) => a.effort ?? (a.api === "anthropic" ? 
 export const ready = (a: Agent) => (a.run ? !!bin(a.run[0]) : a.api === "anthropic" ? !!a.key && keyOk(a) : a.api === "openai" ? models(a).length > 0 && keyOk(a) : false);
 
 const tasks = new Map<string, Task>();
+// Keeps the last 50: the oldest *finished* ones go first; a running task (a routine, a long job) is never dropped.
+function evict() {
+  for (const [id, t] of tasks) { if (tasks.size <= 50) break; if (t.end) tasks.delete(id); }
+}
 const now = () => new Date().toISOString();
 const clip = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "…" : s);
 const MESSAGE = 20_000; // a whole message reads in full; the cap only guards against a runaway one
@@ -65,8 +71,8 @@ export function saveTasks(dir: string = tasksDir) {
   const file = tasksFile(dir);
   try {
     mkdirSync(dirname(file), { recursive: true });
-    while (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
-    const list = [...tasks.values()].slice(-50).map(({ stop, ...t }) => t);
+    evict();
+    const list = [...tasks.values()].map(({ stop, ...t }) => t);
     writeFileSync(file, JSON.stringify(list, null, 1));
   } catch {}
 }
@@ -113,7 +119,9 @@ export function deleteTask(id: string, dir: string = tasksDir): boolean {
 export const routineRunning = (name: string) => [...tasks.values()].some((t) => t.routine === name && !t.end);
 
 export type RunOpts = { model?: string; effort?: string; routine?: string; cwd?: string; session?: string; role?: string };
-const SESSION_ID = /^[0-9a-f-]{8,64}$/i;
+const SESSION_ID = /^[0-9a-f][0-9a-f-]{7,63}$/i; // never a leading "-": it lands in argv
+// Text that lands in argv as a value or positional (prompts) must not start with "-", or the CLI reads it as a flag.
+export const notFlag = (s: string) => (s.startsWith("-") ? ` ${s}` : s);
 const SYS_DIRS = ["/etc", "/proc", "/sys", "/boot", "/dev", "/root", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/var"];
 const shortDir = (p: string) => { const h = homedir(); return p === h ? "~" : p.startsWith(h + sep) ? "~/" + p.slice(h.length + 1) : p; };
 export function validCwd(root: string, raw?: string) {
@@ -197,7 +205,7 @@ function checkQuota(task: Task, textOrErr: unknown) {
 
 function execTask(a: Agent, task: Task, prompt: string, resumed: boolean, dir: string = tasksDir) {
   log(task, { t: "you", txt: prompt });
-  task.end = undefined; task.ok = undefined; task.stop = undefined;
+  task.end = undefined; task.ok = undefined; task.stop = undefined; task.quota = undefined; // a follow-up starts clean
   const ctrl = new AbortController();
   const timer = setTimeout(() => { log(task, { t: "error", txt: "timed out after 30 min" }); task.stop?.(); }, TIMEOUT);
   const work = a.run ? cli(a, task.cwd, task, prompt, resumed, ctrl) : a.api === "anthropic" ? anthropic(a, task.cwd, task, prompt, ctrl.signal) : openai(a, task.cwd, task, prompt, ctrl.signal);
@@ -218,7 +226,7 @@ export function runTask(root: string, dir: string, agentId: string, prompt: stri
   const session = opts.session || (a.run?.some((x) => x.includes("{session}")) ? crypto.randomUUID() : undefined);
   const task: Task = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), agent: a.id, model, effort, session, cwd, role, prompt, routine: opts.routine, start: now(), events: [] };
   tasks.set(task.id, task);
-  if (tasks.size > 50) tasks.delete(tasks.keys().next().value!);
+  evict();
   saveTasks(dir);
   execTask(a, task, prompt, !!opts.session, dir);
   return task;
@@ -228,6 +236,7 @@ export function continueTask(root: string, dir: string, id: string, prompt: stri
   const task = tasks.get(id);
   if (!task) return "task not found";
   if (!task.end) return "task is still running";
+  if (sessionBusy(task.session)) return "this session is open in a terminal pane";
   const r = resolveRun(root, dir, task.agent, { model: task.model || undefined, effort: task.effort || undefined, cwd: task.cwd });
   if (typeof r === "string") return r;
   saveTasks(dir);
@@ -239,6 +248,7 @@ export function retryTask(root: string, dir: string, id: string, opts: { model?:
   const task = tasks.get(id);
   if (!task) return "task not found";
   if (!task.end) return "task is still running";
+  if (sessionBusy(task.session)) return "this session is open in a terminal pane";
   const a = loadAgents(dir).find((x) => x.id === task.agent);
   const targetModel = opts.model || task.model || undefined;
   let targetEffort = opts.effort;
@@ -258,8 +268,8 @@ export function retryTask(root: string, dir: string, id: string, opts: { model?:
 }
 
 // ---------------------------------------------------------------- CLI agents
+// Quota is read from errors and stderr only: an agent's own output mentioning "429" or "resets in" is not a quota hit.
 function onCliLine(task: Task, l: string) {
-  checkQuota(task, l);
   if (l.startsWith("{")) {
     try {
       const j = JSON.parse(l);
@@ -297,13 +307,15 @@ function onCliLine(task: Task, l: string) {
 }
 
 async function cli(a: Agent, cwd: string, task: Task, prompt: string, resumed: boolean, ctrl: AbortController) {
+  const first = task.events.length; // this run's events start here (a follow-up keeps the earlier turns)
   const [cmd, ...rest] = a.run!;
   const fullPrompt = task.role && !resumed ? `[Role: ${task.role}]\n\n${prompt}` : prompt;
   // An empty {model}/{effort} drops the token and the flag before it, so the CLI falls back to its own default.
   const args: string[] = [];
   for (const x of rest) {
     if (resumed && x === "--session-id") { args.push("--resume"); continue; }
-    const v = x.replaceAll("{prompt}", fullPrompt).replaceAll("{model}", task.model).replaceAll("{effort}", task.effort).replaceAll("{session}", task.session ?? "").replaceAll("{cwd}", cwd);
+    // Function replacers: a prompt with "$&" or "$$" is text, not a replacement pattern.
+    const v = x.replaceAll("{prompt}", () => notFlag(fullPrompt)).replaceAll("{model}", () => task.model).replaceAll("{effort}", () => task.effort).replaceAll("{session}", () => task.session ?? "").replaceAll("{cwd}", () => cwd);
     if (/\{(model|effort)\}/.test(x) && !(x.includes("{model}") ? task.model : task.effort)) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
     if (x.includes("{session}") && !task.session) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
     args.push(v);
@@ -319,6 +331,8 @@ async function cli(a: Agent, cwd: string, task: Task, prompt: string, resumed: b
   ]);
   const code = await p.exited;
   if (ctrl.signal.aborted) throw new Error("stopped");
+  // claude -p prints a quota hit on stdout and exits 1: plain output counts only when the run failed.
+  if (code !== 0 && !task.quota) for (const e of task.events.slice(Math.max(first, task.events.length - 5))) if (e.t === "text") checkQuota(task, e.txt);
   return code === 0 && !task.quota;
 }
 // ---------------------------------------------------------------- Scheduled tasks
@@ -507,150 +521,81 @@ export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: str
   }
 }
 
-export type TermSession = {
-  id: string;
-  shell: string;
-  cwd: string;
-  history: string[];
-  activeChild?: any;
-  createdAt: number;
-};
+// ---------------------------------------------------------------- Embedded terminals: real PTYs (Bun.Terminal)
+// Each canvas terminal pane is a real pseudo-terminal, so shells, vim and agent TUIs (claude, agy) run as in Ghostty.
+// A PTY outlives its WebSocket (page reload, pane re-render) and replays the tail of its output on reconnect.
+type Pty = { id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number };
+const ptys = new Map<string, Pty>();
+const TAIL = 512_000;
 
-const termSessions = new Map<string, TermSession>();
-
-export function createTermSession(shell?: string, cwd?: string, customId?: string): TermSession {
-  const id = customId || `term_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const shells = detectShells();
-  const defShell = process.env.DEFAULT_SHELL || (process.env.SHELL ? basename(process.env.SHELL) : "bash");
-  const chosenShell = shell && shells.find((s) => s.id === shell || s.path === shell)
-    ? (shells.find((s) => s.id === shell || s.path === shell)!.id)
-    : defShell;
-
-  let resolvedCwd = import.meta.dir;
-  if (cwd) {
-    try {
-      const p = resolve(cwd.replace(/^~/, homedir()));
-      if (existsSync(p) && statSync(p).isDirectory()) resolvedCwd = p;
-    } catch {}
+// A known shell (by id or path) or the user's default; a cwd that exists, or the fallback.
+export function shellPath(shell?: string) {
+  const shells = detectShells(), def = process.env.DEFAULT_SHELL || (process.env.SHELL ? basename(process.env.SHELL) : "bash");
+  const s = shells.find((x) => x.id === shell || x.path === shell) ?? shells.find((x) => x.id === def) ?? shells[0];
+  return s?.path ?? "/bin/sh";
+}
+export const dirOr = (cwd: string | undefined, fallback: string) => validCwd(fallback, cwd) ?? fallback;
+// An agent session's TUI: its "{terminal}" opener without the terminal (claude --resume <id>).
+export function agentArgv(a: Agent, session: string): string[] | string {
+  const cmd = Object.values(a.open ?? {}).find((c) => c[0] === "{terminal}" && c.some((x) => x.includes("{session}")));
+  return cmd ? withBin(a, cmd.slice(1).map((x) => x.replaceAll("{session}", session))) : `${a.name} cannot resume a session in a terminal`;
+}
+// A new TUI: `tui` (or the bare CLI) with the first prompt and the session id the pane picked.
+export function tuiArgv(a: Agent, session: string, prompt: string, model = "", effort = ""): string[] | string {
+  const args: string[] = [], vals: Record<string, string> = { prompt: notFlag(prompt), session, model, effort };
+  for (const x of a.tui ?? [a.run?.[0] ?? ""]) {
+    const used = [...x.matchAll(/\{(prompt|session|model|effort)\}/g)].map((m) => m[1]);
+    if (used.some((k) => !vals[k])) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
+    const v = x.replace(/\{(prompt|session|model|effort)\}/g, (_, k) => vals[k]);
+    args.push(v);
   }
+  return withBin(a, args);
+}
+const withBin = (a: Agent, [head, ...rest]: string[]) => { const b = head && bin(head); return b ? [b, ...rest] : `${a.name} has no interactive command`; };
+export const tuiOk = (a: Agent) => !!a.run && (!!a.tui || Object.values(a.open ?? {}).some((c) => c[0] === "{terminal}"));
+export const tuiResumes = (a: Agent) => !!a.tui?.some((x) => x.includes("{session}"));
+// Claude Code writes a session's transcript once it has a turn: a pane opened and closed before the first message has
+// nothing to resume, so it starts again with the same id. ponytail: claude's layout; other agents with {session} resume blindly.
+export const sessionStarted = (sid: string) => { try { return [...new Bun.Glob(`*/${sid}.jsonl`).scanSync(`${homedir()}/.claude/projects`)].length > 0; } catch { return false; } };
 
-  const s: TermSession = {
-    id,
-    shell: chosenShell,
-    cwd: resolvedCwd,
-    history: [],
-    createdAt: Date.now(),
+export function openPty(id: string, argv: string[], cwd: string, cols: number, rows: number, title: string, session = ""): Pty {
+  const old = ptys.get(id);
+  if (old && old.code === undefined) return old;
+  const dec = new TextDecoder();
+  const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set() } as unknown as Pty;
+  const emit = (s: string) => {
+    t.tail += s;
+    // Trimmed in batches (not a 512KB copy per chunk), at a line start, with attributes reset for the replay.
+    // ponytail: a line start can still sit inside a TUI's escape sequence (one garbled cell at worst).
+    if (t.tail.length > 2 * TAIL) { const cut = t.tail.indexOf("\n", t.tail.length - TAIL); t.tail = "\x1b[0m" + t.tail.slice(cut < 0 ? -TAIL : cut + 1); }
+    for (const f of t.subs) f(s);
   };
-  termSessions.set(id, s);
-  return s;
+  t.proc = Bun.spawn(argv, {
+    // Without Claude Code's own markers: Overlook started from inside a claude session would make the TUI a "child" (no transcript).
+    cwd, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", CLAUDECODE: undefined, CLAUDE_CODE_CHILD_SESSION: undefined, CLAUDE_CODE_ENTRYPOINT: undefined },
+    terminal: { cols, rows, data: (_, d) => emit(dec.decode(d, { stream: true })) },
+  });
+  t.proc.exited.then((code) => {
+    t.code = code;
+    emit(`\r\n\x1b[2m[process exited with code ${code}]\x1b[0m\r\n`);
+    for (const end of t.ends) end(); // the panes' sockets close, so they offer to start it again
+    if (!t.subs.size && ptys.get(id) === t) ptys.delete(id); // nobody watching: reopening the pane respawns it anyway
+  });
+  ptys.set(id, t);
+  return t;
 }
-
-export function listTermSessions() {
-  return [...termSessions.values()].map((s) => ({
-    id: s.id,
-    shell: s.shell,
-    cwd: s.cwd,
-    createdAt: s.createdAt,
-    hasActiveChild: !!s.activeChild,
-    historyCount: s.history.length,
-  }));
+export const getPty = (id: string) => ptys.get(id);
+// One process per agent session: two drivers (a headless follow-up, a TUI pane, an external terminal) fork its transcript.
+export const sessionBusy = (s?: string) => !!s && ([...tasks.values()].some((t) => !t.end && t.session === s) || [...ptys.values()].some((p) => p.code === undefined && p.session === s));
+export function closePty(id: string) {
+  const t = ptys.get(id);
+  if (!t) return false;
+  // Interactive shells ignore SIGTERM: closing the PTY sends SIGHUP like closing a terminal window; KILL if that is ignored too.
+  try { t.proc.terminal?.close(); t.proc.kill("SIGHUP"); } catch {}
+  setTimeout(() => { if (t.code === undefined) try { t.proc.kill(9); } catch {} }, 3000);
+  return ptys.delete(id);
 }
-
-export function getTermSession(id: string) {
-  return termSessions.get(id);
-}
-
-export function closeTermSession(id: string) {
-  const s = termSessions.get(id);
-  if (!s) return false;
-  if (s.activeChild) {
-    try { s.activeChild.kill(); } catch {}
-  }
-  return termSessions.delete(id);
-}
-
-export function interruptTermSession(id: string) {
-  const s = termSessions.get(id);
-  if (!s || !s.activeChild) return false;
-  try {
-    s.activeChild.kill(2); // SIGINT
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function runInTermSession(id: string, cmd: string, onChunk?: (chunk: string) => void): Promise<{ ok: boolean; output: string; code: number; newCwd: string }> {
-  let s = termSessions.get(id);
-  if (!s) {
-    s = createTermSession(undefined, undefined, id);
-  }
-  const trimmed = cmd.trim();
-  if (!trimmed) {
-    return { ok: true, output: "", code: 0, newCwd: s.cwd };
-  }
-  s.history.push(cmd);
-  if (s.history.length > 500) s.history.shift();
-
-  if (trimmed === "clear") {
-    return { ok: true, output: "\x1b[2J\x1b[H", code: 0, newCwd: s.cwd };
-  }
-
-  const shellBin = bin(s.shell) ?? (s.shell.startsWith("/") ? s.shell : "/bin/bash");
-  const script = `${cmd}\n__OVERLOOK_CODE=$?\necho "\n__OVERLOOK_CWD__=$(pwd)"\nexit $__OVERLOOK_CODE`;
-
-  try {
-    const p = Bun.spawn([shellBin, "-c", script], {
-      cwd: s.cwd,
-      env: { ...process.env, TERM: "xterm-256color", PAGER: "cat" },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    s.activeChild = p;
-
-    let fullOut = "", fullErr = "";
-    const dec = new TextDecoder();
-
-    const readStream = async (stream: ReadableStream<Uint8Array>, isErr = false) => {
-      for await (const chunk of stream) {
-        const text = dec.decode(chunk, { stream: true });
-        if (isErr) fullErr += text;
-        else fullOut += text;
-        if (onChunk && !text.includes("__OVERLOOK_CWD__=")) {
-          onChunk(text);
-        }
-      }
-    };
-
-    await Promise.all([readStream(p.stdout), readStream(p.stderr, true)]);
-    const code = await p.exited;
-    s.activeChild = undefined;
-
-    const cwdMatch = fullOut.match(/\n__OVERLOOK_CWD__=(.+)\n?$/);
-    const cleanOut = cwdMatch ? fullOut.slice(0, cwdMatch.index) : fullOut;
-    if (cwdMatch && cwdMatch[1].trim()) {
-      const nextDir = cwdMatch[1].trim();
-      if (existsSync(nextDir)) s.cwd = nextDir;
-    }
-
-    const combinedOutput = cleanOut + (fullErr ? (cleanOut && !cleanOut.endsWith("\n") ? "\n" : "") + fullErr : "");
-    return {
-      ok: code === 0,
-      output: combinedOutput,
-      code,
-      newCwd: s.cwd,
-    };
-  } catch (err: any) {
-    s.activeChild = undefined;
-    return {
-      ok: false,
-      output: `Error executing command: ${err.message}`,
-      code: 1,
-      newCwd: s.cwd,
-    };
-  }
-}
-
+export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, running: t.code === undefined }));
 
 export const openers = (a: Agent) => Object.entries(a.open ?? {}).map(([label, cmd]) => ({ label, session: cmd.some((x) => x.includes("{session}")) }));
 // Launches detached; the caller has already validated session and cwd.
@@ -658,6 +603,7 @@ export function openIn(a: Agent, label: string, cwd: string, session = "") {
   const cmd = a.open?.[label];
   if (!cmd) return `${a.name} has no "${label}"`;
   if (cmd.some((x) => x.includes("{session}")) && !session) return "no session to open";
+  if (cmd.some((x) => x.includes("{session}")) && sessionBusy(session)) return "this session is running here (task or terminal pane): stop or close it first";
   const [head, ...rest] = cmd.map((x) => x.replaceAll("{session}", session).replaceAll("{cwd}", cwd));
   let args: string[];
   if (head === "{terminal}") {
