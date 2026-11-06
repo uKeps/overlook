@@ -523,9 +523,10 @@ const str = (x: unknown) => (typeof x === "string" ? x : undefined);
 async function voice(b: any, cmd: string) {
   const file = basename(str(b.name) || "memo.m4a"), title = `${L.memoTitle} - ${file.replace(/\.[^.]*$/, "").replace(/[\\/:*?"<>|#^[\]]/g, "")}`;
   try {
-    const p = Bun.spawn(["sh", "-c", cmd], { cwd: import.meta.dir, stdin: Buffer.from(b.audio, "base64"), stdout: "pipe", stderr: "pipe", timeout: 30 * 60_000 });
+    // CPU transcription runs at about real time (decision O3): 4 h covers a recorded class or meeting.
+    const p = Bun.spawn(["sh", "-c", cmd], { cwd: import.meta.dir, stdin: Buffer.from(b.audio, "base64"), stdout: "pipe", stderr: "pipe", timeout: 4 * 3600_000 });
     const [text, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-    if ((await p.exited) !== 0 || !text.trim()) throw new Error(clip(err.trim().split("\n").at(-1) || "empty transcript", 200));
+    if ((await p.exited) !== 0 || !text.trim()) throw new Error(p.signalCode ? `transcription stopped (${p.signalCode})` : clip(err.trim().split("\n").at(-1) || "empty transcript", 200));
     const path = `1 Inbox/${title}.md`; // the same memo shared twice lands on the same note
     await Bun.write(`${ROOT}/${path}`, L.memo(title, file, text.trim()));
     const t = runTask(ROOT, import.meta.dir, str(b.agent) || "agy", L.voice(path), { model: str(b.model), effort: str(b.effort) });
