@@ -10,10 +10,9 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
-const defaultVault = `${homedir()}/dev/obsidian-study-vault`;
-let ROOT = resolve(process.env.VAULT_DIR || (existsSync(defaultVault) ? defaultVault : `${import.meta.dir}/example-vault`));
+let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
 let cfgPort = PORT;
 // Machine name on Tailscale, read at startup: survives renaming the machine.
@@ -529,7 +528,7 @@ async function voice(b: any, cmd: string) {
     if ((await p.exited) !== 0 || !text.trim()) throw new Error(p.signalCode ? `transcription stopped (${p.signalCode})` : clip(err.trim().split("\n").at(-1) || "empty transcript", 200));
     const path = `1 Inbox/${title}.md`; // the same memo shared twice lands on the same note
     await Bun.write(`${ROOT}/${path}`, L.memo(title, file, text.trim()));
-    const t = runTask(ROOT, import.meta.dir, str(b.agent) || "agy", L.voice(path), { model: str(b.model), effort: str(b.effort) });
+    const t = runTask(ROOT, import.meta.dir, str(b.agent) || defaultAgent(import.meta.dir), L.voice(path), { model: str(b.model), effort: str(b.effort) });
     if (typeof t === "string") throw new Error(`${t} [[${title}]]`);
   } catch (e: any) { await capture(L.voiceFailed(file, String(e?.message ?? e))); }
 }
@@ -681,7 +680,7 @@ async function handle(req: Request, port: number) {
       const topic = typeof b.topic === "string" ? b.topic.trim() : "";
       if (!topic || topic.length > 2000) return new Response("topic must be 1 to 2000 characters", { status: 400 });
       const prompt = L.noteAgent(topic);
-      return started(runTask(ROOT, import.meta.dir, str(b.agent) || "agy", prompt, { model: str(b.model), effort: str(b.effort) }));
+      return started(runTask(ROOT, import.meta.dir, str(b.agent) || defaultAgent(import.meta.dir), prompt, { model: str(b.model), effort: str(b.effort) }));
     }
     if (p === "/api/voice") return !process.env.TRANSCRIBE ? new Response("set TRANSCRIBE in .env", { status: 400 }) : typeof b.audio === "string" && b.audio ? (voice(b, process.env.TRANSCRIBE), json({ ok: true })) : new Response("missing audio", { status: 400 });
     if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));

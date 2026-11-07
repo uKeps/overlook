@@ -180,7 +180,7 @@ exit is a failure and its last stderr line the reason), e.g. a small script that
 runs whisper on it. Nothing leaves the machine unless that command sends it.
 
 `POST /api/voice` with JSON `{"audio": "<base64>", "name": "Walk.m4a"}` (plus `agent`, `model`, `effort`;
-the agent defaults to `agy`) answers at once; the run shows up in Tasks. A failed transcription lands as a
+the agent defaults to the first one in `agents.json` that can run) answers at once; the run shows up in Tasks. A failed transcription lands as a
 capture in today's note; a failed agent leaves the note in the inbox. On iOS, a Shortcut shown in the share sheet
 does it in two actions: *Encode with Base64* the input (line breaks: none), then *Get Contents of URL* with method
 POST, header `Content-Type: application/json` and a JSON body with `audio` and `name`, at the Tailscale address
