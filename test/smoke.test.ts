@@ -79,6 +79,15 @@ test("search looks inside notes: every term, accents and case ignored", async ()
   rmSync(f);
 });
 
+test("routines show up only when the vault has an AGENTS.md to hold them", async () => {
+  expect((await (await fetch(`${BASE}/api`)).json()).routines).toBe(false);
+  expect((await post("/api/routine", { name: "morning", agent: "echo" })).status).toBe(409);
+  writeFileSync(`${VAULT}/AGENTS.md`, "# rules\n");
+  const on = (await (await fetch(`${BASE}/api`)).json()).routines;
+  rmSync(`${VAULT}/AGENTS.md`);
+  expect(on).toBe(true);
+});
+
 test("notes at the vault root show up; agent instructions and the calendar don't", async () => {
   writeFileSync(`${VAULT}/Start here.md`, "# Start here\n\n> [!abstract] In one sentence\n> Where to begin.\n");
   writeFileSync(`${VAULT}/AGENTS.md`, "# rules\n");

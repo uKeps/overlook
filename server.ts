@@ -183,7 +183,7 @@ async function state() {
   const dailies: string[] = [];
   for await (const p of new Bun.Glob(`${L.daily}/????-??-??.md`).scan(ROOT)) dailies.push(basename(p, ".md"));
   return {
-    vault: VAULT, today: today(), daily: L.daily, focus: await section(L.focus), captured: await section(L.captured), dailies,
+    vault: VAULT, routines: existsSync(`${ROOT}/AGENTS.md`), today: today(), daily: L.daily, focus: await section(L.focus), captured: await section(L.captured), dailies,
     notes: ns, missing: (await missing(ns)).slice(0, 10),
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
@@ -683,7 +683,7 @@ async function handle(req: Request, port: number) {
       return started(runTask(ROOT, import.meta.dir, str(b.agent) || defaultAgent(import.meta.dir), prompt, { model: str(b.model), effort: str(b.effort) }));
     }
     if (p === "/api/voice") return !process.env.TRANSCRIBE ? new Response("set TRANSCRIBE in .env", { status: 400 }) : typeof b.audio === "string" && b.audio ? (voice(b, process.env.TRANSCRIBE), json({ ok: true })) : new Response("missing audio", { status: 400 });
-    if (p === "/api/routine") return !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
+    if (p === "/api/routine") return !existsSync(`${ROOT}/AGENTS.md`) ? new Response("routines live in the vault's AGENTS.md, and there is none", { status: 409 }) : !ROUTINES[b.name] || routineRunning(b.name) ? new Response("already running or unknown", { status: 409 }) : started(runTask(ROOT, import.meta.dir, String(b.agent), ROUTINES[b.name], { model: str(b.model), effort: str(b.effort), routine: b.name }));
     if (p === "/api/open") { const r = await open(b); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     if (p === "/api/terminal/open") {
       const r = spawnTerminal(str(b.terminal), str(b.shell), str(b.cwd) || ROOT);
