@@ -27,7 +27,7 @@ Run it from the repo folder: Bun loads `.env` from the current directory.
 
 ## Your vault
 
-Overlook expects this layout (the demo vault follows it). Folders outside it are ignored, and missing
+By default Overlook expects this layout (the demo vault follows it; `vault.json`, below, changes it). Folders outside it are ignored, and missing
 ones just show up empty.
 
 | Path | Used for |
@@ -54,6 +54,25 @@ Vault in Portuguese? Set `VAULT_LANG=pt` in `.env` and Overlook reads `2 Diário
 `## Capturei`, `9 Agente/Achados.md` and the `tipo` / `revisar_em` / `intervalo` / `confianca` (`medido`, `deducao`) / `atualizado` keys instead.
 
 A one-line summary comes from a `> [!abstract]` callout right after the title.
+
+Laid out some other way? A `vault.json` next to `agents.json` renames what you need, on top of the `VAULT_LANG`
+preset (restart, or save Settings, after editing it):
+
+```json
+{
+  "folders": ["Inbox", "Notes", "Projects", "Journal"],
+  "inbox": "Inbox",
+  "daily": "Journal",
+  "focus": "Today",
+  "captured": "Captured",
+  "log": "Agent/Log.md",
+  "findings": "Agent/Findings.md",
+  "calendar": "Calendar.md",
+  "keys": { "type": "kind", "review": "review_on" }
+}
+```
+
+`folders` lists the top-level folders read as notes (without it: `1 …` to `8 …`, minus `7 …`). Every key is optional.
 
 ## Themes
 

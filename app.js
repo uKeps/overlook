@@ -86,7 +86,7 @@ function ago(ms) {
 }
 const duration = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : `${Math.floor(s / 86400)} d`);
 const due = () => D.notes.filter((n) => n.review_on && n.review_on <= D.today).sort((a, b) => a.review_on.localeCompare(b.review_on));
-const inbox = () => D.notes.filter((n) => n.folder.startsWith("1 "));
+const inbox = () => D.notes.filter((n) => n.folder === D.inbox);
 // Confidence (frontmatter confidence / confianca): how far to trust a note before deciding on it, and how old the check is.
 const CONF = { medido: "ok", measured: "ok", confirmed: "ok", deducao: "warn", inferred: "warn", hypothesis: "warn" };
 const confKind = (n) => CONF[fold(n.confidence || "")] ?? "";

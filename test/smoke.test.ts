@@ -88,6 +88,22 @@ test("routines show up only when the vault has an AGENTS.md to hold them", async
   expect(on).toBe(true);
 });
 
+test("vault.json lays out a vault its own way: note folders, inbox, daily note, sections", async () => {
+  mkdirSync(`${VAULT}/Notes`); mkdirSync(`${VAULT}/Journal`);
+  writeFileSync(`${VAULT}/Notes/Idea.md`, "# Idea\n");
+  writeFileSync(`${VAULT}/Journal/${TODAY}.md`, "## Today\n- [[Idea]]\n");
+  writeFileSync(`${ROOT}/vault.json`, JSON.stringify({ folders: ["Notes", "Journal"], inbox: "Notes", daily: "/Journal/", focus: "Today", keys: { type: "kind" } }));
+  await post("/api/settings", { vaultLang: "en" }); // reloads the layout
+  const d = await (await fetch(`${BASE}/api`)).json();
+  rmSync(`${ROOT}/vault.json`); rmSync(`${VAULT}/Notes`, { recursive: true }); rmSync(`${VAULT}/Journal`, { recursive: true });
+  await post("/api/settings", { vaultLang: "en" });
+  expect(d.notes.map((n: any) => n.folder).sort()).toEqual(["Journal", "Notes"]);
+  expect(d.inbox).toBe("Notes");
+  expect(d.daily).toBe("Journal");
+  expect(d.focus).toEqual(["[[Idea]]"]);
+  expect((await (await fetch(`${BASE}/api`)).json()).inbox).toBe("1 Inbox");
+});
+
 test("notes at the vault root show up; agent instructions and the calendar don't", async () => {
   writeFileSync(`${VAULT}/Start here.md`, "# Start here\n\n> [!abstract] In one sentence\n> Where to begin.\n");
   writeFileSync(`${VAULT}/AGENTS.md`, "# rules\n");
