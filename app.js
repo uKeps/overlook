@@ -298,7 +298,7 @@ function suggestions() {
   const s = [];
   const ln = (txt) => txt.match(/\[\[([^\]|]+)/)?.[1];
   // No focus picked for today: the first card runs the morning routine, the agent that picks it.
-  if (!D.focus?.length) {
+  if (!D.focus?.length && D.routines) {
     const run = (S?.tasks || []).find((t) => t.routine === "morning" && !t.end);
     s.push(run ? { cat: "Today", ic: "target", title: "The morning routine is picking today's focus", sub: "An agent is reading the vault and writing up to 3 things for today in the daily note.", meta: [["Started", ago(Date.parse(run.start))]], href: `#/t/${run.id}`, action: "See progress" }
       : { cat: "Today", ic: "target", title: "Pick today's focus", sub: "Runs the morning routine: an agent reads the vault and writes up to 3 things for today in the daily note.", meta: [["Takes", "about a minute"]], href: "#/", act: "start-day", action: "Start the day" });
@@ -1351,7 +1351,7 @@ function agents() {
         <div class="orch-routines">
           <select class="pick" id="run-model" aria-label="Model" hidden></select>
           <div class="seg" id="run-effort" role="radiogroup" aria-label="Effort" hidden></div>
-          ${Object.entries(ROUTINES).map(([k, [name, desc]]) => {
+          ${Object.entries(D?.routines ? ROUTINES : {}).map(([k, [name, desc]]) => {
             const r = S.tasks?.find((t) => t.routine === k && !t.end);
             return `<button type="button" class="fchip orch-rt" data-act="routine" data-k="${k}" title="${esc(desc)}" ${r ? "disabled" : ""}>${icon(k === "inbox" ? "inbox" : "target", 13)} ${esc(name)}</button>`;
           }).join("")}
@@ -2509,7 +2509,7 @@ Object.assign(IMG_ACTIONS, {
 
 // ---------------------------------------------------------------- Services
 function services() {
-  main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps and Pinterest. Listed in <code>services.json</code>.</p><div class="r"><a class="btn glass" href="#/images">Manage images</a></div></div>
+  main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps. Listed in <code>services.json</code>.</p><div class="r"><a class="btn glass" href="#/images">Manage images</a></div></div>
     <div class="cards">${S.services.map((s) => {
       if (s.internal === "pinterest") {
         const p = s.pinterest || {};
@@ -2703,7 +2703,7 @@ function cmdkOpen() {
 function cmdkFill(q) {
   const terms = fold(q).trim().split(/\s+/).filter((t) => t && !STOP.has(t)), has = (s) => terms.every((t) => fold(s).includes(t));
   const acts = [{ ic: "spark", title: "Capture a thought", sub: "Action", run: () => ACTIONS.capture() },
-    ...(D.focus?.length ? [] : [{ ic: "target", title: "Start the day", sub: "Action", run: () => ACTIONS["start-day"]() }]),
+    ...(D.focus?.length || !D.routines ? [] : [{ ic: "target", title: "Start the day", sub: "Action", run: () => ACTIONS["start-day"]() }]),
     ...GO.map(([h, title, ic]) => ({ ic, title, sub: "Page", href: `#/${h}` }))];
   const whole = terms.join(" "), rank = (n) => { const t = fold(n.title); return t === whole ? 0 : t.startsWith(whole) ? 1 : t.includes(terms[0] || "") ? 2 : 3; };
   const notes = terms.length ? D.notes.filter((n) => has(`${n.title} ${n.summary} ${n.tags.join(" ")}`))
