@@ -2313,7 +2313,7 @@ async function taskPage(id) {
   const paint = async () => {
     if (route().pg !== "t" || route().arg !== id) return clearInterval(taskTimer);
     const t = await api(`/api/task?id=${encodeURIComponent(id)}`).catch(() => null);
-    if (!t) { main.innerHTML = `<div class="ph"><h1>Task not found</h1><p>Tasks live in memory and are gone after a restart.</p></div><a class="btn glass" href="#/agents">Back to Agents</a>`; return clearInterval(taskTimer); }
+    if (!t) { main.innerHTML = `<div class="ph"><h1>Task not found</h1><p>Overlook keeps the last 50 tasks; older ones are gone.</p></div><a class="btn glass" href="#/agents">Back to Agents</a>`; return clearInterval(taskTimer); }
     const qInfo = detectQuota(t);
     const qSig = qInfo ? `${qInfo.exhausted}|${qInfo.model}|${qInfo.resetsIn}` : "";
     const signature = `${t.end}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${qSig}`;
