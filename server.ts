@@ -27,7 +27,7 @@ let VAULT = basename(ROOT);
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
   en: {
-    daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md",
+    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md",
     keys: { type: "type", review: "review_on", interval: "interval", confidence: "confidence", updated: "updated" }, types: {} as Record<string, string>,
     routines: { morning: "Follow the morning routine in the Routines section of AGENTS.md.", inbox: "Follow the inbox routine in the Routines section of AGENTS.md." },
     memoTitle: "Voice memo",
@@ -37,7 +37,7 @@ const LAYOUTS = {
     noteAgent: (topic: string) => `Create a note in the vault about: "${topic}". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.`,
   },
   pt: {
-    daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
+    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
     keys: { type: "tipo", review: "revisar_em", interval: "intervalo", confidence: "confianca", updated: "atualizado" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
     memoTitle: "Memo de voz",
@@ -48,7 +48,17 @@ const LAYOUTS = {
   },
 };
 let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
-let L = LAYOUTS[vaultLang];
+// vault.json (personal, next to agents.json) renames any of the strings above for a vault laid out its own way, and
+// "folders" lists the top-level folders read as notes (default: "1 …" to "8 …" minus "7 …", drawings).
+type Layout = (typeof LAYOUTS)["en"];
+function layout(): Layout {
+  const base = LAYOUTS[vaultLang], own = (() => { try { return JSON.parse(readFileSync(`${import.meta.dir}/vault.json`, "utf8")) ?? {}; } catch { return {}; } })(), l: any = { ...base };
+  for (const k of ["inbox", "daily", "focus", "captured", "log", "findings", "calendar"] as const) if (typeof own[k] === "string" && own[k].trim()) l[k] = own[k].trim().replace(/^\/+|\/+$/g, "");
+  if (Array.isArray(own.folders) && own.folders.every((f: unknown) => typeof f === "string")) l.folders = own.folders;
+  for (const k of ["keys", "types"] as const) if (own[k] && typeof own[k] === "object") l[k] = { ...base[k], ...own[k] };
+  return l;
+}
+let L = layout();
 let ROUTINES: Record<string, string> = L.routines;
 
 type Note = {
@@ -68,12 +78,13 @@ function frontmatter(txt: string) {
   return { fm, body: m ? txt.slice(m[0].length) : txt };
 }
 
-// User notes: folders 1-8, minus drawings (7) and templates.
+// User notes: the layout's folders (by default 1-8, minus drawings in 7), minus templates.
+const noteFolder = (f: string) => (L.folders ? L.folders.includes(f) : /^[1-8] /.test(f) && !f.startsWith("7 "));
 async function notes(withBody = false): Promise<Note[]> {
   const paths: string[] = [];
   for await (const path of new Bun.Glob("*/*.md").scan(ROOT)) {
     const folder = dirname(path);
-    if (!/^[1-8] /.test(folder) || folder.startsWith("7 ") || path.endsWith(".excalidraw.md") || basename(path).startsWith("_")) continue;
+    if (!noteFolder(folder) || path.endsWith(".excalidraw.md") || basename(path).startsWith("_")) continue;
     paths.push(path);
   }
   for await (const path of new Bun.Glob("*.md").scan(ROOT))
@@ -183,7 +194,7 @@ async function state() {
   const dailies: string[] = [];
   for await (const p of new Bun.Glob(`${L.daily}/????-??-??.md`).scan(ROOT)) dailies.push(basename(p, ".md"));
   return {
-    vault: VAULT, routines: existsSync(`${ROOT}/AGENTS.md`), today: today(), daily: L.daily, focus: await section(L.focus), captured: await section(L.captured), dailies,
+    vault: VAULT, routines: existsSync(`${ROOT}/AGENTS.md`), today: today(), inbox: L.inbox, daily: L.daily, focus: await section(L.focus), captured: await section(L.captured), dailies,
     notes: ns, missing: (await missing(ns)).slice(0, 10),
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
@@ -526,7 +537,7 @@ async function voice(b: any, cmd: string) {
     const p = Bun.spawn(["sh", "-c", cmd], { cwd: import.meta.dir, stdin: Buffer.from(b.audio, "base64"), stdout: "pipe", stderr: "pipe", timeout: 4 * 3600_000 });
     const [text, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
     if ((await p.exited) !== 0 || !text.trim()) throw new Error(p.signalCode ? `transcription stopped (${p.signalCode})` : clip(err.trim().split("\n").at(-1) || "empty transcript", 200));
-    const path = `1 Inbox/${title}.md`; // the same memo shared twice lands on the same note
+    const path = `${L.inbox}/${title}.md`; // the same memo shared twice lands on the same note
     await Bun.write(`${ROOT}/${path}`, L.memo(title, file, text.trim()));
     const t = runTask(ROOT, import.meta.dir, str(b.agent) || defaultAgent(import.meta.dir), L.voice(path), { model: str(b.model), effort: str(b.effort) });
     if (typeof t === "string") throw new Error(`${t} [[${title}]]`);
@@ -581,7 +592,7 @@ function saveSettings(b: any) {
   }
   const env: Record<string, string> = {};
   if (b.vaultDir !== undefined) { ROOT = nextRoot; VAULT = basename(ROOT); env.VAULT_DIR = ROOT; }
-  if (b.vaultLang !== undefined) { vaultLang = b.vaultLang; L = LAYOUTS[vaultLang]; ROUTINES = L.routines; env.VAULT_LANG = vaultLang; }
+  if (b.vaultLang !== undefined) { vaultLang = b.vaultLang; L = layout(); ROUTINES = L.routines; env.VAULT_LANG = vaultLang; }
   if (b.port !== undefined) { cfgPort = nextPort; env.PORT = String(cfgPort); }
   if (b.defaultTerminal !== undefined) { process.env.DEFAULT_TERMINAL = String(b.defaultTerminal); env.DEFAULT_TERMINAL = String(b.defaultTerminal); }
   if (b.fallbackTerminal !== undefined) { process.env.TERMINAL_FALLBACK = String(b.fallbackTerminal); env.TERMINAL_FALLBACK = String(b.fallbackTerminal); }
@@ -609,7 +620,7 @@ if (cmd === "today") {
   list("focus", e.focus ?? []);
   list("captured", e.captured ?? []);
   list("review", e.notes.filter((n) => n.review_on && n.review_on <= e.today).map((n) => `${n.review_on} ${n.path}`));
-  list("inbox", e.notes.filter((n) => n.folder.startsWith("1 ")).map((n) => n.path));
+  list("inbox", e.notes.filter((n) => n.folder === L.inbox).map((n) => n.path));
   list("gaps", e.missing.map((v) => `${v.n}× ${v.target}`));
   list("projects", e.notes.filter((n) => n.type === "project").map((n) => `${n.path} · ${n.summary}`));
   list("log", e.log.slice(0, 5));
