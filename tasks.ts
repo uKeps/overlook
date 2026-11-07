@@ -57,6 +57,8 @@ export const models = (a: Agent) => (a.models ?? (a.model ? [a.model] : a.api ==
   .map((m) => (typeof m === "string" ? { id: m, label: m, efforts: efforts(a) } : { id: m.id, label: m.label ?? m.id, efforts: m.efforts ?? efforts(a) }));
 export const defaultEffort = (a: Agent) => a.effort ?? (a.api === "anthropic" ? "high" : efforts(a)[0] ?? "");
 export const ready = (a: Agent) => (a.run ? !!bin(a.run[0]) : a.api === "anthropic" ? !!a.key && keyOk(a) : a.api === "openai" ? models(a).length > 0 && keyOk(a) : false);
+// The agent a request gets when it names none: the first one in agents.json that can run here.
+export const defaultAgent = (dir: string) => { const r = loadAgents(dir).filter((a) => a.run || a.api); return (r.find(ready) ?? r[0])?.id ?? ""; };
 
 const tasks = new Map<string, Task>();
 // Keeps the last 50: the oldest *finished* ones go first; a running task (a routine, a long job) is never dropped.

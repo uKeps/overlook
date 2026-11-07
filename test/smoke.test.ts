@@ -300,10 +300,10 @@ async function finished(id: string) {
 }
 const run = async (agent: string, prompt = "go", extra = {}) => (await (await post("/api/run", { agent, prompt, ...extra })).json()).id;
 
-test("a voice memo becomes an inbox note that an agent is told to file; a failure lands in today's note", async () => {
+test("a voice memo becomes an inbox note that the first ready agent is told to file; a failure lands in today's note", async () => {
   expect((await post("/api/voice", { name: "x.m4a" })).status).toBe(400);
   const b64 = (s: string) => Buffer.from(s).toString("base64");
-  expect((await post("/api/voice", { audio: b64("the phone"), name: "Walk: 3.m4a", agent: "echo" })).status).toBe(200);
+  expect((await post("/api/voice", { audio: b64("the phone"), name: "Walk: 3.m4a" })).status).toBe(200);
   await post("/api/voice", { audio: b64("bad"), name: "Bad.m4a", agent: "echo" });
   let t: any;
   for (let i = 0; i < 50 && !t; i++) { await Bun.sleep(100); t = (await (await fetch(`${BASE}/api/system`)).json()).tasks.find((x: any) => x.prompt.startsWith("Process 1 Inbox/Voice memo - Walk 3.md")); }
