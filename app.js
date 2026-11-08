@@ -62,9 +62,10 @@ function toast(msg) {
   t.classList.add("on");
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 3600);
 }
-// Opened over Tailscale (phone): embedded apps use the tailnet links, built from the current host.
+// Opened over Tailscale (phone): embedded apps use the tailnet links, built from the current host (public URLs work directly).
 const remote = location.hostname.endsWith(".ts.net");
-const address = (s) => (remote ? (s.tailnet ? `https://${location.hostname}:${s.tailnet}` : "") : s.proxy ? `http://127.0.0.1:${s.proxy}` : s.url);
+const isLocalUrl = (u) => /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(u || "");
+const address = (s) => (remote ? (s.tailnet ? `https://${location.hostname}:${s.tailnet}` : isLocalUrl(s.url) ? "" : s.url) : s.proxy ? `http://127.0.0.1:${s.proxy}` : s.url);
 // Card i gets image i: shifted by the date in random mode, the same every day when the user fixed their starred images.
 // A Home card the user gave an image keeps it (keyed by what the card is about, so it follows the card around).
 const cardKey = (s) => `${s.cat}|${s.title}`;
@@ -2508,6 +2509,22 @@ Object.assign(IMG_ACTIONS, {
 });
 
 // ---------------------------------------------------------------- Services
+function renderDeploy(s) {
+  const d = s.deploy;
+  if (!d || typeof d !== "object") return "";
+  const apps = Array.isArray(d.apps) ? d.apps : [];
+  const rows = apps.map((a) => {
+    const dot = a.status === "running" ? "" : a.status === "building" ? "run" : a.status === "idle" ? "idle" : "off";
+    const name = a.url ? `<a class="deploy-name" href="${esc(a.url)}" target="_blank">${esc(a.name)} ${icon("ext", 11)}</a>` : `<span class="deploy-name">${esc(a.name)}</span>`;
+    return `<div class="deploy-item"><span class="live ${dot}"></span>${name}<span class="pill">${esc(a.status)}</span>
+      <span class="deploy-acts">${a.canDeploy ? `<button type="button" class="btn glass" data-act="svc-deploy" data-service="${esc(s.id)}" data-app="${esc(a.id)}" data-kind="${esc(a.kind || "")}" data-action="deploy">Deploy</button>` : ""}
+      ${a.canRestart ? `<button type="button" class="btn glass" data-act="svc-deploy" data-service="${esc(s.id)}" data-app="${esc(a.id)}" data-kind="${esc(a.kind || "")}" data-action="restart" aria-label="Restart ${esc(a.name)}" data-tip="Restart">${icon("reload", 12)}</button>` : ""}</span></div>`;
+  }).join("");
+  const note = d.status === "no-token" || (!d.status && d.provider) ? `<small class="deploy-note">Set <code>${esc(d.key || "COOLIFY_TOKEN")}</code> in <code>.env</code> to list &amp; trigger ${esc(d.provider)} deploys.</small>`
+    : d.status === "error" ? `<small class="deploy-note">${esc(d.provider || "deploy")}: ${esc(d.error || "error")}</small>`
+    : !apps.length ? `<small class="deploy-note">No apps found.</small>` : "";
+  return `<div class="deploy-list">${rows}${note}</div>`;
+}
 function services() {
   main.innerHTML = `<div class="ph"><h1>Services</h1><p>Your local apps. Listed in <code>services.json</code>.</p><div class="r"><a class="btn glass" href="#/images">Manage images</a></div></div>
     <div class="cards">${S.services.map((s) => {
@@ -2521,23 +2538,49 @@ function services() {
             <a class="btn glass" href="${esc(board)}" target="_blank" aria-label="Open the board on Pinterest" data-tip="Open on Pinterest">${icon("ext", 14)}</a>
             <a class="btn peach" href="#/images">Manage images</a></span></div></div>`;
       }
-      return `<div class="ag glass"><div class="hd"><span class="ic">${icon(s.icon || "services")}</span>
+      const apps = Array.isArray(s.deploy?.apps) ? s.deploy.apps : [];
+      const canView = Boolean(s.ok && address(s) && !s.internal);
+      return `<div class="ag glass ${s.deploy ? "has-deploy" : ""}"><div class="hd"><span class="ic">${icon(s.icon || "services")}</span>
           <div><h4>${esc(s.name)}</h4><small>${esc(s.desc)}</small></div><span class="live ${s.ok ? "" : "off"}" style="margin-left:auto"></span></div>
+        ${renderDeploy(s)}
         <div class="ft"><span class="pill">${esc(new URL(address(s) || s.url).host)}</span><span class="pill">${s.ok ? `${s.ms} ms` : "down"}</span>
-          <span style="margin-left:auto;display:flex;gap:6px">${s.ok && address(s) && !s.internal ? `<a class="btn glass" href="#/s/${esc(s.id)}">View here</a>` : ""}
-          <a class="btn peach" href="${esc(remote ? address(s) || "#/services" : s.url)}" target="_blank">Open ${icon("ext", 14)}</a></span></div></div>`;
+          ${apps.length ? `<span class="pill">${apps.filter((a) => a.status === "running").length}/${apps.length} up</span>` : ""}
+          <span style="margin-left:auto;display:flex;gap:6px">${s.deploy ? `<button type="button" class="btn glass" data-act="svc-refresh" data-service="${esc(s.id)}" aria-label="Refresh deploys" data-tip="Refresh deploys">${icon("reload", 14)}</button>` : ""}
+          ${canView ? `<a class="btn peach" href="#/s/${esc(s.id)}">View here</a>` : ""}
+          <a class="btn ${canView ? "glass" : "peach"}" href="${esc(remote ? address(s) || "#/services" : s.url)}" target="_blank">Open ${icon("ext", 14)}</a></span></div></div>`;
     }).join("") || '<p class="empty">No services yet. Copy <code>services.example.json</code> to <code>services.json</code>.</p>'}</div>`;
   ambient(art("services"));
 }
 
 // ---------------------------------------------------------------- Embedded service
+function svcFull(on = !document.body.classList.contains("svc-full")) {
+  document.body.classList.toggle("svc-full", on);
+  if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  const btn = $('[data-act="svc-full"]');
+  if (btn) {
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-label", on ? "Exit full screen" : "Toggle full screen");
+    btn.dataset.tip = on ? "Exit full screen (Esc)" : "Full screen";
+  }
+}
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && document.body.classList.contains("svc-full")) svcFull(false);
+});
+
 function service(id) {
   const s = S.services.find((x) => x.id === id);
   if (!s) { main.innerHTML = '<p class="empty">Service not found in services.json.</p>'; return; }
   const src = address(s), tab = remote ? src : s.url;
-  $("#svcbar").innerHTML = `<span class="live ${s.ok ? "" : "off"}"></span><span class="pill">${esc(new URL(src || s.url).host)}${s.ok ? ` · ${s.ms} ms` : " · down"}</span>
+  const embeddable = (S.services || []).filter((x) => !x.internal && address(x));
+  const switcher = embeddable.length ? `<div class="svc-switch">${embeddable.map((x) =>
+    `<a class="svc-tab ${x.id === s.id ? "on" : ""}" href="#/s/${esc(x.id)}" title="${esc(x.name)}">${icon(x.icon || "services", 13)}<span>${esc(x.name)}</span></a>`
+  ).join("")}</div>` : "";
+  const isFull = document.body.classList.contains("svc-full");
+  $("#svcbar").innerHTML = `${switcher}<span class="live ${s.ok ? "" : "off"}"></span><span class="pill">${esc(new URL(src || s.url).host)}${s.ok ? ` · ${s.ms} ms` : " · down"}</span>
     <button class="btn glass" data-act="reload" aria-label="Reload" data-tip="Reload">${icon("reload", 15)}</button>
-    <a class="btn glass" href="${esc(tab)}" target="_blank" aria-label="Open in a tab">${icon("ext", 15)}</a>`;
+    <a class="btn glass" href="${esc(tab)}" target="_blank" aria-label="Open in a tab" data-tip="Open in tab">${icon("ext", 15)}</a>
+    <button class="btn glass ${isFull ? "on" : ""}" data-act="svc-full" aria-label="${isFull ? "Exit full screen" : "Toggle full screen"}" data-tip="${isFull ? "Exit full screen (Esc)" : "Full screen"}">${icon("expand", 15)}</button>`;
   main.innerHTML = `<div class="frame ${s.width ? "phone" : ""}" style="${s.width ? `--w:${s.width}px` : s.max ? `max-width:${s.max}px;margin:0 auto` : ""}">
       ${!src ? `<p class="empty">${esc(s.name)} isn't published on Tailscale ("tailnet" field in services.json).</p>`
         : s.ok ? `<iframe id="svcf" src="${esc(src)}" title="${esc(s.name)}"></iframe>` : `<p class="empty">${esc(s.name)} is down.</p>`}</div>`;
@@ -2624,7 +2667,7 @@ async function settingsPage() {
     <h3>Services (<code>services.json</code>)</h3>
     <form class="task glass" id="set-services-form">
       <textarea class="code" id="set-services" rows="8" spellcheck="false" aria-label="Services JSON">${esc(JSON.stringify(cfg.services, null, 2))}</textarea>
-      <div class="task-bar"><small>Each service has <code>id</code>, <code>name</code>, <code>url</code> and <code>desc</code> (plus optional <code>icon</code>, <code>dock</code>, <code>width</code>, <code>max</code>, <code>proxy</code>, <code>tailnet</code>).</small>
+      <div class="task-bar"><small>Each service has <code>id</code>, <code>name</code>, <code>url</code> and <code>desc</code> (plus optional <code>icon</code>, <code>dock</code>, <code>width</code>, <code>max</code>, <code>proxy</code>, <code>tailnet</code>, and <code>deploy</code> for Coolify, Dokploy or custom <code>targets</code>).</small>
         <button class="btn peach" type="submit">Save</button></div>
     </form>`;
   // A picked file goes up as a data URL; the server squares it to 256 px.
@@ -2771,6 +2814,7 @@ function render() {
   graphStop?.(); graphStop = null; clearInterval(orchTimer);
   const { pg, arg } = route();
   if (pg !== "agents" && document.body.classList.contains("canvas-full")) canvasFull(false); // full screen is the canvas's
+  if (pg !== "s" && document.body.classList.contains("svc-full")) svcFull(false);
   $("#crumb").textContent = pg === "a" ? S.background?.find((x) => x.key === arg)?.title || AGENT_NAME[S.agents.find((x) => x.key === arg)?.name]?.[0] || "Agent" : pg === "s" ? S.services.find((s) => s.id === arg)?.name || "Service" : PAGES[pg][1];
   document.body.classList.toggle("home", !pg);
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
@@ -3113,6 +3157,24 @@ const ACTIONS = {
     [D, S] = await Promise.all([api("/api"), api("/api/system")]); render();
   },
   reload: () => { const f = $("#svcf"); f.src = f.src; },
+  "svc-full": () => svcFull(),
+  "svc-deploy": async (el) => {
+    const { service, app, action, kind } = el.dataset;
+    el.disabled = true;
+    if (action === "deploy") el.textContent = "Deploying…";
+    try {
+      const r = await api("/api/deploy", { service, app, action, kind });
+      toast(r.output ? `${action === "restart" ? "Restarted" : "Deploy triggered"}: ${r.output}` : `${action === "restart" ? "Restart" : "Deploy"} triggered`);
+    } catch (e) { toast(e.message); }
+    S = await api("/api/system");
+    if (route().pg === "services") services();
+  },
+  "svc-refresh": async (el) => {
+    el.disabled = true;
+    try { await api("/api/deploy", { refresh: true }); } catch {}
+    S = await api("/api/system");
+    if (route().pg === "services") services();
+  },
   capture: () => {
     setCaptureMode("daily");
     initCaptureAgent();
@@ -3203,6 +3265,7 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k" && !(route().pg === "agents" && e.target.closest("input, textarea, [contenteditable]"))) { e.preventDefault(); cmdkOpen(); return; }
   if (e.key === "Escape" && cwdOpen) { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); return; }
   if (e.key === "Escape" && calDay && !document.querySelector("dialog[open]")) { calDay = ""; calRender(); return; }
+  if (e.key === "Escape" && document.body.classList.contains("svc-full")) { svcFull(false); return; }
   if (e.key === "Escape" && orchSelected.size > 0 && route().pg === "agents") {
     orchSelected.clear();
     updateSelectionUI();

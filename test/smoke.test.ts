@@ -289,8 +289,32 @@ test("agent CLI commands", () => {
 // ---------------------------------------------------------------- agents
 // Stands in for both providers: the first call asks for tools (one write escapes the vault), the second one wraps up.
 const seen: { path: string; beta: string; body: any }[] = [];
+const deployHits: { method: string; path: string; search: string; auth: string; body: any }[] = [];
 async function fakeProvider(req: Request) {
-  const body: any = await req.json(), path = new URL(req.url).pathname;
+  const u = new URL(req.url), path = u.pathname;
+  if (path.startsWith("/api/v1/") || path.startsWith("/api/project.") || path.startsWith("/api/application.") || path.startsWith("/api/compose.") || path.startsWith("/webhook/") || path.startsWith("/app/") || path === "/health" || path === "/pusher") {
+    const b = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+    deployHits.push({ method: req.method, path, search: u.search, auth: req.headers.get("authorization") || req.headers.get("x-api-key") || "", body: b });
+    if (path === "/health" || path.startsWith("/app/")) return new Response("ok");
+    if (path === "/pusher") return new Response('window.Echo = { wsPort: "", wssPort: 6001, forceTLS: true };', { headers: { "content-type": "application/javascript" } });
+    if (path === "/webhook/deploy") return Response.json({ ok: true });
+    if (req.headers.get("authorization") !== "Bearer test-key" && req.headers.get("x-api-key") !== "test-key")
+      return new Response("unauthorized", { status: 401 });
+    if (path === "/api/v1/applications") return Response.json([
+      { uuid: "app-1", name: "planeit-web", status: "running:healthy", fqdn: "https://planeit.app,https://www.planeit.app" },
+      { uuid: "app-2", name: "planeit-worker", status: "building" },
+    ]);
+    if (path === "/api/v1/services") return Response.json([
+      { uuid: "svc-1", name: "redis-cache", status: "exited:unhealthy" },
+    ]);
+    if (path === "/api/v1/deploy" || path.endsWith("/restart")) return Response.json({ message: "queued" });
+    if (path === "/api/project.all") return Response.json([
+      { name: "Main", environments: [{ applications: [{ applicationId: "dk-1", name: "dok-api", applicationStatus: "done", domains: [{ host: "api.planeit.app" }] }], compose: [{ composeId: "dk-c1", name: "dok-db", composeStatus: "running" }] }] },
+    ]);
+    if (path === "/api/application.deploy" || path === "/api/application.redeploy" || path === "/api/compose.deploy" || path === "/api/compose.redeploy")
+      return Response.json({ ok: true });
+  }
+  const body: any = await req.json();
   seen.push({ path, beta: req.headers.get("anthropic-beta") ?? "", body });
   if (path === "/v1/chat/completions") {
     if (body.messages?.some((m: any) => String(m.content).includes("trigger-quota"))) {
@@ -1916,6 +1940,125 @@ test("adversarial verification: canvas high-contrast contours, split terminal bu
   expect(appJs).toContain('class="hud-btn');
   expect(appCss).toContain(".hud-btn");
 });
+
+test("deploy services: Coolify, Dokploy, and abstract webhook/CLI targets", async () => {
+  // 1. Reject invalid deploy definitions in services.json
+  for (const bad of [
+    { id: "c", name: "C", url: FAKE, desc: "x", deploy: {} },
+    { id: "c", name: "C", url: FAKE, desc: "x", deploy: { provider: "heroku" } },
+    { id: "c", name: "C", url: FAKE, desc: "x", deploy: { provider: "coolify", key: "bad-key!" } },
+    { id: "c", name: "C", url: FAKE, desc: "x", deploy: { targets: [{ id: "../bad", name: "Bad" }] } },
+    { id: "c", name: "C", url: FAKE, desc: "x", deploy: { targets: [{ id: "ok", name: "Bad URL", webhook: "javascript:alert(1)" }] } },
+  ]) expect((await post("/api/settings", { services: [bad] })).status).toBe(400);
+
+  // 2. Configure Coolify, Dokploy, missing-token service, and abstract targets (Dockfy / CLI / webhook)
+  const services = [
+    { id: "coolify", name: "Coolify", url: `${FAKE}/health`, desc: "Coolify PaaS", deploy: { provider: "coolify", key: "FAKE_KEY" } },
+    { id: "dokploy", name: "Dokploy", url: `${FAKE}/health`, desc: "Dokploy PaaS", deploy: { provider: "dokploy", key: "FAKE_KEY" } },
+    { id: "notoken", name: "Unconfigured Coolify", url: `${FAKE}/health`, desc: "No token yet", deploy: { provider: "coolify", key: "MISSING_COOLIFY_TOKEN" } },
+    {
+      id: "custom", name: "Custom Deploys", url: `${FAKE}/health`, desc: "Dockfy / custom targets",
+      deploy: {
+        targets: [
+          { id: "web-hook", name: "Frontend Webhook", check: `${FAKE}/health`, webhook: `${FAKE}/webhook/deploy` },
+          { id: "cli-job", name: "CLI Worker", cmd: ["echo", "deployed-worker"], restart: ["echo", "restarted-worker"] },
+        ],
+      },
+    },
+  ];
+  expect((await post("/api/settings", { services })).status).toBe(200);
+
+  const sys = await (await fetch(`${BASE}/api/system`)).json();
+  const cool = sys.services.find((s: any) => s.id === "coolify");
+  expect(cool.ok).toBe(true);
+  expect(cool.deploy.status).toBe("ok");
+  expect(cool.deploy.apps.map((a: any) => [a.id, a.name, a.status, a.kind, a.url])).toEqual([
+    ["app-1", "planeit-web", "running", "application", "https://planeit.app"],
+    ["app-2", "planeit-worker", "building", "application", undefined],
+    ["svc-1", "redis-cache", "error", "service", undefined],
+  ]);
+
+  const dok = sys.services.find((s: any) => s.id === "dokploy");
+  expect(dok.deploy.status).toBe("ok");
+  expect(dok.deploy.apps.map((a: any) => [a.id, a.name, a.status, a.kind, a.url])).toEqual([
+    ["dk-1", "dok-api", "running", "application", "https://api.planeit.app"],
+    ["dk-c1", "dok-db", "running", "compose", undefined],
+  ]);
+
+  const noTok = sys.services.find((s: any) => s.id === "notoken");
+  expect(noTok.deploy.status).toBe("no-token");
+  expect(noTok.deploy.key).toBe("MISSING_COOLIFY_TOKEN");
+
+  const cust = sys.services.find((s: any) => s.id === "custom");
+  expect(cust.deploy.apps.map((a: any) => [a.id, a.status, a.canDeploy, a.canRestart])).toEqual([
+    ["web-hook", "running", true, true],
+    ["cli-job", "idle", true, true],
+  ]);
+
+  // 3. Trigger deploys & restarts across providers and targets
+  deployHits.length = 0;
+  expect((await post("/api/deploy", { service: "coolify", app: "app-1", action: "deploy" })).status).toBe(200);
+  expect((await post("/api/deploy", { service: "coolify", app: "svc-1", action: "restart", kind: "service" })).status).toBe(200);
+  expect((await post("/api/deploy", { service: "dokploy", app: "dk-1", action: "deploy" })).status).toBe(200);
+  expect((await post("/api/deploy", { service: "dokploy", app: "dk-c1", action: "restart", kind: "compose" })).status).toBe(200);
+  expect((await post("/api/deploy", { service: "custom", app: "web-hook", action: "deploy" })).status).toBe(200);
+
+  const cliDep = await (await post("/api/deploy", { service: "custom", app: "cli-job", action: "deploy" })).json();
+  expect(cliDep.output).toBe("deployed-worker");
+  const cliRes = await (await post("/api/deploy", { service: "custom", app: "cli-job", action: "restart" })).json();
+  expect(cliRes.output).toBe("restarted-worker");
+
+  expect(deployHits.map((h) => [h.path, h.search, h.body])).toEqual([
+    ["/api/v1/deploy", "?uuid=app-1", {}],
+    ["/api/v1/services/svc-1/restart", "", {}],
+    ["/api/application.deploy", "", { applicationId: "dk-1" }],
+    ["/api/compose.redeploy", "", { composeId: "dk-c1" }],
+    ["/webhook/deploy", "", {}],
+  ]);
+
+  // Missing token or invalid request returns 400
+  expect((await post("/api/deploy", { service: "notoken", app: "app-1", action: "deploy" })).status).toBe(400);
+  expect((await post("/api/deploy", { service: "unknown", app: "app-1", action: "deploy" })).status).toBe(400);
+  expect((await post("/api/deploy", { service: "../bad", app: "app-1", action: "deploy" })).status).toBe(400);
+
+  // 4. Service proxy rewrites Secure/Domain cookies, Location, and hardcoded target origins so embedded login doesn't 419
+  expect((await post("/api/settings", {
+    services: [{ id: "coolify", name: "Coolify", url: `${FAKE}/health`, desc: "Coolify", proxy: 4897 }],
+  })).status).toBe(200);
+  await fetch(`${BASE}/api/system`); // triggers ensureProxies
+  const pr = await fetch("http://127.0.0.1:4897/health");
+  expect(pr.status).toBe(200);
+
+  const pusher = await (await fetch("http://127.0.0.1:4897/pusher")).text();
+  expect(pusher).toContain("wsPort:4897");
+  expect(pusher).toContain("wssPort:4897");
+  expect(pusher).toContain("forceTLS:false");
+  const wsMsg = await new Promise<string>((res) => {
+    const ws = new WebSocket("ws://127.0.0.1:4897/app/coolify", { headers: { Host: "127.0.0.1:4897", Origin: "http://127.0.0.1:4897" } } as any);
+    ws.onmessage = (e) => { ws.close(); res(String(e.data)); };
+    ws.onerror = () => res("err");
+  });
+  expect(wsMsg).toContain("pusher:connection_established");
+  expect((await fetch("http://127.0.0.1:4897/health", { headers: { Host: "evil.com" } })).status).toBe(403);
+  expect((await fetch("http://127.0.0.1:4897/health", { headers: { Origin: "http://evil.com" } })).status).toBe(403);
+
+  // 5. Embedded service UI elements and full screen mode
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  expect(appJs).toContain("svc-switch");
+  expect(appJs).toContain("svc-tab");
+  expect(appJs).toContain('data-act="svc-full"');
+  expect(appJs).toContain("function svcFull(");
+  expect(appJs).toContain("has-deploy");
+
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+  expect(appCss).toContain("body.svc-full");
+  expect(appCss).toContain(".svc-switch");
+  expect(appCss).toContain(".ag.has-deploy");
+
+  // Restore empty services list
+  expect((await post("/api/settings", { services: [] })).status).toBe(200);
+});
+
 
 
 
