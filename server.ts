@@ -297,7 +297,10 @@ async function background() {
       resumable: sessionStarted(x.sessionId) }));
 }
 
-type Service = { id: string; name: string; url: string; desc: string; icon?: string; dock?: boolean; width?: number; max?: number; proxy?: number; tailnet?: number; internal?: string };
+type DeployTarget = { id: string; name: string; check?: string; url?: string; webhook?: string; cmd?: string[]; restart?: string[] };
+type DeployConfig = "coolify" | "dokploy" | { provider?: "coolify" | "dokploy"; key?: string; targets?: DeployTarget[] };
+type DeployApp = { id: string; name: string; status: "running" | "building" | "stopped" | "error" | "idle"; state?: string; url?: string; kind?: "application" | "service" | "compose" | "target"; canDeploy: boolean; canRestart: boolean };
+type Service = { id: string; name: string; url: string; desc: string; icon?: string; dock?: boolean; width?: number; max?: number; proxy?: number; tailnet?: number; internal?: string; deploy?: DeployConfig };
 // services.json is personal (not in git); without it the list is empty.
 const serviceList = (): Service[] => { try { return JSON.parse(readFileSync(`${import.meta.dir}/services.json`, "utf8")); } catch { return []; } };
 
@@ -401,15 +404,176 @@ async function talk(key: string, text: string) {
   return { key: copy ? `c:${copy.sessionId}` : key, output: clip(output.trim(), 300) };
 }
 
+const deployCache = new Map<string, { at: number; data: any }>();
+const normDeployStatus = (raw: string): DeployApp["status"] => {
+  const s = raw.toLowerCase();
+  if (/building|starting|restarting|queued|in_progress|deploying|running_build/.test(s)) return "building";
+  if (/unhealthy|degraded|error|failed|crashed/.test(s)) return "error";
+  if (s.startsWith("running") || /^(healthy|ok|done|active)$/.test(s)) return "running";
+  return "stopped";
+};
+const normDeployCfg = (d?: DeployConfig) => {
+  if (!d) return null;
+  const cfg = typeof d === "string" ? { provider: d } : d;
+  const provider = cfg.provider;
+  const key = cfg.key || (provider === "coolify" ? "COOLIFY_TOKEN" : provider === "dokploy" ? "DOKPLOY_TOKEN" : "");
+  return { provider, key, targets: cfg.targets ?? [] };
+};
+
+async function deployState(s: Service) {
+  const cfg = normDeployCfg(s.deploy);
+  if (!cfg) return undefined;
+  const targetApps: DeployApp[] = await Promise.all(cfg.targets.map(async (t) => {
+    let status: DeployApp["status"] = "idle";
+    if (t.check) {
+      try { status = (await fetch(t.check, { signal: AbortSignal.timeout(1500) })).ok ? "running" : "stopped"; }
+      catch { status = "stopped"; }
+    }
+    const u = t.url && validUrl(t.url) ? t.url : t.check && validUrl(t.check) ? t.check : undefined;
+    return {
+      id: t.id, name: t.name, status, ...(u ? { url: u } : {}), kind: "target" as const,
+      canDeploy: !!(t.webhook || t.cmd?.length), canRestart: !!(t.restart?.length || t.webhook || t.cmd?.length),
+    };
+  }));
+  if (!cfg.provider) return { status: "ok" as const, apps: targetApps };
+  const token = cfg.key ? (process.env[cfg.key] ?? "").trim() : "";
+  if (!token) return { provider: cfg.provider, key: cfg.key, status: "no-token" as const, apps: targetApps };
+  const cacheKey = `${s.id}:${s.url}:${token}`;
+  const hit = deployCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 2000) return { ...hit.data, apps: [...hit.data.apps, ...targetApps] };
+  const origin = new URL(s.url).origin;
+  try {
+    const apps: DeployApp[] = [];
+    if (cfg.provider === "coolify") {
+      const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+      const [ar, sr] = await Promise.all([
+        fetch(`${origin}/api/v1/applications`, { headers, signal: AbortSignal.timeout(3500) }),
+        fetch(`${origin}/api/v1/services`, { headers, signal: AbortSignal.timeout(3500) }).catch(() => null),
+      ]);
+      if (!ar.ok) {
+        return { provider: cfg.provider, key: cfg.key, status: "error" as const, error: ar.status === 401 || ar.status === 403 ? `invalid ${cfg.key}` : `HTTP ${ar.status}`, apps: targetApps };
+      }
+      const aj: any = await ar.json().catch(() => []);
+      const sj: any = sr?.ok ? await sr.json().catch(() => []) : [];
+      const pushList = (items: any[], kind: "application" | "service") => {
+        for (const a of Array.isArray(items) ? items : Array.isArray((items as any)?.data) ? (items as any).data : []) {
+          const id = String(a?.uuid || a?.id || "").trim();
+          if (!id || !/^[\w-]+$/.test(id)) continue;
+          const raw = String(a?.status || "stopped");
+          const firstUrl = String(a?.fqdn || a?.url || "").split(",")[0].trim();
+          apps.push({
+            id, name: String(a?.name || firstUrl || id), status: normDeployStatus(raw), state: raw,
+            ...(validUrl(firstUrl) ? { url: firstUrl } : {}), kind, canDeploy: true, canRestart: true,
+          });
+        }
+      };
+      pushList(aj, "application");
+      pushList(sj, "service");
+    } else if (cfg.provider === "dokploy") {
+      const headers = { "x-api-key": token, Authorization: `Bearer ${token}`, Accept: "application/json" };
+      const r = await fetch(`${origin}/api/project.all`, { headers, signal: AbortSignal.timeout(3500) });
+      if (!r.ok) {
+        return { provider: cfg.provider, key: cfg.key, status: "error" as const, error: r.status === 401 || r.status === 403 ? `invalid ${cfg.key}` : `HTTP ${r.status}`, apps: targetApps };
+      }
+      const j: any = await r.json().catch(() => []);
+      const projects = Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : [];
+      const rawItems = projects.flatMap((p: any) =>
+        p?.applicationId || p?.composeId ? [p] : [
+          ...(p?.applications ?? []), ...(p?.compose ?? []),
+          ...(p?.environments ?? []).flatMap((e: any) => [...(e?.applications ?? []), ...(e?.compose ?? [])]),
+        ]);
+      for (const a of rawItems) {
+        const isCompose = !!a?.composeId && !a?.applicationId;
+        const id = String(a?.applicationId || a?.composeId || a?.id || "").trim();
+        if (!id || !/^[\w-]+$/.test(id)) continue;
+        const raw = String(a?.applicationStatus || a?.composeStatus || a?.status || "stopped");
+        const host = a?.domains?.[0]?.host;
+        const dom = host ? (String(host).startsWith("http") ? String(host) : `https://${host}`) : String(a?.url || "");
+        apps.push({
+          id, name: String(a?.name || a?.appName || id), status: normDeployStatus(raw), state: raw,
+          ...(validUrl(dom) ? { url: dom } : {}), kind: isCompose ? "compose" : "application", canDeploy: true, canRestart: true,
+        });
+      }
+    }
+    const base = { provider: cfg.provider, key: cfg.key, status: "ok" as const, apps };
+    deployCache.set(cacheKey, { at: Date.now(), data: base });
+    return { ...base, apps: [...apps, ...targetApps] };
+  } catch {
+    return { provider: cfg.provider, key: cfg.key, status: "error" as const, error: "unreachable", apps: targetApps };
+  }
+}
+
+async function runDeploy(b: any) {
+  if (b?.refresh === true) { deployCache.clear(); return { ok: true }; }
+  const svcId = typeof b?.service === "string" ? b.service.trim() : "";
+  const appId = typeof b?.app === "string" ? b.app.trim() : "";
+  const action = b?.action === "restart" ? "restart" : b?.action === "deploy" || b?.action === undefined ? "deploy" : "";
+  if (!svcId || !appId || !action || !/^[\w-]+$/.test(svcId) || !/^[\w-]+$/.test(appId)) return "invalid deploy request";
+  const s = serviceList().find((x) => x.id === svcId);
+  const cfg = normDeployCfg(s?.deploy);
+  if (!s || !cfg) return "service not found";
+  const target = cfg.targets.find((t) => t.id === appId);
+  if (target) {
+    const argv = action === "restart" && target.restart?.length ? target.restart : !target.webhook ? target.cmd : undefined;
+    if (argv?.length) {
+      try {
+        const p = Bun.spawn(argv, { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+        const out = ((await new Response(p.stdout).text()) + (await new Response(p.stderr).text())).trim();
+        const code = await p.exited;
+        if (code !== 0) return clip(out || `exit ${code}`, 200);
+        return { ok: true, service: svcId, app: appId, action, output: clip(out, 200) };
+      } catch (e: any) { return clip(String(e?.message || "command failed"), 200); }
+    }
+    if (target.webhook) {
+      try {
+        const r = await fetch(target.webhook, { method: "POST", signal: AbortSignal.timeout(8000) });
+        if (!r.ok) return `webhook HTTP ${r.status}`;
+        return { ok: true, service: svcId, app: appId, action };
+      } catch { return "webhook unreachable"; }
+    }
+    return "no deploy action configured";
+  }
+  if (!cfg.provider) return "target not found";
+  const token = cfg.key ? (process.env[cfg.key] ?? "").trim() : "";
+  if (!token) return `set ${cfg.key} in .env`;
+  const origin = new URL(s.url).origin;
+  try {
+    if (cfg.provider === "coolify") {
+      const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+      let r: Response;
+      if (action === "deploy") {
+        r = await fetch(`${origin}/api/v1/deploy?uuid=${encodeURIComponent(appId)}`, { method: "POST", headers, signal: AbortSignal.timeout(8000) });
+      } else {
+        const firstKind = b?.kind === "service" ? "services" : "applications";
+        const secondKind = firstKind === "services" ? "applications" : "services";
+        r = await fetch(`${origin}/api/v1/${firstKind}/${encodeURIComponent(appId)}/restart`, { method: "POST", headers, signal: AbortSignal.timeout(8000) });
+        if (r.status === 404) r = await fetch(`${origin}/api/v1/${secondKind}/${encodeURIComponent(appId)}/restart`, { method: "POST", headers, signal: AbortSignal.timeout(8000) });
+      }
+      if (!r.ok) return `Coolify HTTP ${r.status}`;
+    } else if (cfg.provider === "dokploy") {
+      const headers = { "x-api-key": token, Authorization: `Bearer ${token}`, "content-type": "application/json", Accept: "application/json" };
+      const isCompose = b?.kind === "compose";
+      const ep = isCompose ? (action === "restart" ? "compose.redeploy" : "compose.deploy") : (action === "restart" ? "application.redeploy" : "application.deploy");
+      const body = isCompose ? { composeId: appId } : { applicationId: appId };
+      const r = await fetch(`${origin}/api/${ep}`, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return `Dokploy HTTP ${r.status}`;
+    }
+    deployCache.clear();
+    return { ok: true, service: svcId, app: appId, action };
+  } catch { return `${cfg.provider} unreachable`; }
+}
+
 async function services() {
   const list = await serviceList();
+  ensureProxies(list);
   return Promise.all(list.map(async (s) => {
     if (s.internal === "pinterest") { const p = pinterestState(); return { ...s, ok: p.status === "ok", ms: 0, pinterest: p }; } // not localhost: status comes from the sync
     const t = performance.now();
-    try {
-      const r = await fetch(s.url, { signal: AbortSignal.timeout(1500) });
-      return { ...s, ok: r.ok, ms: Math.round(performance.now() - t) };
-    } catch { return { ...s, ok: false, ms: 0 }; }
+    const [probe, dep] = await Promise.all([
+      fetch(s.url, { signal: AbortSignal.timeout(2500) }).then((r) => ({ ok: r.ok, ms: Math.round(performance.now() - t) })).catch(() => ({ ok: false, ms: 0 })),
+      s.deploy ? deployState(s) : Promise.resolve(undefined),
+    ]);
+    return { ...s, ok: probe.ok || dep?.status === "ok", ms: probe.ms, ...(dep ? { deploy: dep } : {}) };
   }));
 }
 
@@ -551,9 +715,27 @@ const validAgent = (a: any) =>
   typeof a.name === "string" && a.name.trim().length > 0 &&
   ((Array.isArray(a.run) && a.run.length > 0 && a.run.every((x: any) => typeof x === "string" && x.length > 0)) ||
     a.api === "anthropic" || a.api === "openai");
+const validDeployTarget = (t: any) =>
+  t && typeof t === "object" && !Array.isArray(t) &&
+  typeof t.id === "string" && /^[\w-]+$/.test(t.id) &&
+  typeof t.name === "string" && t.name.trim().length > 0 &&
+  (t.check === undefined || validUrl(t.check)) &&
+  (t.url === undefined || validUrl(t.url)) &&
+  (t.webhook === undefined || validUrl(t.webhook)) &&
+  (t.cmd === undefined || (Array.isArray(t.cmd) && t.cmd.length > 0 && t.cmd.every((x: any) => typeof x === "string" && x.length > 0))) &&
+  (t.restart === undefined || (Array.isArray(t.restart) && t.restart.length > 0 && t.restart.every((x: any) => typeof x === "string" && x.length > 0)));
+const validDeploy = (d: any) => {
+  if (d === undefined || d === "coolify" || d === "dokploy") return true;
+  if (!d || typeof d !== "object" || Array.isArray(d)) return false;
+  if (d.provider !== undefined && d.provider !== "coolify" && d.provider !== "dokploy") return false;
+  if (d.key !== undefined && (typeof d.key !== "string" || !/^[A-Z_][A-Z0-9_]*$/.test(d.key))) return false;
+  if (d.targets !== undefined && (!Array.isArray(d.targets) || !d.targets.every(validDeployTarget))) return false;
+  return !!(d.provider || (Array.isArray(d.targets) && d.targets.length > 0));
+};
 const validService = (s: any) =>
   s && typeof s === "object" && typeof s.id === "string" && /^[\w-]+$/.test(s.id) &&
-  typeof s.name === "string" && s.name.trim().length > 0 && validUrl(s.url) && typeof s.desc === "string";
+  typeof s.name === "string" && s.name.trim().length > 0 && validUrl(s.url) && typeof s.desc === "string" &&
+  validDeploy(s.deploy);
 
 function settings() {
   const img = imagesState();
@@ -599,7 +781,7 @@ function saveSettings(b: any) {
   if (b.defaultShell !== undefined) { process.env.DEFAULT_SHELL = String(b.defaultShell); env.DEFAULT_SHELL = String(b.defaultShell); }
   if (Object.keys(env).length) saveEnv(env);
   if (b.agents !== undefined) writeFileSync(`${import.meta.dir}/agents.json`, JSON.stringify(b.agents, null, 2) + "\n");
-  if (b.services !== undefined) writeFileSync(`${import.meta.dir}/services.json`, JSON.stringify(b.services, null, 2) + "\n");
+  if (b.services !== undefined) { deployCache.clear(); writeFileSync(`${import.meta.dir}/services.json`, JSON.stringify(b.services, null, 2) + "\n"); }
   return settings();
 }
 
@@ -658,6 +840,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/images/prefs") { const r = setPrefs(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/avatar") { const r = await saveAvatar(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/settings") { const r = saveSettings(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/deploy") { const r = await runDeploy(b); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/run") {
       const prompt = typeof b.prompt === "string" ? b.prompt.trim().slice(0, 8000) : "";
       if (!prompt) return new Response("missing prompt", { status: 400 });
@@ -830,29 +1013,119 @@ Bun.serve({
 });
 console.log(`Overlook on http://127.0.0.1:${PORT}`);
 
-// A service that forbids iframes (X-Frame-Options DENY) gets a proxy that only allows Overlook as the frame.
-// The embedded app keeps calling its API on the target directly, so the target must allow 127.0.0.1:<proxy> in its CORS.
-for (const s of await serviceList()) {
-  if (!s.proxy) continue;
-  const target = new URL(s.url);
-  Bun.serve({
-    hostname: "127.0.0.1", port: s.proxy,
-    async fetch(req) {
-      const host = req.headers.get("host") ?? "";
-      if (!hostOk(host, s.proxy!)) return new Response("forbidden", { status: 403 });
-      const u = new URL(req.url);
-      const h = new Headers(req.headers);
-      h.delete("host");
-      const r = await fetch(target.origin + u.pathname + u.search, {
-        method: req.method, headers: h, redirect: "manual",
-        body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
+// A service that forbids iframes (X-Frame-Options DENY) or sets SameSite=Lax cookies on another domain gets a loopback
+// proxy on 127.0.0.1:<proxy> so the iframe shares Overlook's site (127.0.0.1) and cookies/CSRF tokens work on login.
+const proxyPorts = new Set<number>();
+function ensureProxies(list = serviceList()) {
+  for (const s of list) {
+    if (!s.proxy || proxyPorts.has(s.proxy)) continue;
+    const target = new URL(s.url);
+    const escOrigin = target.origin.replace(/\//g, "\\/");
+    try {
+      Bun.serve({
+        hostname: "127.0.0.1", port: s.proxy,
+        async fetch(req, server) {
+          const host = req.headers.get("host") ?? "";
+          const origin = req.headers.get("origin");
+          const originOk = !origin || hostOk(origin.replace(/^https?:\/\//, ""), s.proxy!) || hostOk(origin.replace(/^https?:\/\//, ""), PORT);
+          if (!hostOk(host, s.proxy!) || !originOk) return new Response("forbidden", { status: 403 });
+          const u = new URL(req.url);
+          if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+            if (server.upgrade(req, { data: { url: `${target.protocol === "https:" ? "wss:" : "ws:"}//${target.host}${u.pathname}${u.search}` } })) return undefined;
+            return new Response("upgrade failed", { status: 400 });
+          }
+          const h = new Headers(req.headers);
+          h.delete("host"); h.delete("accept-encoding"); h.delete("if-none-match"); h.delete("if-modified-since");
+          if (h.has("origin")) h.set("origin", target.origin);
+          if (h.has("referer")) {
+            try { const ref = new URL(h.get("referer")!); h.set("referer", target.origin + ref.pathname + ref.search); } catch {}
+          }
+          const r = await fetch(target.origin + u.pathname + u.search, {
+            method: req.method, headers: h, redirect: "manual",
+            body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
+          });
+          const rh = new Headers(r.headers);
+          rh.delete("x-frame-options"); rh.delete("content-encoding"); rh.delete("content-length"); rh.delete("etag"); // fetch already decompressed
+          const loc = rh.get("location");
+          if (loc && loc.startsWith(target.origin)) rh.set("location", loc.slice(target.origin.length) || "/");
+          const cookies = r.headers.getSetCookie?.() ?? [];
+          if (cookies.length) {
+            rh.delete("set-cookie");
+            for (const c of cookies) rh.append("set-cookie", c.replace(/;\s*secure\b/gi, "").replace(/;\s*domain=[^;]+/gi, ""));
+          }
+          const csp = rh.get("content-security-policy");
+          if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT}${TAILNET ? ` https://${TAILNET}` : ""}`));
+          const ct = rh.get("content-type") ?? "";
+          if (req.method !== "HEAD" && /text\/html|javascript|application\/json/i.test(ct)) {
+            const proxyOrigin = `http://${host}`;
+            const txt = (await r.text())
+              .replaceAll(target.origin, proxyOrigin)
+              .replaceAll(escOrigin, proxyOrigin.replace(/\//g, "\\/"))
+              .replace(/\b(wsPort|wssPort)\s*:\s*(?:"[^"]*"|'[^']*'|\d+|null)/g, `$1:${s.proxy}`)
+              .replace(/\bforceTLS\s*:\s*(?:!0|true)/g, "forceTLS:false")
+              .replaceAll(`"${target.hostname}"`, `"${u.hostname}"`)
+              .replaceAll(`'${target.hostname}'`, `'${u.hostname}'`);
+            return new Response(txt, { status: r.status, headers: rh });
+          }
+          return new Response(r.body, { status: r.status, headers: rh });
+        },
+        websocket: {
+          open(ws: any) {
+            const queue: (string | Buffer)[] = [];
+            const fallback = () => {
+              if (ws.data.established || ws.data.fallback) return;
+              ws.data.fallback = true;
+              try {
+                ws.send(JSON.stringify({ event: "pusher:connection_established", data: JSON.stringify({ socket_id: "127001.3335", activity_timeout: 30 }) }));
+              } catch {}
+            };
+            const up = new WebSocket(ws.data.url, { headers: { Host: target.host, Origin: target.origin } } as any);
+            ws.data.up = up;
+            ws.data.queue = queue;
+            ws.data.fallbackFn = fallback;
+            up.onopen = () => {
+              for (const m of queue) up.send(m);
+              queue.length = 0;
+            };
+            up.onmessage = (e: any) => {
+              const s = typeof e.data === "string" ? e.data : "";
+              if (s.includes('"pusher:error"')) { fallback(); try { up.close(); } catch {} return; }
+              if (s.includes('"pusher:connection_established"')) ws.data.established = true;
+              try { ws.send(e.data); } catch {}
+            };
+            up.onclose = () => {
+              if (!ws.data.established) { fallback(); return; }
+              try { ws.close(); } catch {}
+            };
+            up.onerror = () => {
+              if (!ws.data.established) { fallback(); return; }
+              try { ws.close(); } catch {}
+            };
+          },
+          message(ws: any, msg: string | Buffer) {
+            if (ws.data?.fallback) {
+              try {
+                const f = JSON.parse(typeof msg === "string" ? msg : msg.toString());
+                if (f.event === "pusher:ping") ws.send(JSON.stringify({ event: "pusher:pong", data: "{}" }));
+                else if (f.event === "pusher:subscribe") ws.send(JSON.stringify({ event: "pusher_internal:subscription_succeeded", channel: f.data?.channel ?? "", data: "{}" }));
+              } catch {}
+              return;
+            }
+            const up = ws.data?.up;
+            if (up && up.readyState === 1) {
+              up.send(msg);
+            } else {
+              ws.data?.queue?.push(msg);
+            }
+          },
+          close(ws: any) {
+            try { ws.data?.up?.close(); } catch {}
+          },
+        },
       });
-      const rh = new Headers(r.headers);
-      rh.delete("x-frame-options"); rh.delete("content-encoding"); rh.delete("content-length"); // fetch already decompressed
-      const csp = rh.get("content-security-policy");
-      if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT}${TAILNET ? ` https://${TAILNET}` : ""}`));
-      return new Response(r.body, { status: r.status, headers: rh });
-    },
-  });
-  console.log(`${s.name} proxy on http://127.0.0.1:${s.proxy}`);
+      proxyPorts.add(s.proxy);
+      console.log(`${s.name} proxy on http://127.0.0.1:${s.proxy}`);
+    } catch {}
+  }
 }
+ensureProxies();
