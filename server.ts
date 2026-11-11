@@ -672,7 +672,33 @@ function inShell(argv: string[], note = "") {
   const pre = note ? `printf '\\033[2m%s\\033[0m\\n' ${shq(note)}; ` : "";
   return [sh, "-ic", `export TERM=${GHOSTTY_TERM}; ${pre}${argv.length ? `${argv.map(shq).join(" ")}; ` : ""}exec ${shq(sh)} -i`];
 }
+// An agent typed by hand in a canvas terminal (or one that /resume'd another conversation) inherits OVERLOOK_PANE: every
+// 5 s the server notes which conversation runs in which pane, so after an Overlook restart the pane resumes it.
+const PANE_AGENTS = `${import.meta.dir}/cache/pane-agents.json`;
+const paneAgents: Record<string, { proc: string; session: string; cwd: string }> = readJson(PANE_AGENTS) ?? {};
+const savePaneAgents = () => { mkdirSync(dirname(PANE_AGENTS), { recursive: true }); writeFileSync(PANE_AGENTS, JSON.stringify(paneAgents)); };
+const paneOf = (pid: number) => { try { return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((x) => x.startsWith("OVERLOOK_PANE="))?.slice(14) ?? ""; } catch { return ""; } };
+function notePaneAgents() {
+  const live = listPtys().filter((t) => t.running).map((t) => t.id);
+  if (!live.length) return;
+  const seen: typeof paneAgents = {};
+  // Oldest last: the agent at the pane's prompt wins over a `claude -p` it runs (which inherits the pane too).
+  for (const a of agents().filter((x) => x.key).sort((x, y) => x.seconds - y.seconds))
+    seen[paneOf(a.pid)] = { proc: a.name, session: a.key.slice(2), cwd: a.cwd.replace(/^~/, homedir()) };
+  const before = JSON.stringify(paneAgents);
+  for (const id of live) if (seen[id]) paneAgents[id] = seen[id]; else delete paneAgents[id]; // exited: the pane is a shell again
+  if (JSON.stringify(paneAgents) !== before) savePaneAgents();
+}
+setInterval(() => { try { notePaneAgents(); } catch {} }, 5000);
+function paneAgentSpec(id: string) {
+  const s = paneAgents[id], a = s && loadAgents(import.meta.dir).find((x) => x.process === s.proc);
+  if (!a || sessionBusy(s.session) || (s.proc === "claude" && !sessionStarted(s.session))) return null;
+  const argv = agentArgv(a, s.session);
+  return typeof argv === "string" ? null : { argv: inShell(withCanvas(a, argv)), cwd: dirOr(s.cwd, ROOT), title: a.name, session: s.session, env: AGENT_ENV };
+}
 async function ptySpec(q: URLSearchParams) {
+  const resumed = paneAgentSpec(q.get("id") ?? "");
+  if (resumed) return resumed;
   if (q.has("task") || q.has("key")) {
     const s = await sessionOf({ task: q.get("task") ?? undefined, key: q.get("key") ?? undefined });
     if (typeof s === "string") return s;
@@ -916,7 +942,11 @@ async function handle(req: Request, port: number) {
       const r = spawnTerminal(str(b.terminal), str(b.shell), str(b.cwd) || ROOT);
       return typeof r === "string" ? new Response(r, { status: 400 }) : json(r);
     }
-    if (p === "/api/pty/close") return typeof b.id === "string" ? json({ ok: closePty(b.id) }) : new Response("missing id", { status: 400 });
+    if (p === "/api/pty/close") {
+      if (typeof b.id !== "string") return new Response("missing id", { status: 400 });
+      if (paneAgents[b.id]) { delete paneAgents[b.id]; savePaneAgents(); }
+      return json({ ok: closePty(b.id) });
+    }
     // Agent hand-off: the canvas sends its wires; a pane (from + its token) lists, reads and messages the panes wired to it.
     // Wires are the permission to talk, so only Overlook's own page may set them (Origin = this host), not a program in a pane.
     if (p === "/api/canvas/wires") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : setWires(b.client, b.wires, b.names) ? json({ ok: true }) : new Response("bad client", { status: 400 });
