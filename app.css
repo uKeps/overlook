@@ -2191,7 +2191,7 @@ html[data-ui] .nc-wrap > .nc.glass {
 }
 html[data-ui] .nc-wrap > .nc.glass:hover { border-color: color-mix(in srgb, var(--c) 45%, transparent); }
 .nc-folder { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px var(--body); color: var(--muted); }
-.nc-folder::before, .fchip[style*="--c"]::before, .nt-shelf-top::before {
+.nc-folder::before, .fchip[style*="--c"]::before {
   content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c);
 }
 /* hover: hand the note to an agent, or put it on the canvas */
@@ -2209,40 +2209,6 @@ html[data-ui] .nc-wrap > .nc.glass:hover { border-color: color-mix(in srgb, var(
 .nc-acts button svg { color: var(--accent); }
 @media (pointer: coarse) { .nc-acts { position: static; opacity: 1; transform: none; margin-top: 6px; } }
 .fchip[style*="--c"] { display: inline-flex; align-items: center; gap: 7px; }
-
-/* a section title with its way out on the right */
-.hm-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 26px 0 10px; }
-.hm-h a { display: inline-flex; align-items: center; gap: 4px; font: 500 12px var(--body); color: var(--faint); transition: color .15s; }
-.hm-h a:hover { color: var(--accent); }
-
-/* Notes: a search you can't miss, then the overview (recent + collections) or the grid */
-.nt-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; margin-bottom: 18px; }
-.nt-title { display: flex; align-items: baseline; gap: 14px; }
-.nt-title h1 { font: 600 30px/1.1 var(--display); letter-spacing: -.02em; }
-.nt-title p { font-size: 14px; color: var(--muted); }
-.nt-search {
-  flex: 1 1 360px; max-width: 560px; height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-radius: 14px;
-  cursor: text; transition: border-color .15s, background .15s;
-}
-html[data-ui] .nt-search.glass:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.nt-search > svg { flex: none; color: var(--faint); }
-.nt-search:focus-within > svg { color: var(--accent); }
-.nt-search input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font: 15px var(--body); color: var(--ink); }
-.nt-search input::placeholder { color: var(--faint); }
-#nt-overview .hm-h:first-child { margin-top: 6px; }
-.nt-shelves { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
-html[data-ui] .nt-shelf.glass {
-  display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border-radius: var(--r); text-align: left; min-width: 0;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--c) 14%, transparent), transparent 55%), var(--glass);
-  transition: border-color .2s, transform .3s var(--ease), background .2s;
-}
-html[data-ui] .nt-shelf.glass:hover { border-color: color-mix(in srgb, var(--c) 50%, transparent); transform: translateY(-2px); }
-.nt-shelf-top { display: flex; align-items: center; gap: 8px; }
-.nt-shelf-top::before { width: 9px; height: 9px; }
-.nt-shelf-top b { flex: 1; font: 600 16px var(--display); letter-spacing: -.01em; color: var(--ink); }
-.nt-shelf-top small { font: 600 13px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
-.nt-shelf-list { display: flex; flex-direction: column; gap: 4px; }
-.nt-shelf-list span { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Reader: the hand-offs under "Open in Obsidian" */
 .rd-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
@@ -2413,3 +2379,70 @@ html[data-ui="minimal"] .cal:not(.month) .cal-grid { flex: 0 1 auto; gap: 2px; }
 html[data-ui="minimal"] .cal:not(.month) .day { flex: 0 0 auto; min-width: 64px; justify-content: center; color: var(--faint); }
 html[data-ui="minimal"] .cal:not(.month) .day:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
 html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
+
+/* ---------- Notes: ask the vault or save what you learned, then what's alive in it ---------- */
+.nt-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; }
+.nt-head h1 { font: 600 30px/1.1 var(--display); letter-spacing: -.02em; }
+.nt-head p { font-size: 14px; color: var(--faint); }
+.nt-ask {
+  padding: 14px 16px 12px; border-radius: 16px; background: color-mix(in srgb, var(--ink) 4%, transparent);
+  border: 1px solid var(--line); transition: border-color .2s, background .2s;
+}
+.nt-ask:focus-within { border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.nt-ask textarea {
+  display: block; width: 100%; min-height: 26px; max-height: 220px; padding: 2px; border: 0; background: none; outline: none; resize: none;
+  font: 16px/1.5 var(--body); color: var(--ink);
+}
+.nt-ask textarea::placeholder { color: var(--faint); }
+.nt-ask textarea:focus { box-shadow: none; }
+.nt-ask textarea:focus-visible { outline: none; }
+.nt-ask-acts { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.nt-ask-acts .btn { height: 32px; padding: 0 13px; border-radius: 9px; font-size: 13px; }
+.nt-ask-acts small { margin-left: auto; font-size: 12px; color: var(--faint); }
+.nt-found:not(:empty) { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.nt-found h5 { margin: 0 0 4px; font: 600 11px var(--body); letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+.nt-hit { display: flex; align-items: baseline; gap: 10px; padding: 6px 4px; border-radius: 8px; min-width: 0; transition: background .15s; }
+.nt-hit:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.nt-hit i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c); transform: translateY(-1px); }
+.nt-hit b { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; font-size: 13.5px; color: var(--ink); }
+.nt-hit small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--faint); }
+.nt-all { margin-top: 4px; padding: 4px; display: inline-flex; align-items: center; gap: 3px; font: 500 12px var(--body); color: var(--faint); transition: color .15s; }
+.nt-all:hover { color: var(--accent); }
+/* what's alive: projects on the left; missing notes and one to rediscover on the right */
+.nt-alive { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 48px; margin-top: 36px; }
+.nt-alive.solo { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 900px) { .nt-alive { grid-template-columns: minmax(0, 1fr); gap: 32px; } }
+:is(.nt-alive, .nt-cols) h4 { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 8px; font: 600 11px var(--body); letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+:is(.nt-alive, .nt-cols) h4 :is(a, span) { display: inline-flex; align-items: center; gap: 3px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); }
+:is(.nt-alive, .nt-cols) h4 a:hover { color: var(--accent); }
+.nt-proj { display: flex; align-items: baseline; gap: 14px; padding: 11px 4px; border-bottom: 1px solid var(--line); transition: background .15s; }
+.nt-proj:last-child { border-bottom: 0; }
+.nt-proj:hover b { color: var(--accent); }
+.nt-proj > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nt-proj b { font: 500 14.5px var(--body); color: var(--ink); transition: color .15s; }
+.nt-proj small { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nt-proj time { flex: none; font-size: 12px; color: var(--faint); }
+.nt-side { display: flex; flex-direction: column; gap: 30px; }
+.nt-gap { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+.nt-gap a { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; color: var(--muted); }
+.nt-gap a b { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-gap a span { flex: none; font-size: 12px; color: var(--faint); }
+.nt-gap a:hover b { color: var(--accent); }
+.nt-gap button, .nt-redo button { flex: none; height: 26px; padding: 0 9px; border-radius: 7px; font: 500 12px var(--body); color: var(--accent); transition: background .15s; }
+.nt-gap button:hover, .nt-redo button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.nt-redo { padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line); background: linear-gradient(155deg, color-mix(in srgb, var(--c) 12%, transparent), transparent 55%), color-mix(in srgb, var(--ink) 3%, transparent); }
+.nt-redo > a b { display: block; margin: 2px 0 4px; font: 600 15px var(--display); color: var(--ink); }
+.nt-redo p { font-size: 13px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.nt-redo div { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.nt-redo div a { display: inline-flex; align-items: center; gap: 3px; font: 500 12.5px var(--body); color: var(--accent); margin-right: 6px; }
+/* the collections: one quiet row of folders */
+.nt-cols { margin-top: 38px; }
+.nt-colrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.nt-col {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 10px; font: 500 13px var(--body); color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 4%, transparent); border: 1px solid transparent; transition: color .15s, border-color .15s, background .15s;
+}
+.nt-col:hover { color: var(--ink); border-color: color-mix(in srgb, var(--c) 45%, transparent); background: color-mix(in srgb, var(--c) 8%, transparent); }
+.nt-col i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.nt-col small { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.nt-ask + .filters { margin-top: 18px; }
