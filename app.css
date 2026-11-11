@@ -2254,7 +2254,9 @@ html[data-ui] .nt-shelf.glass:hover { border-color: color-mix(in srgb, var(--c) 
 html[data-ui="minimal"] body.home main { margin-top: 0; background: none; } /* no panel around the list: it read as a cut-out box */
 html[data-ui="minimal"] body.home.cal-float main { background: none; }
 /* the underline is the focus here: no ring around the bare fields */
+/* (and no global 1px accent ring from `input:focus`: these fields show focus their own way) */
 :is(.td-add input, .td-title, .td-note, .td-chip select):focus-visible { outline: none; }
+:is(.td-add input, .td-title, .td-note, .td-chip select, .cwd-top input):focus { box-shadow: none; }
 .td-chip:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 .td-home { width: min(1000px, 100%); margin: 6vh auto 40px; display: grid; grid-template-columns: minmax(0, 1fr) 272px; gap: 64px; align-items: start; }
 .td-home:has(.td-side:empty) { width: min(620px, 100%); grid-template-columns: minmax(0, 1fr); }
@@ -2262,17 +2264,20 @@ html[data-ui="minimal"] body.home.cal-float main { background: none; }
 @media (max-width: 960px) { .td-home { width: min(620px, 100%); grid-template-columns: minmax(0, 1fr); gap: 40px; } }
 .td-hello h1 { font: 600 30px/1.1 var(--display); letter-spacing: -.02em; color: var(--ink); }
 .td-hello p { margin-top: 8px; font-size: 14px; color: var(--faint); }
+/* the add field: a soft pill like the header's search; focus warms its edge instead of drawing a ring */
 .td-add {
-  margin-top: 28px; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 4px;
-  border-bottom: 1px solid var(--line); transition: border-color .2s;
+  margin-top: 28px; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 16px; border-radius: 14px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent); border: 1px solid transparent; transition: border-color .2s, background .2s, box-shadow .2s;
 }
-.td-add:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.td-add:hover { background: color-mix(in srgb, var(--ink) 5.5%, transparent); }
+.td-add:focus-within {
+  background: color-mix(in srgb, var(--ink) 6%, transparent); border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 8%, transparent);
+}
 .td-plus { display: grid; color: var(--faint); transition: color .2s; }
 .td-add:focus-within .td-plus { color: var(--accent); }
 .td-add input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font: 15.5px var(--body); color: var(--ink); }
 .td-add input::placeholder { color: var(--faint); }
-.td-add kbd { opacity: 0; transition: opacity .2s; }
-.td-add:focus-within kbd { opacity: 1; }
 .td-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; padding: 0 2px; }
 .td-chips:not(:empty) { margin-top: 10px; }
 .td-chips .chip { display: inline-flex; align-items: center; gap: 5px; font: 500 11.5px var(--body); padding: 3px 9px; border-radius: 99px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); animation: ctx-in .15s ease-out; }

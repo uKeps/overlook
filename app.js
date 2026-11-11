@@ -489,7 +489,7 @@ function todoHome() {
       <div class="td-main">
         <header class="td-hello"><h1>${esc(dayName(D.today, { weekday: "long", day: "numeric", month: "long" }))}</h1><p id="td-count"></p></header>
         <form class="td-add" id="td-add"><span class="td-plus">${icon("plus", 17)}</span>
-          <input id="td-in" placeholder="Add a task… try &quot;amanhã 9h toda segunda&quot;" autocomplete="off" spellcheck="false" aria-label="Add a task"><kbd>Enter</kbd></form>
+          <input id="td-in" placeholder="Add a task… try &quot;amanhã 9h toda segunda&quot;" autocomplete="off" spellcheck="false" aria-label="Add a task"></form>
         <div class="td-chips" id="td-chips"></div>
         <div id="td-list"></div>
       </div>
