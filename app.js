@@ -3592,7 +3592,7 @@ function route() { const [, pg = "", ...r] = location.hash.split("/"); return { 
 function render() {
   if (!D) return;
   if (cwdOpen) { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); }
-  if (document.activeElement?.closest?.("#dockwrap")) document.activeElement.blur(); // a floating dock folds after you pick a page
+  if (document.activeElement?.closest?.("#dockwrap, .crumb")) document.activeElement.blur(); // a floating dock folds after you pick a page; no ring left on the name
   graphStop?.(); graphStop = null; clearInterval(orchTimer);
   const { pg, arg } = route();
   if (pg !== "agents" && document.body.classList.contains("canvas-full")) canvasFull(false); // full screen is the canvas's

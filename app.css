@@ -53,6 +53,9 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-event
 .top { max-width: 1240px; margin: 0 auto; display: flex; align-items: center; gap: 24px; padding: 22px 0 18px; }
 .crumb { display: flex; gap: 10px; font: 600 14px var(--display); color: var(--muted); }
 .crumb b { color: var(--ink); letter-spacing: .02em; }
+.crumb a { display: inline-flex; color: inherit; }
+.crumb a b { transition: color .15s; }
+.crumb a:hover b { color: var(--accent); }
 .clock { margin-left: auto; display: flex; align-items: baseline; gap: 14px; }
 .clock span { font: 700 30px var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 
