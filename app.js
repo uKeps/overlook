@@ -47,6 +47,13 @@ const I = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   terminal: '<polyline points="4 17 10 12 4 7"/><path d="M12 19h8"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+  paste: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', type: '<path d="M4 7V4h16v3M9 20h6M12 4v16"/>',
+  clear: '<path d="M4 6h16M7 12h10M10 18h4"/>', map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
   canvasBg: '<circle cx="6" cy="6" r="1.3"/><circle cx="12" cy="6" r="1.3"/><circle cx="18" cy="6" r="1.3"/><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/><circle cx="6" cy="18" r="1.3"/><circle cx="12" cy="18" r="1.3"/><circle cx="18" cy="18" r="1.3"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
@@ -712,7 +719,7 @@ const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");
 const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a = to; if (l.b === from) l.b = to; } };
 const cwdLabel = (c) => (c ? shortCwd(c) : `Vault (${D?.vault || "vault"})`);
 
-const CANVAS_TOP = 52; // the strip at the top of the canvas where the floating Fleet pill and the canvas HUD sit
+const CANVAS_TOP = 60; // the strip at the top of the canvas where the ☰ button, the Fleet pill and the tools float
 const CANVAS_BGS = [
   ["dots", "Dots", "Classic dot matrix", 22],
   ["sparse", "Calm", "Wide soft dots", 44],
@@ -722,9 +729,9 @@ const CANVAS_BGS = [
 ];
 const VALID_BGS = new Set(CANVAS_BGS.map(([k]) => k));
 const bgEntry = (k) => CANVAS_BGS.find(([id]) => id === k) || CANVAS_BGS[0];
-let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "tile", orchDir = "cols", orchRatio = 50, orchBg = "dots",
+let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "free", orchDir = "cols", orchRatio = 50, orchBg = "dots",
   orchPanX = 24, orchPanY = CANVAS_TOP, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
-  orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
+  orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchMapOpen = true, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
 let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdData = null, cwdPaneKey = "";
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
@@ -749,13 +756,15 @@ try {
   if (c) {
     orchPanes = c.panes || [];
     orchLinks = c.links || [];
-    orchMode = c.mode || "tile";
+    // The canvas is the default layout; a split is kept only when it was chosen after that change (layout: 2).
+    orchMode = c.mode === "tile" && c.layout === 2 ? "tile" : "free";
     orchPanX = c.panX ?? 24;
     orchPanY = c.panY ?? CANVAS_TOP;
     orchZoom = c.zoom || 1;
     orchSeq = c.seq || 1;
     if (c.railMode) orchRailMode = c.railMode;
     if (c.bg && VALID_BGS.has(c.bg)) orchBg = c.bg;
+    orchMapOpen = c.map ?? true;
     // Where you were: the focused and maximized card, the split direction and divider.
     orchActive = c.active || ""; orchMax = c.max || "";
     if (c.dir) orchDir = c.dir;
@@ -777,19 +786,18 @@ function syncWires(force) {
   api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names }).catch(() => { wiresSent = ""; });
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
-const termName = (p) => (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
+const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
 function saveCanvas() {
   syncWires();
   try {
     localStorage.setItem(CANVAS_BG_KEY, orchBg);
-    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, bg: orchBg, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio }));
+    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio }));
   } catch {}
 }
 function setCanvasBg(v, silent = false) {
   orchBg = VALID_BGS.has(v) ? v : "dots";
   saveCanvas();
   applyCanvasTransform();
-  $("#orch-bgmenu")?.setAttribute("hidden", "");
   paintHud($("#orch-hud"), orchMode === "free" && !orchMax);
   if (!silent) toast(`Canvas background: ${bgEntry(orchBg)[1]}`);
 }
@@ -812,9 +820,10 @@ const termLoad = () => (termLib ??= Promise.all([
   return r;
 }).catch((e) => { termLib = null; throw e; }));
 const terms = new Map(); // pane id -> { el, term, fit, ws, title, dead }
-function newTermPane(cwd) {
+// `at`: canvas coordinates (a right-click): the card opens there and the view stays put.
+function newTermPane(cwd, at) {
   const p = { kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "" };
-  if (addPane(p)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p)); }
+  if (addPane(p, at?.x, at?.y)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p), !!at); }
 }
 // Turns a pane into a terminal running the agent's own TUI, in place (same spot, size and links); a pane for a session
 // that already has its terminal on the canvas just goes.
@@ -828,11 +837,10 @@ function tuiInPlace(p, run) {
 }
 function paneToTui(p, run) { tuiInPlace(p, run); saveCanvas(); orchSigs.clear(); agentsBody(); }
 // A new agent is a terminal running it (in the bar's folder); one without a TUI opens a shell.
-function newAgentTerm(agent) {
-  $("#orch-newmenu")?.setAttribute("hidden", "");
-  if (!S.runners?.find((r) => r.id === agent)?.tui) return newTermPane();
+function newAgentTerm(agent, at) {
+  if (!S.runners?.find((r) => r.id === agent)?.tui) return newTermPane(undefined, at);
   const p = { kind: "terminal", id: `term_${Date.now()}`, cwd: $("#run-cwd")?.value || orchCwd || "", run: newTuiRun(agent) };
-  if (addPane(p)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p)); }
+  if (addPane(p, at?.x, at?.y)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p), !!at); }
 }
 const defaultAgent = () => [$("#run-agent")?.value, "claude", ...(S.runners || []).map((r) => r.id)].find((id) => S.runners?.find((r) => r.id === id)?.tui);
 // A new agent TUI: claude gets --session-id up front so the pane can resume it later.
@@ -847,7 +855,7 @@ function termConnect(st, p) {
   ws.onmessage = (e) => st.term.write(e.data);
   const note = (m) => st.term.write(`\r\n\x1b[2m[${m}]\x1b[0m\r\n`);
   ws.onclose = async (e) => {
-    if (st.ws !== ws || !terms.has(p.id)) return;
+    if (st.ws !== ws || terms.get(p.id) !== st) return; // a restarted card has a new one under the same id
     st.ws = null;
     // The shell ended (`exit`, Ctrl+D): the card closes, like a terminal window does.
     if (e.code === 4001) {
@@ -882,7 +890,7 @@ function termClose(id) {
   st.ws?.close();
   st.ro?.disconnect();
   st.term?.dispose();
-  api("/api/pty/close", { id }).catch(() => {});
+  return api("/api/pty/close", { id }).catch(() => {});
 }
 // What a terminal pane shows (its rendered screen plus recent scrollback), as plain text for linked context.
 function termText(id, max = 80) {
@@ -913,13 +921,14 @@ function openTui(item) {
   return true;
 }
 // Brings a card into view (centered on the free canvas, at the current zoom), focuses it and flashes it.
-function focusPane(k) {
+// stay: the card is already where you look (opened at a right-click): focus it without moving the view.
+function focusPane(k, stay = false) {
   const p = orchPanes.find((x) => paneKey(x) === k);
   if (!p) return;
   orchActive = k;
   if (orchMax) orchMax = k;
   const r = $("#orch-canvas")?.getBoundingClientRect();
-  if (orchMode === "free" && !orchMax && r && typeof p.x === "number") {
+  if (!stay && orchMode === "free" && !orchMax && r && typeof p.x === "number") {
     orchPanX = Math.round(r.width / 2 - (p.x + p.w / 2) * orchZoom);
     orchPanY = Math.round(CANVAS_TOP + (r.height - CANVAS_TOP) / 2 - (p.y + p.h / 2) * orchZoom);
   }
@@ -949,10 +958,11 @@ async function mountTerminalPane(card, p) {
       const theme = look.theme || {};
       termBg = theme.background || termBg;
       if (termBg) st.el.closest(".orch-pane")?.style.setProperty("--win-bg", termBg);
+      st.font0 = Math.round((look.fontSize || 12) * 4 / 3); // Ghostty sizes are points; its default is 12
       st.term = new x.Terminal({
         // Ghostty ships JetBrains Mono plus Nerd Font symbols built in; a browser needs them installed (prompt icons).
         fontFamily: `${look.fontFamily ? `"${look.fontFamily}", ` : ""}"JetBrainsMono Nerd Font Mono", "JetBrains Mono", "Symbols Nerd Font Mono", monospace`,
-        fontSize: Math.round((look.fontSize || 12) * 4 / 3), // Ghostty sizes are points; its default is 12
+        fontSize: p.fontSize || st.font0, // p.fontSize: this card's own size, from its right-click menu
         cursorStyle: ["block", "underline"].includes(look.cursorStyle) ? look.cursorStyle : "bar", // Ghostty shows a bar at a prompt
         cursorBlink: false, scrollback: 10000, allowProposedApi: true,
         // The card paints the window (95% over a blur, like Ghostty under Hyprland): the terminal itself is see-through.
@@ -964,7 +974,9 @@ async function mountTerminalPane(card, p) {
       const PX = 12, PY = 10;
       st.fit = { fit: () => {
         const cell = st.term?._core?._renderService?.dimensions?.css?.cell;
-        if (!cell?.width || !cell?.height || !st.term.element) return;
+        // a hidden box (minimized card, maximized neighbour) measures 0: keep the size, or the PTY shrinks to 2x1 and
+        // the scrollback rewraps to 2 columns for good
+        if (!cell?.width || !cell?.height || !st.term.element || !st.el.clientWidth || !st.el.clientHeight) return;
         const w = st.el.clientWidth - 2 * PX, h = st.el.clientHeight - 2 * PY;
         const cols = Math.max(2, Math.floor(w / cell.width)), rows = Math.max(1, Math.floor(h / cell.height));
         const rx = Math.max(0, w - cols * cell.width) / 2, ry = Math.max(0, h - rows * cell.height) / 2;
@@ -1035,10 +1047,10 @@ function updateSelectionUI() {
   }
   const badge = $("#orch-sel-cnt"), delBtn = $("#orch-del-sel");
   if (badge) {
-    badge.hidden = orchSelected.size === 0;
+    badge.hidden = orchSelected.size < 2;
     badge.textContent = `${orchSelected.size} selected`;
   }
-  if (delBtn) delBtn.hidden = orchSelected.size === 0;
+  if (delBtn) delBtn.hidden = orchSelected.size < 2;
 }
 // Closing a terminal pane stops what runs in it (a shell, a claude session mid-turn): ask first.
 function closeLiveOk(keys) {
@@ -1109,8 +1121,8 @@ function paintCwdPop() {
   for (const t of S.tasks || []) if (t.cwd) recent.add(shortCwd(t.cwd));
   if (!pop.querySelector("#cwd-q")) {
     pop.innerHTML = `<div class="cwd-top">
-        <input id="cwd-q" type="text" placeholder="Filter folders or type any PC path (e.g. ~/dev, /mnt, /) + Enter…" autocomplete="off">
-        <button type="button" class="btn glass orch-icon-btn" data-act="cwd-close" title="Close">${icon("x", 13)}</button>
+        ${icon("search", 15)}<input id="cwd-q" type="text" placeholder="Filter, or type a path (~/dev, /mnt) and press Enter" autocomplete="off" spellcheck="false" aria-label="Filter folders or type a path">
+        <button type="button" class="cwd-x" data-act="cwd-close" title="Close (Esc)" aria-label="Close">${icon("x", 14)}</button>
       </div>
       <div class="cwd-roots" id="cwd-roots"></div>
       <div class="cwd-cur" id="cwd-cur"></div>
@@ -1127,23 +1139,23 @@ function paintCwdPop() {
       }
     };
   }
-  $("#cwd-roots").innerHTML = `<button type="button" class="fchip ${!orchCwd ? "on" : ""}" data-act="cwd-pick" data-path="">📁 Vault (${esc(D.vault)})</button>` +
+  // Places: the vault (picks it at once) and the roots to browse; the one you're browsing is lit.
+  $("#cwd-roots").innerHTML = `<button type="button" class="cwd-chip" data-act="cwd-pick" data-path="" title="Use the vault (${esc(D.vault)})">Vault</button>` +
     (cwdData.roots || []).filter((r) => r.label !== "Vault").map((r) =>
-      `<button type="button" class="fchip ${ cwdData.short === r.short ? "on" : ""}" data-act="cwd-nav" data-path="${esc(r.path)}">${esc(r.label)}</button>`).join("");
+      `<button type="button" class="cwd-chip ${cwdData.short === r.short ? "on" : ""}" data-act="cwd-nav" data-path="${esc(r.path)}">${esc(r.label)}</button>`).join("");
   $("#cwd-cur").innerHTML = `<div class="cwd-path">
-      ${cwdData.parent ? `<button type="button" class="btn glass cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Parent folder">↑ Up</button>` : ""}
-      <code>${esc(cwdData.short)}</code>
+      ${cwdData.parent ? `<button type="button" class="cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Parent folder" aria-label="Parent folder">${icon("l", 15)}</button>` : ""}
+      <span title="${esc(cwdData.short)}">${esc(cwdData.short)}</span>
     </div>
-    <div class="cwd-cur-acts">
-      <button type="button" class="fchip ${cwdHidden ? "on" : ""}" data-act="cwd-hidden" title="Show/hide dot-folders">.* Hidden</button>
-      <button type="button" class="btn peach cwd-use" data-act="cwd-pick" data-path="${esc(cwdData.short)}">✓ Use ${esc(cwdData.short)}</button>
-    </div>`;
+    <button type="button" class="cwd-chip ${cwdHidden ? "on" : ""}" data-act="cwd-hidden" title="Show or hide dot-folders">Hidden</button>
+    <button type="button" class="btn peach cwd-use" data-act="cwd-pick" data-path="${esc(cwdData.short)}">Use this folder</button>`;
+  // A row opens the folder; "Use" (on hover) picks it without going in.
   $("#cwd-list").innerHTML = dirs.map((d) => `<div class="cwd-row">
       <button type="button" class="cwd-open" data-act="cwd-nav" data-path="${esc(d.path)}" title="Open ${esc(d.short)}">
-        ${icon("folder", 14)} <b>${esc(d.name)}</b> ${d.git ? `<span class="cwd-git">git</span>` : ""} <small>${esc(d.short)}</small>
+        ${icon("folder", 15)}<b>${esc(d.name)}</b>${d.git ? `<span class="cwd-git">git</span>` : ""}
       </button>
-      <button type="button" class="btn glass cwd-sel" data-act="cwd-pick" data-path="${esc(d.short)}">Select</button>
-    </div>`).join("") || `<p class="empty">No subfolders matching "${esc(cwdQuery)}" in ${esc(cwdData.short)}.</p>`;
+      <button type="button" class="cwd-sel" data-act="cwd-pick" data-path="${esc(d.short)}" title="Use ${esc(d.short)}">Use</button>
+    </div>`).join("") || `<p class="cwd-empty">No folders matching "${esc(cwdQuery)}" in ${esc(cwdData.short)}.</p>`;
 }
 function pickCwd(val) {
   if (cwdPaneKey) {
@@ -1234,6 +1246,7 @@ function applyCanvasTransform() {
     }
   }
   if (zLbl) zLbl.textContent = `${Math.round(orchZoom * 100)}%`;
+  drawMap();
 }
 // Room for one more card (split: 6, canvas: 18): the oldest viewer card goes, never a terminal or a sticky.
 function makeRoom() {
@@ -1267,10 +1280,106 @@ async function pollHandoffs() {
   const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [`terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
+// The map (bottom right, like Maestri's): the cards as coloured blocks, the screen as a frame, the rest dimmed. Its own
+// zoom follows you: it frames the cards and, as you pan or zoom away from them, eases out to keep the frame in view.
+// Click a card to go to it, click elsewhere to centre the view there, drag (the frame, or anywhere) to move, wheel to
+// zoom. mapXf maps canvas coordinates to the map; it eases toward mapGoal, during a drag too, so the map zooms live.
+let mapXf = null, mapGoal = null, mapRaf = 0;
+const mapView = () => {
+  const r = $("#orch-canvas").getBoundingClientRect();
+  return { x: -orchPanX / orchZoom, y: -orchPanY / orchZoom, w: r.width / orchZoom, h: r.height / orchZoom };
+};
+const mapNear = (a, b) => !!a && !!b && Math.abs(a.k - b.k) < a.k * .002 && Math.abs(a.ox - b.ox) < .3 && Math.abs(a.oy - b.oy) < .3;
+function drawMap() {
+  const box = $("#orch-map");
+  if (!box || !$("#orch-canvas")) return;
+  const on = orchMapOpen && orchMode === "free" && !orchMax;
+  box.hidden = !on;
+  if (!on) { mapXf = null; return; }
+  const svg = box.querySelector("svg"), W = svg.clientWidth, H = svg.clientHeight;
+  if (!W || !H) return;
+  const all = [...orchPanes.filter((p) => typeof p.x === "number"), mapView()];
+  const x0 = Math.min(...all.map((p) => p.x)), y0 = Math.min(...all.map((p) => p.y));
+  const x1 = Math.max(...all.map((p) => p.x + p.w)), y1 = Math.max(...all.map((p) => p.y + p.h));
+  const pad = Math.max(x1 - x0, y1 - y0) * .08, k = Math.min(W / (x1 - x0 + 2 * pad), H / (y1 - y0 + 2 * pad));
+  mapGoal = { k, ox: W / 2 - ((x0 + x1) / 2) * k, oy: H / 2 - ((y0 + y1) / 2) * k };
+  if (!mapXf || calm.matches) mapXf = { ...mapGoal };
+  paintMap();
+  if (!mapRaf && !mapNear(mapXf, mapGoal)) mapRaf = requestAnimationFrame(mapEase);
+}
+function mapEase() {
+  mapRaf = 0;
+  if (!mapXf || !mapGoal || $("#orch-map")?.hidden) return;
+  for (const c of ["k", "ox", "oy"]) mapXf[c] += (mapGoal[c] - mapXf[c]) * .2;
+  if (mapNear(mapXf, mapGoal)) mapXf = { ...mapGoal };
+  paintMap();
+  if (!mapNear(mapXf, mapGoal)) mapRaf = requestAnimationFrame(mapEase);
+}
+function paintMap() {
+  const svg = $("#orch-map svg");
+  if (!svg || !mapXf) return;
+  const { k, ox, oy } = mapXf, W = svg.clientWidth, H = svg.clientHeight, v = mapView();
+  const box = (x, y, w, h) => [x * k + ox, y * k + oy, Math.max(3, w * k), Math.max(3, h * k)].map((n) => Math.round(n * 10) / 10);
+  const blocks = orchPanes.filter((p) => typeof p.x === "number").map((p) => {
+    const [x, y, w, h] = box(p.x, p.y, p.w, p.collapsed ? 34 : p.h);
+    return `<rect class="mb m-${p.kind}${paneKey(p) === orchActive ? " on" : ""}" data-key="${esc(paneKey(p))}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(4, w / 4, h / 4).toFixed(1)}"><title>${esc(paneLabel(p))}</title></rect>`;
+  }).join("");
+  const [fx, fy, fw, fh] = box(v.x, v.y, v.w, v.h);
+  svg.innerHTML = `${blocks}<path class="map-dim" fill-rule="evenodd" d="M-2 -2H${W + 2}V${H + 2}H-2Z M${fx} ${fy}h${fw}v${fh}h${-fw}Z"/>`
+    + `<rect class="map-frame" x="${fx}" y="${fy}" width="${fw}" height="${fh}" rx="4"/>`;
+}
+function bindMap(box) {
+  const svg = box?.querySelector("svg");
+  if (!svg) return;
+  const at = (ev) => { const b = svg.getBoundingClientRect(); return [(ev.clientX - b.left - mapXf.ox) / mapXf.k, (ev.clientY - b.top - mapXf.oy) / mapXf.k]; };
+  const centre = (x, y) => {
+    const r = $("#orch-canvas").getBoundingClientRect();
+    orchPanX = Math.round(r.width / 2 - x * orchZoom); orchPanY = Math.round(r.height / 2 - y * orchZoom);
+    applyCanvasTransform();
+  };
+  svg.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !mapXf) return;
+    e.preventDefault(); e.stopPropagation();
+    try { svg.setPointerCapture(e.pointerId); } catch {}
+    const v = mapView(), [px, py] = at(e), key = e.target.closest?.("rect.mb")?.dataset.key;
+    const inFrame = px >= v.x && px <= v.x + v.w && py >= v.y && py <= v.y + v.h;
+    // The view's centre follows the pointer's moves at the map's current scale. The map keeps easing while you drag:
+    // pull the frame away from the cards and it zooms out under you (each move then covers more ground), bring it back
+    // and it zooms in. Pressing outside the frame first brings the view there.
+    let cx = v.x + v.w / 2, cy = v.y + v.h / 2, lx = e.clientX, ly = e.clientY, moved = false;
+    const jump = () => { [cx, cy] = at(e); centre(cx, cy); };
+    if (!inFrame && !key) jump();
+    box.classList.add("dragging");
+    const move = (ev) => {
+      if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 4) return;
+      if (!moved && !inFrame && key) jump(); // dragging from a card outside the frame: start from there
+      moved = true;
+      cx += (ev.clientX - lx) / mapXf.k; cy += (ev.clientY - ly) / mapXf.k; lx = ev.clientX; ly = ev.clientY;
+      centre(cx, cy);
+    };
+    const up = () => {
+      svg.removeEventListener("pointermove", move); svg.removeEventListener("pointerup", up); svg.removeEventListener("pointercancel", up);
+      box.classList.remove("dragging");
+      if (!moved && key) return focusPane(key); // a click on a card: go to it
+      saveCanvas();
+    };
+    svg.addEventListener("pointermove", move); svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
+  });
+  // the wheel over the map zooms the canvas around the middle of the screen
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const r = $("#orch-canvas").getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2;
+    const z = Math.min(2.5, Math.max(0.2, orchZoom * Math.exp(-e.deltaY * 0.002)));
+    orchPanX = Math.round(cx - (cx - orchPanX) * (z / orchZoom)); orchPanY = Math.round(cy - (cy - orchPanY) * (z / orchZoom));
+    orchZoom = Math.round(z * 1000) / 1000;
+    applyCanvasTransform(); saveCanvas();
+  }, { passive: false });
+}
 // Links are drawn in canvas coordinates, from the right edge of the source to the left edge of the target.
 function drawLinks(tmp) {
   const plane = $("#orch-plane");
   if (!plane) return;
+  drawMap(); // a card moved or resized
   let svg = plane.querySelector("#orch-links");
   if (!svg) {
     svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1390,11 +1499,6 @@ function agents() {
   main.innerHTML = `<div class="orch-shell">
     <form class="task glass orch-deck ${orchDeckOpen ? "open" : ""}" id="run">
       <div class="orch-bar">
-        <div class="seg orch-mode-seg" role="radiogroup" aria-label="Layout">
-          <button type="button" class="${orchMode === "tile" ? "on" : ""}" data-act="orch-mode" data-m="tile" title="Split: cards share the space" aria-label="Split">${icon("split", 14)}</button>
-          <button type="button" class="${orchMode === "free" ? "on" : ""}" data-act="orch-mode" data-m="free" title="Canvas: free windows, pan and zoom" aria-label="Canvas">${icon("grid", 14)}</button>
-        </div>
-        <button type="button" class="bar-icon" id="orch-dir-btn" data-act="orch-dir" title="Side by side / stacked" ${orchMode === "tile" && orchPanes.length === 2 && !orchMax ? "" : "hidden"}>${icon(orchDir === "rows" ? "cols" : "split", 14)}</button>
         <div class="orch-cluster-prompt">
           <textarea id="run-prompt" rows="1" placeholder="${esc(roleRow[2])}" aria-label="Task for the agent"></textarea>
           <div class="orch-ctx-group">
@@ -1421,17 +1525,22 @@ function agents() {
         </div>
       </div>
       ${ready.length ? "" : "<small>No agent is set up yet: see README › Agents.</small>"}
-      <div class="cwd-pop glass" id="cwd-pop" hidden></div>
+      <div class="cwd-pop" id="cwd-pop" hidden></div>
     </form>
     <div class="orch-work ${orchRail ? "" : "rail-shut"} ${orchRail && orchRailMode === "float" ? "rail-float" : ""}" id="agents-body"></div>
   </div>`;
-  $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt(); };
+  // The task bar floats over the canvas (the ✦ button): it folds away once a task started (the prompt is cleared).
+  const ran = () => { if (!$("#run-prompt")?.value) deckShow(false); };
+  $("#run").onsubmit = (e) => { e.preventDefault(); runPrompt().then(ran); };
   $("#run-agent").onchange = () => { orchExtra.delete($("#run-agent").value); runOptions(); renderMultiChips(); };
   $("#run-model").onchange = () => runOptions(true);
   runOptions();
   renderMultiChips();
   loadTerminals();
-  $("#run-prompt").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt(); } };
+  $("#run-prompt").onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrompt().then(ran); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); deckShow(false); }
+  };
   agentsBody();
   orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); }, 2000);
   ambient(art("agents"));
@@ -1447,7 +1556,7 @@ function renderMultiChips() {
 }
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
 // before the terminal sees the key) without taking keys a shell or TUI uses.
-const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · B background · Z full screen · R reload · / this help · Alt+drag moves a card";
+const PANE_KEYS = "Right-click: the menu of a card or of the canvas · Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent · W close · F fit · B background · M map · Z full screen · R reload · / this help · Alt+drag moves a card";
 // Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen).
 // While a terminal or card has focus, Esc belongs to it (Keyboard Lock stops the browser from eating the first Esc);
 // clicking an empty spot on the canvas blurs the card so Esc leaves full screen.
@@ -1512,11 +1621,20 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keyup", (e) => {
   if (e.code === "Space") { isSpacePressed = false; $("#orch-canvas")?.classList.remove("space-pan"); }
 });
+// Windows fires contextmenu after the button comes up: on the menu that just opened, or on the card a right-drag ended
+// over. Neither should get a menu (the browser's, or the card's).
+let rightPanAt = 0;
+document.addEventListener("contextmenu", (e) => {
+  if (e.target.closest?.(".ctx-menu") || Date.now() - rightPanAt < 400) { e.preventDefault(); e.stopPropagation(); }
+}, true);
+// The empty canvas (and its hint, which covers it when there are no cards); not an icon in a button or a card.
+const onCanvasBg = (t, canvas) => t === canvas || t.id === "orch-plane" || t.classList?.contains("orch-links") || !!t.closest?.(".orch-empty");
 function bindCanvasInteractions(canvas) {
 
   canvas.addEventListener("pointerdown", (e) => {
-    const isBg = e.target === canvas || e.target.id === "orch-plane" || e.target.classList?.contains("orch-links") || e.target.tagName === "svg";
+    const isBg = onCanvasBg(e.target, canvas);
     if (isBg) blurCanvasFocus(e.shiftKey || e.metaKey || e.ctrlKey);
+    if (isBg) deckShow(false); // a click on the canvas folds the task bar away, like a popover
     if (orchMode !== "free" || orchMax) return;
     // Over a card the mouse belongs to it (a terminal's middle-click paste, right-click, selection): only the
     // background pans, with the middle or right button, the Pan tool or Space held.
@@ -1526,8 +1644,10 @@ function bindCanvasInteractions(canvas) {
       e.preventDefault();
       try { canvas.setPointerCapture(e.pointerId); } catch {}
       const startX = orchPanX, startY = orchPanY, x0 = e.clientX, y0 = e.clientY;
+      let moved = false;
       canvas.classList.add("panning");
       const movePan = (ev) => {
+        if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) > 4) moved = true;
         orchPanX = Math.round(startX + (ev.clientX - x0));
         orchPanY = Math.round(startY + (ev.clientY - y0));
         applyCanvasTransform();
@@ -1537,6 +1657,9 @@ function bindCanvasInteractions(canvas) {
         window.removeEventListener("pointerup", upPan);
         canvas.classList.remove("panning");
         saveCanvas();
+        // A right-click that didn't drag is a click: the canvas menu (here, not on contextmenu, which fires on the
+        // press on Linux and macOS, before we know whether it's a drag).
+        if (e.button === 2) { rightPanAt = Date.now(); if (!moved) canvasMenu(x0, y0); }
       };
       window.addEventListener("pointermove", movePan);
       window.addEventListener("pointerup", upPan);
@@ -1610,13 +1733,19 @@ function bindCanvasInteractions(canvas) {
     }
   });
 
+  // Right-click: a card's menu, or the canvas's (free canvas: opened on release, as right-drag pans). Text fields keep the
+  // browser's own menu (spelling, paste).
   canvas.addEventListener("contextmenu", (e) => {
-    if (orchMode === "free" && !orchMax && !e.target.closest(".orch-pane")) e.preventDefault(); // right-drag pans the background
+    if (e.target.closest("textarea:not(.xterm-helper-textarea), input")) return;
+    e.preventDefault();
+    const card = e.target.closest(".orch-pane");
+    if (card) paneMenu(card.dataset.key, e.clientX, e.clientY);
+    else if (orchMode !== "free" || orchMax) canvasMenu(e.clientX, e.clientY);
   });
 
   canvas.addEventListener("wheel", (e) => {
     if (orchMode !== "free" || orchMax) return;
-    const isBg = e.target === canvas || e.target.id === "orch-plane" || e.target.classList?.contains("orch-links") || e.target.tagName === "svg";
+    const isBg = onCanvasBg(e.target, canvas);
     // Like Maestri: the wheel (or a two-finger swipe) pans the background; Ctrl/Alt + wheel (or a pinch) zooms, over a
     // card too. A plain wheel over a card is the card's (a terminal scrolls back).
     const zoom = e.ctrlKey || e.metaKey || e.altKey;
@@ -1653,7 +1782,7 @@ function bindPaneDragResize(card, p) {
   const head = card.querySelector(".orch-head"), port = card.querySelector(".orch-port");
   if (head) {
     const startMove = (e) => {
-      if (orchMode !== "free" || orchMax || e.target.closest("button, a, select, input")) return;
+      if (orchMode !== "free" || orchMax || e.button !== 0 || e.target.closest("button, a, select, input")) return;
       e.preventDefault();
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
       const curKey = paneKey(p);
@@ -1672,7 +1801,7 @@ function bindPaneDragResize(card, p) {
         ? [...orchSelected].map((k) => orchPanes.find((x) => paneKey(x) === k)).filter(Boolean)
         : [p];
       targets.forEach(ensurePaneRect);
-      const startPositions = targets.map((tp) => ({
+      const startPositions = targets.filter((tp) => !tp.locked).map((tp) => ({
         p: tp,
         x: tp.x,
         y: tp.y,
@@ -1718,7 +1847,7 @@ function bindPaneDragResize(card, p) {
     r.className = `orch-resize ${c}`;
     card.appendChild(r);
     r.addEventListener("pointerdown", (e) => {
-      if (orchMode !== "free" || orchMax) return;
+      if (orchMode !== "free" || orchMax || p.locked) return;
       e.preventDefault(); e.stopPropagation();
       try { r.setPointerCapture(e.pointerId); } catch {}
       ensurePaneRect(p);
@@ -1815,11 +1944,6 @@ function agentsBody() {
   if (orchActive && !orchPanes.some((p) => paneKey(p) === orchActive)) orchActive = orchMode === "free" ? "" : (orchPanes[0] ? paneKey(orchPanes[0]) : "");
   if (!orchActive && orchMode !== "free" && orchPanes[0]) orchActive = paneKey(orchPanes[0]);
   if (orchMax && !orchPanes.some((p) => paneKey(p) === orchMax)) orchMax = "";
-  const dBtn = $("#orch-dir-btn");
-  if (dBtn) {
-    dBtn.hidden = !(orchMode === "tile" && orchPanes.length === 2 && !orchMax);
-    dBtn.innerHTML = icon(orchDir === "rows" ? "cols" : "split", 14);
-  }
   document.querySelectorAll("[data-act='orch-mode']").forEach((b) => b.classList.toggle("on", b.dataset.m === orchMode));
   if (!el.querySelector(".orch-canvas")) {
     el.innerHTML = `<div class="orch-fleet-wrap ${orchRailMode === "float" ? "float" : ""}" id="orch-fleet-wrap">
@@ -1842,11 +1966,21 @@ function agentsBody() {
       </div>
       <div class="orch-canvas" id="orch-canvas">
         <div class="orch-plane" id="orch-plane"></div>
-        <div class="orch-hud glass" id="orch-hud"></div>
-        <div class="orch-newmenu" id="orch-newmenu" hidden></div>
-        <div class="orch-newmenu orch-bgmenu" id="orch-bgmenu" hidden></div>
+        <nav class="cv-island cv-tl" aria-label="Canvas menu">
+          <button type="button" class="cv-tl-btn" data-act="cv-menu" title="Menu: pages, search, layout" aria-label="Menu">${icon("menu", 18)}</button>
+          <a class="cv-tl-btn cv-home" href="#/" title="Back to the Home page">${icon("home", 16)}<span>Home</span></a>
+        </nav>
+        <div class="cv-island orch-hud" id="orch-hud" role="toolbar" aria-label="Canvas tools"></div>
+        <div class="cv-island orch-hud cv-br" id="orch-hud-br" role="toolbar" aria-label="View"></div>
+        <div class="cv-island cv-map" id="orch-map" hidden>
+          <svg role="img" aria-label="Map of the canvas: click or drag to move the view"></svg>
+          <button type="button" class="cv-map-x" data-act="orch-map" title="Close the map (M)" aria-label="Close the map">${icon("x", 12)}</button>
+        </div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
+    magnify($(".cv-tl"), 0, true); magnify($("#orch-hud"), 10); magnify($("#orch-hud-br"), -10);
+    bindMap($("#orch-map"));
+    hoverMenu($('.cv-tl [data-act="cv-menu"]'), mainMenu);
   }
   const fleetBadge = $("#orch-fleet-badge"), fleetPillCnt = $("#orch-fleet-pill-cnt"), pill = el.querySelector(".orch-fleet-pill"), fleetEl = el.querySelector(".orch-fleet"), fleetWrap = $("#orch-fleet-wrap");
   if (fleetBadge) fleetBadge.textContent = counts.all;
@@ -2069,34 +2203,318 @@ async function retryTask(taskId, model, paneKeyStr, opts = {}) {
 }
 
 // Every card is a window: traffic lights (close · minimize · maximize), a centered title, actions on hover.
-const winHead = (key, title, sub, acts = "") => `<div class="win-lights">
+// A name the user gave the card (right-click › Rename) wins over the title it would show.
+const winHead = (key, title0, sub, acts = "", title = orchPanes.find((x) => paneKey(x) === key)?.name || title0) => `<div class="win-lights">
     <button type="button" class="wl close" data-act="orch-unpin" data-key="${esc(key)}" title="Close (Ctrl+Alt+W)" aria-label="Close"></button>
     <button type="button" class="wl min" data-act="orch-collapse" data-key="${esc(key)}" title="Minimize to the title bar" aria-label="Minimize"></button>
     <button type="button" class="wl max" data-act="orch-max" data-key="${esc(key)}" title="Maximize (Ctrl+Alt+Enter)" aria-label="Maximize"></button>
   </div><div class="win-title" title="${esc(title)}"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="orch-acts">${acts}</div>`;
 // A re-render while the user is selecting text in a card would wipe the selection: wait for the next tick.
 const selectingIn = (el) => { const s = getSelection(); return !!s && !s.isCollapsed && el.contains(s.anchorNode); };
-// The HUD: icons only (names and shortcuts in tooltips). Creating cards works in both layouts; the
-  // canvas-only tools (select/pan, arrange, fit, zoom) show on the free canvas.
+// The canvas chrome, Maestri-style: small islands floating over the canvas. Top centre, the tools (select/pan, new
+// agent, terminal, note, vault note, folder, task); bottom right, the view (background, fit, zoom, full screen);
+// top left, the menu. Names and shortcuts live in tooltips; everything else is in the right-click menus.
 function paintHud(hud, isFree) {
   if (!hud) return;
-  const b = (act, ic, tip, extra = "", on = false) => `<button type="button" class="hud-btn ${on ? "on" : ""}" data-act="${act}" ${extra} title="${tip}" aria-label="${tip}">${icon(ic, 14)}</button>`;
-  const full = b("canvas-full", "expand", document.body.classList.contains("canvas-full") ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", document.body.classList.contains("canvas-full"));
-  const make = b("orch-new", "plus", "New agent or shell (Ctrl+Alt+N opens your agent)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note");
-  const bgBtn = b("orch-bg-menu", "canvasBg", `Canvas background: ${bgEntry(orchBg)[1]} (B · Ctrl+Alt+B)`, `data-bg="${esc(orchBg)}"`, !($("#orch-bgmenu")?.hidden ?? true));
-  const hudHtml = !isFree ? `${make}<span class="orch-hud-sep"></span>${full}` : `${b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select")}${b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan")}
-      <span class="orch-hud-sep"></span>${make}<span class="orch-hud-sep"></span>
-      ${b("orch-arrange", "grid", "Arrange the windows")}${b("orch-fit", "max", "Fit everything in view (Ctrl+Alt+F)")}
-      <span class="orch-hud-sep"></span>
-      <button type="button" class="hud-btn" data-act="orch-zoom" data-d="-0.15" title="Zoom out" aria-label="Zoom out">−</button>
-      <button type="button" class="hud-btn hud-zoom" data-act="orch-zoom" data-d="0" id="orch-zoom-lbl" title="Back to 100%">${Math.round(orchZoom * 100)}%</button>
-      <button type="button" class="hud-btn" data-act="orch-zoom" data-d="0.15" title="Zoom in" aria-label="Zoom in">+</button>
-      <span class="orch-hud-sep"></span>${bgBtn}
-      <span class="orch-hud-sep"></span>${full}
-      <span class="hud-sel" id="orch-sel-cnt" ${orchSelected.size ? "" : "hidden"}>${orchSelected.size} selected</span>
-      <button type="button" class="hud-btn danger" data-act="orch-del-sel" id="orch-del-sel" title="Close the selected cards (Delete)" ${orchSelected.size ? "" : "hidden"}>${icon("trash", 14)}</button>`;
+  const b = (act, ic, tip, extra = "", on = false) => `<button type="button" class="hud-btn ${on ? "on" : ""}" data-act="${act}" ${extra} title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 16)}</button>`;
+  const sep = '<span class="orch-hud-sep"></span>', isFull = document.body.classList.contains("canvas-full");
+  const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
+  const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
+    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note")
+    + b("orch-vault-note", "book", "Open a vault note") + b("cwd-open", "folder", `Folder for new cards: ${cwdLabel(orchCwd)}`)
+    + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
+    // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
+    + (isFree ? "" : sep + b("orch-mode", "grid", "Canvas: free windows, pan and zoom", 'data-m="free"')
+      + (orchPanes.length === 2 && !orchMax ? b("orch-dir", orchDir === "rows" ? "cols" : "split", "Side by side / stacked") : "") + full);
+  // the selection shows from two cards up (one card is simply the card you clicked)
+  const view = `<span class="hud-sel" id="orch-sel-cnt" ${orchSelected.size > 1 ? "" : "hidden"}>${orchSelected.size} selected</span>
+    <button type="button" class="hud-btn danger" data-act="orch-del-sel" id="orch-del-sel" title="Close the selected cards (Delete)" aria-label="Close the selected cards" ${orchSelected.size > 1 ? "" : "hidden"}>${icon("trash", 16)}</button>
+    ${b("orch-bg-menu", "canvasBg", `Background: ${bgEntry(orchBg)[1]} (B)`)}${b("orch-map", "map", orchMapOpen ? "Hide the map (M)" : "Show the map (M)", "", orchMapOpen)}${b("orch-fit", "max", "Fit everything in view (Ctrl+Alt+F)")}${sep}
+    <button type="button" class="hud-btn" data-act="orch-zoom" data-d="-0.15" title="Zoom out" aria-label="Zoom out"><span>−</span></button>
+    <button type="button" class="hud-btn hud-zoom" data-act="orch-zoom" data-d="0" title="Back to 100%"><span id="orch-zoom-lbl">${Math.round(orchZoom * 100)}%</span></button>
+    <button type="button" class="hud-btn" data-act="orch-zoom" data-d="0.15" title="Zoom in" aria-label="Zoom in"><span>+</span></button>${sep}${full}`;
   // Rewritten only when it changes: a rewrite every tick drops clicks that straddle it.
-  if (hud.dataset.sig !== hudHtml) { hud.innerHTML = hudHtml; hud.dataset.sig = hudHtml; }
+  const put = (el, html) => { if (el && el.dataset.sig !== html) { el.innerHTML = html; el.dataset.sig = html; } };
+  put(hud, tools);
+  const br = $("#orch-hud-br");
+  put(br, isFree ? view : "");
+  if (br) br.hidden = !isFree;
+}
+// The task bar (agent, folder, role, model, a prompt for one or more agents) floats under the tools while it's open.
+function deckShow(on = !$("#run")?.classList.contains("show")) {
+  const deck = $("#run");
+  if (!deck || deck.classList.contains("show") === on) return;
+  deck.classList.toggle("show", on);
+  if (on) setTimeout(() => $("#run-prompt")?.focus(), 30);
+  paintHud($("#orch-hud"), orchMode === "free" && !orchMax);
+}
+
+// One menu for the canvas: right-click on a card or on the background, and the floating buttons. An item is
+// { label, ic, sw (a background swatch), kbd, on (checked), off (disabled), danger, run, sub: [items] }, or "-" for a
+// separator; falsy items are skipped, so a menu can list `cond && item`.
+let ctxEl = null, ctxFrom = null;
+function ctxClose() { ctxEl?.remove(); ctxEl = null; ctxFrom = null; }
+function ctxBuild(items) {
+  const box = document.createElement("div");
+  box.className = "ctx-menu"; box.setAttribute("role", "menu");
+  for (const it of items.filter(Boolean)) {
+    if (it === "-") { if (box.lastChild && !box.lastChild.classList.contains("ctx-sep")) box.insertAdjacentHTML("beforeend", '<div class="ctx-sep" role="separator"></div>'); continue; }
+    const b = document.createElement("button");
+    b.type = "button"; b.className = `ctx-item${it.danger ? " danger" : ""}`; b.disabled = !!it.off; b.setAttribute("role", "menuitem");
+    b.innerHTML = `<span class="ctx-ic">${it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
+    if (!it.sub) {
+      b.onclick = (e) => { e.stopPropagation(); ctxClose(); it.run?.(); };
+      box.appendChild(b);
+      continue;
+    }
+    const row = document.createElement("div"), sub = ctxBuild(it.sub);
+    row.className = "ctx-row"; sub.classList.add("ctx-sub");
+    row.append(b, sub);
+    // Opens on hover, or a click / Enter (touch, keyboard), beside its row: to the left when the right has no room,
+    // kept inside the window. Fixed, so a menu that scrolls (taller than the window) doesn't clip it.
+    const open = () => {
+      row.classList.add("open");
+      const r = row.getBoundingClientRect(), w = sub.offsetWidth, h = sub.offsetHeight;
+      sub.style.left = `${Math.round(r.right + w + 6 <= innerWidth ? r.right - 2 : Math.max(8, r.left - w + 2))}px`;
+      sub.style.top = `${Math.round(Math.max(8, Math.min(r.top - 5, innerHeight - h - 8)))}px`;
+    };
+    row.addEventListener("mouseenter", open);
+    row.addEventListener("mouseleave", () => row.classList.remove("open"));
+    b.onclick = (e) => { e.stopPropagation(); open(); sub.querySelector(".ctx-item:not(:disabled)")?.focus(); };
+    box.appendChild(row);
+  }
+  if (box.lastChild?.classList.contains("ctx-sep")) box.lastChild.remove();
+  return box;
+}
+function ctxMenu(x, y, items, from = null) {
+  ctxClose();
+  const m = ctxBuild(items);
+  if (!m.children.length) return;
+  document.body.appendChild(m);
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = `${Math.round(Math.max(8, Math.min(x, innerWidth - w - 8)))}px`;
+  m.style.top = `${Math.round(Math.max(8, y + h > innerHeight - 8 ? y - h : y))}px`;
+  ctxEl = m; ctxFrom = from;
+}
+// A floating button's menu opens under it (over it in the lower half of the screen); a second click closes it.
+function ctxAt(btn, items) {
+  if (ctxFrom === btn && ctxEl?.dataset.hover) return delete ctxEl.dataset.hover; // opened by hover: a click pins it
+  if (ctxFrom === btn) return ctxClose();
+  const r = btn.getBoundingClientRect();
+  ctxMenu(r.left, r.bottom + 6, items, btn);
+  if (ctxEl && r.top > innerHeight / 2) ctxEl.style.top = `${Math.round(Math.max(8, r.top - 6 - ctxEl.offsetHeight))}px`;
+}
+document.addEventListener("pointerdown", (e) => { if (ctxEl && !e.target.closest(".ctx-menu") && !ctxFrom?.contains(e.target)) ctxClose(); }, true);
+// A button whose menu also opens on hover (mouse): opened that way, it folds once the pointer has left both the button
+// and the menu for a moment; a click on the button pins it open like a clicked one.
+function hoverMenu(btn, open) {
+  if (!btn) return;
+  let t = 0;
+  const stay = () => clearTimeout(t);
+  const leave = () => { clearTimeout(t); t = setTimeout(() => { if (ctxFrom === btn && ctxEl?.dataset.hover) ctxClose(); }, 350); };
+  btn.addEventListener("pointerenter", (e) => {
+    if (e.pointerType !== "mouse") return;
+    stay();
+    if (ctxFrom === btn) return;
+    open(btn);
+    if (ctxFrom !== btn) return;
+    ctxEl.dataset.hover = "1";
+    ctxEl.addEventListener("pointerenter", stay);
+    ctxEl.addEventListener("pointerleave", leave);
+  });
+  btn.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") leave(); });
+}
+addEventListener("wheel", (e) => { if (ctxEl && !e.target.closest(".ctx-menu")) ctxClose(); }, { capture: true, passive: true });
+for (const ev of ["resize", "blur", "hashchange"]) addEventListener(ev, () => ctxClose());
+// Esc closes it; ↑/↓ walk its items (Enter runs one, or opens its submenu).
+document.addEventListener("keydown", (e) => {
+  if (!ctxEl) return;
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); ctxClose(); return; }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault(); e.stopPropagation();
+  const list = [...ctxEl.querySelectorAll(".ctx-item:not(:disabled)")].filter((b) => b.offsetParent);
+  const i = list.indexOf(document.activeElement);
+  list[(i + (e.key === "ArrowDown" ? 1 : -1) + list.length) % list.length]?.focus();
+}, true);
+
+// Where a right-click landed in canvas coordinates: a card made from the menu opens there (free canvas only).
+const canvasPt = (cx, cy) => {
+  const r = $("#orch-canvas")?.getBoundingClientRect();
+  return r && orchMode === "free" && !orchMax ? { x: (cx - r.left - orchPanX) / orchZoom, y: (cy - r.top - orchPanY) / orchZoom } : null;
+};
+const agentItems = (at) => [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => ({ label: r.name, ic: "agents", run: () => newAgentTerm(r.id, at) })),
+  "-", { label: "Shell", ic: "terminal", run: () => newTermPane(undefined, at) }];
+const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));
+const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
+  : p.kind === "sticky" ? (p.text || "").trim().split("\n")[0].slice(0, 40) || "Note"
+  : p.kind === "note" ? D.notes.find((n) => n.path === p.id)?.title || p.id
+  : p.kind === "task" ? String(S.tasks?.find((t) => t.id === p.id)?.prompt || "Task").slice(0, 40)
+  : S.background?.find((b) => b.key === p.id)?.title || "Session");
+const copyText = (t) => navigator.clipboard?.writeText(t).then(() => toast("Copied"), () => toast("The browser didn't allow copying"));
+function openVaultNotes() {
+  orchFilter = "notes"; agentsBody();
+  $("#orch-fleet-wrap")?.classList.add("open");
+  setTimeout(() => $("#orch-fq")?.focus(), 30);
+}
+function addSticky(at) {
+  const p = { kind: "sticky", id: String(++orchSeq), text: "" };
+  if (!addPane(p, at?.x, at?.y)) return;
+  saveCanvas();
+  setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-sticky-input`)?.focus(), 80);
+}
+// Copy card / Duplicate: what it takes to make the card again. A terminal starts fresh in the same folder, an agent
+// starts a new session of the same agent; notes, tasks and sessions are one card each, so they have none.
+let canvasClip = null;
+function paneSpec(p) {
+  if (p.kind === "sticky") return { kind: "sticky", text: p.text || "", w: p.w, h: p.h };
+  if (p.kind === "terminal") return { kind: "terminal", shell: p.shell || "", cwd: p.cwd || "", agent: p.run?.agent || "", fontSize: p.fontSize, w: p.w, h: p.h };
+  return null;
+}
+function placeSpec(s, at) {
+  if (!s) return;
+  const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
+    : { kind: "terminal", id: `term_${Date.now()}`, shell: s.shell, cwd: s.cwd, ...(S.runners?.find((r) => r.id === s.agent)?.tui ? { run: newTuiRun(s.agent) } : {}) };
+  Object.assign(p, { w: s.w, h: s.h }, s.fontSize ? { fontSize: s.fontSize } : {});
+  if (addPane(p, at?.x, at?.y)) { saveCanvas(); focusPane(paneKey(p), !!at); }
+}
+function toggleLink(a, b) {
+  const i = orchLinks.findIndex((l) => l.a === a && l.b === b);
+  if (i >= 0) orchLinks.splice(i, 1); else orchLinks.push({ a, b });
+  saveCanvas(); orchSigs.clear(); orchPaint(true);
+  toast(i >= 0 ? "Link removed" : "Linked: this card now goes along as context");
+}
+// Text size per terminal (d = +1 / -1 px, 0 = back to the Ghostty size).
+function termFont(p, d) {
+  const st = terms.get(p.id);
+  if (!st?.term) return;
+  if (d) p.fontSize = Math.max(8, Math.min(32, (p.fontSize || st.font0) + d)); else delete p.fontSize;
+  st.term.options.fontSize = p.fontSize || st.font0;
+  requestAnimationFrame(() => st.fit?.fit()); // the cell size is measured on the next frame
+  saveCanvas(); st.term.focus();
+}
+// Restart: the PTY goes and a new one starts in the same card (a shell starts over, an agent resumes its session).
+const restarting = new Set(); // pane ids whose old PTY is closing: no repaint mounts them until it's gone
+async function termRestart(p) {
+  restarting.add(p.id);
+  await termClose(p.id);
+  restarting.delete(p.id);
+  orchSigs.delete(paneKey(p)); orchPaint(true);
+}
+// Rename in place: the title turns into a field; Enter or a click away keeps it, Esc cancels, empty goes back.
+function renamePane(p) {
+  const key = paneKey(p), t = $(`.orch-pane[data-key="${CSS.escape(key)}"] .win-title`);
+  if (!t) return;
+  const inp = document.createElement("input");
+  inp.className = "win-rename"; inp.value = paneLabel(p); inp.setAttribute("aria-label", "Card name");
+  const v0 = inp.value; // unchanged = no name, so the title keeps following the shell, the agent or the note
+  t.replaceChildren(inp); t.classList.add("editing");
+  inp.focus(); inp.select();
+  let done = false;
+  const end = (save) => {
+    if (done) return;
+    done = true;
+    const v = inp.value.trim();
+    if (save && v !== v0) { if (v) p.name = v; else delete p.name; saveCanvas(); }
+    inp.remove(); t.classList.remove("editing"); orchSigs.delete(key); orchPaint(true);
+  };
+  inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") end(true); if (e.key === "Escape") end(false); };
+  inp.onblur = () => end(true);
+}
+function canvasMenu(cx, cy) {
+  const at = canvasPt(cx, cy), free = orchMode === "free" && !orchMax, any = orchPanes.length > 0;
+  ctxMenu(cx, cy, [
+    { label: "New agent", ic: "agents", sub: agentItems(at) },
+    { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => newTermPane(undefined, at) },
+    { label: "New note", ic: "notes", run: () => addSticky(at) },
+    { label: "Open a vault note…", ic: "book", run: openVaultNotes },
+    { label: "New task…", ic: "spark", run: () => deckShow(true) },
+    "-",
+    { label: "Paste card", ic: "paste", off: !canvasClip, run: () => placeSpec(canvasClip, at) },
+    free && { label: "Select all", ic: "select", off: !any, run: () => { orchPanes.forEach((p) => orchSelected.add(paneKey(p))); updateSelectionUI(); } },
+    "-",
+    free && { label: "Arrange windows", ic: "grid", off: !any, run: arrangeCanvasPanes },
+    free && { label: "Fit everything", ic: "max", kbd: "Ctrl+Alt+F", off: !any, run: () => { fitCanvasView(); saveCanvas(); } },
+    free && { label: "Zoom to 100%", ic: "search", run: () => ACTIONS["orch-zoom"]({ dataset: { d: "0" } }) },
+    free && { label: "Background", ic: "canvasBg", sub: bgItems() },
+    { label: orchMode === "free" ? "Switch to split" : "Switch to canvas", ic: orchMode === "free" ? "split" : "grid", run: () => ACTIONS["orch-mode"]({ dataset: { m: orchMode === "free" ? "tile" : "free" } }) },
+    { label: document.body.classList.contains("canvas-full") ? "Leave full screen" : "Full screen", ic: "expand", kbd: "Ctrl+Alt+Z", run: () => canvasFull() },
+    "-",
+    { label: "Keyboard shortcuts", run: () => toast(PANE_KEYS) },
+  ]);
+}
+function paneMenu(key, cx, cy) {
+  const p = orchPanes.find((x) => paneKey(x) === key);
+  if (!p) return;
+  const free = orchMode === "free" && !orchMax;
+  // Several cards selected, this one among them: the menu acts on all of them.
+  if (free && orchSelected.size > 1 && orchSelected.has(key)) {
+    const sel = orchPanes.filter((x) => orchSelected.has(paneKey(x))), locked = sel.every((x) => x.locked);
+    return ctxMenu(cx, cy, [
+      { label: locked ? `Unlock ${sel.length} cards` : `Lock ${sel.length} cards in place`, ic: "lock", run: () => { sel.forEach((x) => { x.locked = !locked; }); saveCanvas(); orchPaint(); } },
+      "-",
+      { label: `Close ${sel.length} cards`, ic: "trash", danger: true, kbd: "Delete", run: deleteSelectedPanes },
+    ]);
+  }
+  const term = p.kind === "terminal" ? terms.get(p.id)?.term : null, card = $(`.orch-pane[data-key="${CSS.escape(key)}"]`);
+  const ws = getSelection(), picked = term ? term.getSelection() : ws && !ws.isCollapsed && card?.contains(ws.anchorNode) ? ws.toString() : "";
+  const others = orchPanes.filter((x) => x !== p), spec = paneSpec(p);
+  ctxMenu(cx, cy, [
+    term && { label: "Copy", ic: "copy", kbd: "Ctrl+Shift+C", off: !picked, run: () => copyText(picked) },
+    term && { label: "Paste", ic: "paste", kbd: "Ctrl+Shift+V", run: () => navigator.clipboard?.readText().then((t) => { if (t) term.paste(t); term.focus(); }, () => toast("The browser didn't allow reading the clipboard")) },
+    term && { label: "Select all", ic: "select", run: () => term.selectAll() },
+    term && { label: "Clear screen", ic: "clear", run: () => { term.clear(); term.focus(); } },
+    !term && picked && { label: "Copy", ic: "copy", run: () => copyText(picked) },
+    p.kind === "sticky" && { label: "Copy text", ic: "copy", off: !p.text, run: () => copyText(p.text) },
+    p.kind === "note" && { label: "Open in the reader", ic: "book", run: () => { location.hash = `#/n/${encodeURIComponent(p.id)}`; } },
+    (p.kind === "task" || p.kind === "agent") && { label: "Open its page", ic: "ext", run: () => { location.hash = `#/${p.kind === "task" ? "t" : "a"}/${encodeURIComponent(p.id)}`; } },
+    "-",
+    term && { label: "Text size", ic: "type", sub: [
+      { label: "Larger", run: () => termFont(p, 1) },
+      { label: "Smaller", run: () => termFont(p, -1) },
+      { label: "Default", off: !p.fontSize, run: () => termFont(p, 0) },
+    ] },
+    term && { label: p.run ? "Restart (resumes the session)" : "Restart", ic: "reload", run: () => termRestart(p) },
+    p.kind === "terminal" && !p.run && { label: "Open in desktop terminal", ic: "ext", run: () => ACTIONS["term-launch-app"]({ dataset: { key } }) },
+    p.cwd && { label: "Copy folder path", ic: "folder", run: () => copyText(p.cwd) },
+    "-",
+    { label: "Rename…", ic: "edit", run: () => renamePane(p) },
+    free && { label: p.collapsed ? "Expand" : "Minimize", ic: "fold", run: () => ACTIONS["orch-collapse"]({ dataset: { key } }) },
+    { label: orchMax === key ? "Restore" : "Maximize", ic: "max", kbd: "Ctrl+Alt+Enter", run: () => ACTIONS["orch-max"]({ dataset: { key } }) },
+    free && others.length && { label: "Give context to", ic: "link", sub: others.map((o) => ({ label: paneLabel(o), on: orchLinks.some((l) => l.a === key && l.b === paneKey(o)), run: () => toggleLink(key, paneKey(o)) })) },
+    orchLinks.some((l) => l.a === key || l.b === key) && { label: "Remove its links", ic: "gap", run: () => { orchLinks = orchLinks.filter((l) => l.a !== key && l.b !== key); saveCanvas(); orchSigs.clear(); orchPaint(true); } },
+    "-",
+    spec && { label: "Duplicate", ic: "copy", run: () => placeSpec(spec, free ? { x: p.x + 70, y: p.y + 46 } : null) },
+    spec && { label: "Copy card", ic: "copy", run: () => { canvasClip = spec; toast("Card copied: right-click the canvas › Paste card"); } },
+    free && { label: p.locked ? "Unlock" : "Lock in place", ic: "lock", run: () => { p.locked = !p.locked; saveCanvas(); orchPaint(); } },
+    "-",
+    { label: "Close", ic: "trash", danger: true, kbd: "Ctrl+Alt+W", run: () => ACTIONS["orch-unpin"]({ dataset: { key } }) },
+  ]);
+}
+// The ☰ button: everything the page header and the dock held, now that the canvas takes the whole screen.
+function mainMenu(btn) {
+  const go = (h) => () => { location.hash = h; };
+  ctxAt(btn, [
+    { label: "Sessions and notes", ic: "cols", run: () => { orchFilter = "all"; agentsBody(); $("#orch-fleet-wrap")?.classList.add("open"); } },
+    { label: "New task…", ic: "spark", run: () => deckShow(true) },
+    { label: "Search", ic: "search", kbd: "Ctrl+K", run: cmdkOpen },
+    { label: "Capture", ic: "inbox", kbd: "C", run: () => ACTIONS.capture() },
+    "-",
+    { label: "Home", ic: "home", run: go("#/") },
+    { label: "Notes", ic: "notes", run: go("#/notes") },
+    { label: "Review", ic: "review", run: go("#/review") },
+    { label: "Graph", ic: "graph", run: go("#/graph") },
+    { label: "Services", ic: "services", run: go("#/services") },
+    ...(S.services || []).filter((s) => s.dock).map((s) => ({ label: s.name, ic: s.icon || "services", run: go(`#/s/${s.id}`) })),
+    { label: "Settings", ic: "settings", run: go("#/settings") },
+    "-",
+    { label: "Layout", ic: orchMode === "free" ? "grid" : "split", sub: [
+      { label: "Canvas", ic: "grid", on: orchMode === "free", run: () => ACTIONS["orch-mode"]({ dataset: { m: "free" } }) },
+      { label: "Split", ic: "split", on: orchMode === "tile", run: () => ACTIONS["orch-mode"]({ dataset: { m: "tile" } }) },
+    ] },
+    { label: orchRailMode === "float" ? "Keep the Fleet open" : "Let the Fleet float", ic: "pin", run: () => ACTIONS["orch-rail-mode"]() },
+    { label: document.body.classList.contains("canvas-full") ? "Leave full screen" : "Full screen", ic: "expand", kbd: "Ctrl+Alt+Z", run: () => canvasFull() },
+    { label: "Keyboard shortcuts", run: () => toast(PANE_KEYS) },
+  ]);
 }
 async function orchPaint(force) {
   reapTerms();
@@ -2106,7 +2524,7 @@ async function orchPaint(force) {
     orchSigs.clear();
     canvas.className = `orch-canvas ${orchMode === "free" ? `free tool-${orchTool}` : "tiled"}`; // keeps its size and dot grid
     plane.className = `orch-plane ${orchMode === "free" ? "free" : "single"}`;
-    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Open an agent with <b>+</b> (or Ctrl+Alt+N), or a session from the Fleet.</p></div>`;
+    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Right-click anywhere to open an agent, a terminal or a note.<br><small>Or use the tools above, or a session from the Fleet.</small></p></div>`;
     applyCanvasTransform();
     paintHud(hud, orchMode === "free");
     drawLinks();
@@ -2184,7 +2602,9 @@ async function orchPaint(force) {
     card.classList.toggle("active", key === orchActive);
     card.classList.toggle("collapsed", !!p.collapsed && isFree);
     card.classList.toggle("selected", orchSelected.has(key));
+    card.classList.toggle("locked", !!p.locked && isFree);
     card.dataset.kind = p.kind;
+    if (card.querySelector(".win-rename")) return; // being renamed: a repaint would wipe the field
     if (isFree) {
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`;
       card.style.width = `${p.w}px`; card.style.height = `${p.h}px`;
@@ -2240,11 +2660,13 @@ async function orchPaint(force) {
       return;
     }
     if (p.kind === "terminal") {
-      const sig = `terminal|${p.id}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
-      if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
-      orchSigs.set(key, sig);
+      if (restarting.has(p.id)) return;
       const cwd = p.cwd || orchCwd || "";
       const title = terms.get(p.id)?.title || (p.run ? runnerName(p.run.agent || p.agent) || "Agent" : cwdLabel(cwd));
+      // the title is in the signature: the slim title bar follows what the shell or the agent names the window
+      const sig = `terminal|${p.id}|${title}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
+      orchSigs.set(key, sig);
       card.querySelector(".orch-head").innerHTML = winHead(key, title, "", `${paneBtns}
           ${p.run ? "" : `<button type="button" class="btn orch-icon-btn" data-act="term-launch-app" data-key="${esc(key)}" title="Open this folder in your desktop terminal">${icon("ext", 12)}</button>`}`);
       if (termBg) card.style.setProperty("--win-bg", termBg); // the window is the terminal: its Ghostty theme color
@@ -2889,16 +3311,26 @@ $("#cmdk-list").addEventListener("pointermove", (e) => {
   if (row && Number(row.dataset.i) !== ck.sel) { ck.sel = Number(row.dataset.i); $("#cmdk-list").querySelectorAll(".ck-row").forEach((r) => r.classList.toggle("on", r === row)); }
 });
 
-// Dock: icons swell toward the pointer, macOS-style (after the Floating Dock on 21st.dev). Mouse only; off with reduced motion.
+// Icons swell toward the pointer, macOS-style (after the Floating Dock on 21st.dev): the dock and the canvas's floating
+// bars. lift: how far the nearest button moves at full swell (negative = up, for a bar at the bottom; positive = down,
+// for one at the top). inside: only what the buttons show (icon, label) swells, within their outline (the ☰ / Home pill).
+// Mouse only; off with reduced motion. Bound once per bar: its buttons can be redrawn freely.
 const calm = matchMedia("(prefers-reduced-motion: reduce)");
-$("#dock").addEventListener("pointermove", (e) => {
-  if (calm.matches || e.pointerType !== "mouse") return;
-  for (const el of $("#dock").querySelectorAll("a, button")) {
-    const r = el.getBoundingClientRect(), s = 1 + .3 * Math.max(0, 1 - Math.abs(e.clientX - (r.left + r.width / 2)) / 110);
-    el.style.transform = s > 1.001 ? `translateY(${(-(s - 1) * 26).toFixed(1)}px) scale(${s.toFixed(3)})` : "";
-  }
-});
-$("#dock").addEventListener("pointerleave", () => { for (const el of $("#dock").querySelectorAll("a, button")) el.style.transform = ""; });
+function magnify(bar, lift = -26, inside = false) {
+  if (!bar) return;
+  const parts = () => [...bar.querySelectorAll("a, button")].flatMap((el) => (inside ? [...el.children] : [el]));
+  bar.addEventListener("pointermove", (e) => {
+    if (calm.matches || e.pointerType !== "mouse") return;
+    for (const el of bar.querySelectorAll("a, button")) {
+      const r = el.getBoundingClientRect(), k = Math.max(0, 1 - Math.abs(e.clientX - (r.left + r.width / 2)) / 110);
+      if (inside) { for (const c of el.children) c.style.transform = k > .005 ? `scale(${(1 + .22 * k).toFixed(3)})` : ""; continue; }
+      const s = 1 + .3 * k;
+      el.style.transform = s > 1.001 ? `translateY(${(lift * (s - 1)).toFixed(1)}px) scale(${s.toFixed(3)})` : "";
+    }
+  });
+  bar.addEventListener("pointerleave", () => { for (const el of parts()) el.style.transform = ""; });
+}
+magnify($("#dock"));
 
 const PAGES = { "": [home, "Home"], notes: [notes, "Notes"], n: [reader, "Note"], w: [wiki, "Note"], review: [review, "Review"], graph: [graph, "Graph"], agents: [agents, "Agents"], services: [services, "Services"], images: [imagesPage, "Images"], settings: [settingsPage, "Settings"], s: [service, "Service"], a: [agentPage, "Agent"], t: [taskPage, "Task"] };
 function route() { const [, pg = "", ...r] = location.hash.split("/"); return { pg: PAGES[pg] ? pg : "", arg: decodeURIComponent(r.join("/")) }; }
@@ -2914,6 +3346,7 @@ function render() {
   document.body.classList.toggle("home", !pg);
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
   document.body.classList.toggle("agents", pg === "agents" || pg === "a" || pg === "t");
+  document.body.classList.toggle("canvas-page", pg === "agents"); // the canvas takes the whole screen: no header, no dock
   if (pg !== "s") $("#svcbar").innerHTML = "";
   main.style.animation = "none"; main.offsetHeight; main.style.animation = "";
   topBar();
@@ -3040,7 +3473,11 @@ const ACTIONS = {
     document.querySelectorAll('[data-act="orch-deck-toggle"]').forEach((b) => b.classList.toggle("on", orchDeckOpen));
     if (!orchDeckOpen && el) el.blur();
   },
-  "term-canvas": (el) => { $("#orch-newmenu")?.setAttribute("hidden", ""); newTermPane(el?.dataset?.cwd); },
+  "term-canvas": (el) => newTermPane(el?.dataset?.cwd),
+  "cv-menu": (el) => mainMenu(el),
+  "orch-deck-show": () => deckShow(),
+  "orch-vault-note": () => openVaultNotes(),
+  "orch-map": () => { orchMapOpen = !orchMapOpen; saveCanvas(); drawMap(); paintHud($("#orch-hud"), orchMode === "free" && !orchMax); },
   "term-new-pane": () => newTermPane(),
   "term-launch-app": async (el) => {
     const key = el.dataset.key;
@@ -3072,25 +3509,8 @@ const ACTIONS = {
     agentsBody();
     if (orchMode === "free" && orchPanX === 24 && orchPanY === CANVAS_TOP && orchZoom === 1) fitCanvasView();
   },
-  "orch-new": (el) => {
-    if (el?.dataset?.agent) return newAgentTerm(el.dataset.agent);
-    $("#orch-bgmenu")?.setAttribute("hidden", "");
-    const menu = $("#orch-newmenu");
-    if (!menu) return newAgentTerm(defaultAgent());
-    if (!menu.hidden) return menu.setAttribute("hidden", "");
-    menu.innerHTML = [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => `<button type="button" data-act="orch-new" data-agent="${esc(r.id)}">${icon("agents", 14)} ${esc(r.name)}</button>`),
-      `<button type="button" data-act="term-canvas">${icon("terminal", 14)} Shell</button>`].join("");
-    menu.removeAttribute("hidden");
-  },
-  "orch-bg-menu": () => {
-    $("#orch-newmenu")?.setAttribute("hidden", "");
-    const menu = $("#orch-bgmenu");
-    if (!menu) return cycleCanvasBg();
-    if (!menu.hidden) { menu.setAttribute("hidden", ""); paintHud($("#orch-hud"), orchMode === "free" && !orchMax); return; }
-    menu.innerHTML = CANVAS_BGS.map(([k, l, d]) => `<button type="button" class="${orchBg === k ? "on" : ""}" data-act="orch-bg" data-bg="${k}"><span class="bg-sw" data-sw="${k}"></span><span>${l}</span><small>${d}</small></button>`).join("");
-    menu.removeAttribute("hidden");
-    paintHud($("#orch-hud"), orchMode === "free" && !orchMax);
-  },
+  "orch-new": (el) => (el?.dataset?.agent ? newAgentTerm(el.dataset.agent) : ctxAt(el, agentItems())),
+  "orch-bg-menu": (el) => ctxAt(el, bgItems()),
   "orch-bg": (el) => setCanvasBg(el.dataset.bg || el.dataset.v),
   "set-canvas-bg": (el) => { setCanvasBg(el.dataset.v); if (route().pg === "settings") settingsPage(); },
   "orch-dir": () => {
@@ -3173,12 +3593,7 @@ const ACTIONS = {
     saveCanvas();
     toast("Note added to canvas");
   },
-  "orch-add-sticky": () => {
-    const id = String(++orchSeq);
-    addPane({ kind: "sticky", id, text: "" });
-    saveCanvas();
-    toast("Sticky note added");
-  },
+  "orch-add-sticky": () => addSticky(),
   "orch-tab": (el) => { orchFilter = el.dataset.k; agentsBody(); },
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
@@ -3343,11 +3758,6 @@ document.addEventListener("click", (e) => {
   }
   if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
   if (!e.target.closest("#orch-fleet-wrap")) $("#orch-fleet-wrap")?.classList.remove("open");
-  if (!e.target.closest('#orch-newmenu, [data-act="orch-new"]')) $("#orch-newmenu")?.setAttribute("hidden", "");
-  if (!e.target.closest('#orch-bgmenu, [data-act="orch-bg-menu"]')) {
-    const bgm = $("#orch-bgmenu");
-    if (bgm && !bgm.hidden) { bgm.setAttribute("hidden", ""); paintHud($("#orch-hud"), orchMode === "free" && !orchMax); }
-  }
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const res = e.target.closest(".ev.result");
@@ -3402,6 +3812,7 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "h") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "pan" } }); return; }
     if (e.key === "s") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "select" } }); return; }
     if (e.key === "b" || e.key === "B") { e.preventDefault(); cycleCanvasBg(); return; }
+    if (e.key === "m" || e.key === "M") { e.preventDefault(); ACTIONS["orch-map"](); return; }
   }
   if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }
   if (e.key === "v" || e.key === "V") { e.preventDefault(); ACTIONS["ui-toggle"](); }
