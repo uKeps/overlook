@@ -2360,19 +2360,22 @@ html[data-ui="minimal"] .crumb b::before { content: ""; width: 9px; height: 9px;
 html[data-ui="minimal"] .crumb span:first-of-type { opacity: .5; }
 html[data-ui="minimal"] #ui-btn { display: none; }
 html[data-ui="minimal"] .top .btn.glass { border: 0; background: none; box-shadow: none; }
+/* the search sits in the true middle of the page (not between the name and the clock), a hairline box like the Notes field */
+html[data-ui="minimal"] .top { position: relative; }
 html[data-ui="minimal"] .top .search-btn.btn.glass {
-  order: -1; margin: 0 auto; width: min(340px, 34vw); height: 36px; padding: 0 12px; justify-content: flex-start; gap: 10px;
-  border-radius: 10px; background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--faint); font-weight: 400; transition: background .15s, color .15s;
+  position: absolute; left: 50%; transform: translateX(-50%); width: min(380px, 36vw); height: 34px; padding: 0 6px 0 13px;
+  justify-content: flex-start; gap: 10px; border: 1px solid var(--line); border-radius: 10px; background: transparent;
+  color: var(--faint); font-weight: 400; transition: border-color .15s, background .15s, color .15s;
 }
-html[data-ui="minimal"] .top .search-btn.btn.glass:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--muted); }
-html[data-ui="minimal"] .top .search-btn kbd { margin-left: auto; border: 0; }
+html[data-ui="minimal"] .top .search-btn.btn.glass:hover { border-color: color-mix(in srgb, var(--ink) 16%, transparent); background: color-mix(in srgb, var(--ink) 3%, transparent); color: var(--muted); }
+html[data-ui="minimal"] .top .search-btn kbd { margin-left: auto; display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 6px; font-size: 11px; }
 html[data-ui="minimal"] .top .crumb { order: -2; }
 html[data-ui="minimal"] .clock span { font: 500 12.5px var(--body); color: var(--faint); }
 html[data-ui="minimal"] .top .cap-btn { height: 34px; padding: 0 10px; gap: 7px; border-radius: 9px; color: var(--muted); }
 html[data-ui="minimal"] .top .cap-btn svg { color: var(--accent); }
 html[data-ui="minimal"] .top .cap-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 html[data-ui="minimal"] .top .cap-btn kbd { border: 0; }
-@media (max-width: 640px) { html[data-ui="minimal"] .top .search-btn.btn.glass { width: auto; margin: 0 0 0 auto; } html[data-ui="minimal"] .top .cap-btn span { display: none; } }
+@media (max-width: 640px) { html[data-ui="minimal"] .top .search-btn.btn.glass { position: static; transform: none; width: auto; margin: 0 0 0 auto; padding: 0 8px; border: 0; } html[data-ui="minimal"] .top .search-btn kbd { display: none; } html[data-ui="minimal"] .top .cap-btn span { display: none; } }
 /* the week strip: compact days on the left, the month on the right, no box (not even the theme's glass band) */
 html[data-ui="minimal"] .cal.glass { background: transparent; }
 html[data-ui="minimal"] .cal:not(.month) .cal-grid { flex: 0 1 auto; gap: 2px; }
