@@ -33,7 +33,9 @@ vault (or set it in **Settings**) and restart. Run it from the repo folder: Bun 
 - **Calendar** strip: events from `Calendar.md` (`- 2026-11-03 14:00 · Exam`) and agent tasks scheduled to run
   once or on a repeat.
 - **Notes**, a reader with backlinks, a graph, full-text search (`/`) and quick capture (`C`) into the daily note.
-- **Review**: spaced repetition from `review_on` / `interval` in the frontmatter.
+- **Review**: what you ask the vault comes back as a card in 1, 2, 4… days until you know it. Asking on Notes, the
+  agent that answers adds the card to `Review.md`; "Save as a note" adds one for the new note. One card at a time
+  waits on the Home; the page lists them all. Remove what is useless or out of date; known ones leave on their own.
 - **Agents**: give a task to any CLI or API agent and watch it run. On the canvas, every card is a window: real
   terminals, agent TUIs (Claude Code, Antigravity), stickies and notes. Wire two terminal cards and the programs
   in them can talk with `overlook peers`, `overlook send <card> "…"` and `overlook read <card>`. Ctrl+Alt+/
@@ -47,15 +49,16 @@ The default layout, which the demo vault follows:
 | Path | Used for |
 | --- | --- |
 | `1 Inbox/` … `8 …/` | Notes: folders starting with a digit 1–8 and a space (`7 …`, drawings, is skipped) |
-| `*.md` at the root | Notes too, except `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `README.md`, `Calendar.md` and `Tasks.md` |
+| `*.md` at the root | Notes too, except `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `README.md`, `Calendar.md`, `Tasks.md` and `Review.md` |
 | `Tasks.md` | The to-do list, in the Obsidian Tasks format (`- [ ] what 🔁 every week 📅 2026-11-12`): edit it there too |
+| `Review.md` | The review cards, one line each: `- question :: answer [[note]]`; Overlook adds the schedule in a comment |
 | `2 Daily/YYYY-MM-DD.md` | Daily note: `## Focus` feeds the Home, captures land in `## Captured` |
 | `9 Agent/Log.md`, `Findings.md` | Optional agent log and gotchas |
 | `AGENTS.md` | Optional instructions for agents; with it, the Morning and Inbox routines show up |
 
-Frontmatter, all optional: `type` (concept, project, daily), `area`, `tags`, `review_on`, `interval`,
-`confidence`, `updated`. A `> [!abstract]` callout right after the title is the note's summary.
-`VAULT_LANG=pt` reads the Portuguese names instead (`2 Diário`, `## Foco de hoje`, `Tarefas.md`, `revisar_em`…).
+Frontmatter, all optional: `type` (concept, project, daily), `area`, `tags`, `confidence`, `updated`
+(a note still carrying the older `review_on` / `interval` shows up as a review card). A `> [!abstract]` callout right after the title is the note's summary.
+`VAULT_LANG=pt` reads the Portuguese names instead (`2 Diário`, `## Foco de hoje`, `Tarefas.md`, `Revisão.md`…).
 
 Laid out another way? A `vault.json` next to `agents.json` renames what you need. Every key is optional:
 

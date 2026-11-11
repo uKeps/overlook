@@ -157,6 +157,21 @@ test("review doubles the interval and writes the frontmatter", async () => {
   expect(readFileSync(`${VAULT}/3 Concepts/HTTP.md`, "utf8")).toContain(`review_on: ${r.review_on}`);
 });
 
+test("review cards: a note becomes a card in Review.md, and old review fields show up as cards", async () => {
+  expect((await (await fetch(`${BASE}/api`)).json()).cards).toContainEqual(expect.objectContaining({ id: "n:3 Concepts/REST.md", q: "What is REST?", a: "[[REST]]" }));
+  const { card, cards } = await (await post("/api/cards/add", { path: "3 Concepts/HTTP caching.md" })).json();
+  expect(card).toMatchObject({ q: "What is HTTP caching?", a: "[[HTTP caching]]", interval: 1 });
+  expect(cards.map((c: any) => c.id)).toContain(card.id);
+  expect(readFileSync(`${VAULT}/Review.md`, "utf8")).toContain("- What is HTTP caching? :: [[HTTP caching]] <!-- next ");
+  expect((await post("/api/cards/add", { path: "../etc/passwd" })).status).toBe(400);
+  expect((await (await post("/api/cards/answer", { id: card.id, remembered: true })).json()).card.interval).toBe(2);
+  expect((await (await post("/api/cards/remove", { id: card.id })).json()).cards.map((c: any) => c.id)).not.toContain(card.id);
+  expect((await (await fetch(`${BASE}/api`)).json()).notes.map((n: any) => n.path)).not.toContain("Review.md"); // not a note
+  // an old one: removing it takes the fields out of the note's frontmatter
+  await post("/api/cards/remove", { id: "n:3 Concepts/REST.md" });
+  expect(readFileSync(`${VAULT}/3 Concepts/REST.md`, "utf8")).not.toContain("review_on");
+});
+
 test("delete moves a note to .trash, never a path outside the notes", async () => {
   writeFileSync(`${VAULT}/1 Inbox/Throwaway.md`, "# one");
   expect((await post("/api/trash", { path: "1 Inbox/Throwaway.md" })).status).toBe(200);
@@ -951,7 +966,7 @@ test("note agent endpoint validates topic boundaries, layouts in pt and en, cust
   expect(noteEnRes.status).toBe(200);
   const noteEnTask = await finished((await noteEnRes.json()).id);
   expect(noteEnTask.prompt).toBe(
-    'Create a note in the vault about: "Event-Driven Architecture". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.'
+    'Create a note in the vault about: "Event-Driven Architecture". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Then add one line at the end of Review.md at the vault root (create it if missing), so I review what I learned: `- <the question this note answers> :: <the answer in one sentence> [[<the note\'s name>]]`. Reply in one line.'
   );
 
   // 4. Portuguese prompt layout when vaultLang is pt
@@ -960,7 +975,7 @@ test("note agent endpoint validates topic boundaries, layouts in pt and en, cust
   expect(notePtRes.status).toBe(200);
   const notePtTask = await finished((await notePtRes.json()).id);
   expect(notePtTask.prompt).toBe(
-    'Crie uma nota no vault sobre: "Arquitetura Orientada a Eventos". Siga o AGENTS.md rigorosamente: decida a pasta correta pelo AGENTS.md, use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.'
+    'Crie uma nota no vault sobre: "Arquitetura Orientada a Eventos". Siga o AGENTS.md rigorosamente: decida a pasta correta pelo AGENTS.md, use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Depois acrescente uma linha no fim de Revisão.md na raiz do vault (crie se não existir), para eu revisar o que aprendi: `- <a pergunta que a nota responde> :: <a resposta em uma frase> [[<nome da nota>]]`. Responda em uma linha.'
   );
 
   // 5. Jail / Security: Prompt injection attempt with shell chars, quotes, and newlines

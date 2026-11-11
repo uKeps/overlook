@@ -11,6 +11,7 @@ import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
+import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
 import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
@@ -28,24 +29,24 @@ let VAULT = basename(ROOT);
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
   en: {
-    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md", tasks: "Tasks.md",
+    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md", tasks: "Tasks.md", cards: "Review.md",
     keys: { type: "type", review: "review_on", interval: "interval", confidence: "confidence", updated: "updated" }, types: {} as Record<string, string>,
     routines: { morning: "Follow the morning routine in the Routines section of AGENTS.md.", inbox: "Follow the inbox routine in the Routines section of AGENTS.md." },
-    memoTitle: "Voice memo",
+    memoTitle: "Voice memo", whatIs: (t: string) => `What is ${t}?`,
     memo: (title: string, file: string, text: string) => `---\ntags: [voice-memo]\n---\n\n# ${title}\n\n> [!abstract]\n> Automatic transcript of "${file}", not processed yet.\n\n${text}\n`,
     voice: (path: string) => `Process ${path}: the automatic transcript of a voice memo. File it following AGENTS.md, as anything I hand you to note: fix obvious recognition errors, never add what wasn't said.`,
     voiceFailed: (name: string, err: string) => `Voice memo "${name}" was not noted: ${err}`,
-    noteAgent: (topic: string) => `Create a note in the vault about: "${topic}". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.`,
+    noteAgent: (topic: string, cards: string) => `Create a note in the vault about: "${topic}". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Then add one line at the end of ${cards} at the vault root (create it if missing), so I review what I learned: \`- <the question this note answers> :: <the answer in one sentence> [[<the note's name>]]\`. Reply in one line.`,
   },
   pt: {
-    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md", tasks: "Tarefas.md",
+    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md", tasks: "Tarefas.md", cards: "Revisão.md",
     keys: { type: "tipo", review: "revisar_em", interval: "intervalo", confidence: "confianca", updated: "atualizado" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
-    memoTitle: "Memo de voz",
+    memoTitle: "Memo de voz", whatIs: (t: string) => `O que é ${t}?`,
     memo: (title: string, file: string, text: string) => `---\ntags: [memo-de-voz]\n---\n\n# ${title}\n\n> [!abstract] Em uma frase\n> Transcrição automática de "${file}", ainda não processada.\n\n${text}\n`,
     voice: (path: string) => `Processe ${path}: é a transcrição automática de um memo de voz. Siga a rotina inbox do AGENTS.md só para este arquivo: corrija erros óbvios de reconhecimento, nunca acrescente o que não foi dito.`,
     voiceFailed: (name: string, err: string) => `Memo de voz "${name}" não foi anotado: ${err}`,
-    noteAgent: (topic: string) => `Crie uma nota no vault sobre: "${topic}". Siga o AGENTS.md rigorosamente: decida a pasta correta pelo AGENTS.md, use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Responda em uma linha.`,
+    noteAgent: (topic: string, cards: string) => `Crie uma nota no vault sobre: "${topic}". Siga o AGENTS.md rigorosamente: decida a pasta correta pelo AGENTS.md, use frontmatter (tipo, area, tags), callout [!abstract] Em uma frase, corpo objetivo, rodapé com wikilinks e registre em 9 Agente/Log.md. Depois acrescente uma linha no fim de ${cards} na raiz do vault (crie se não existir), para eu revisar o que aprendi: \`- <a pergunta que a nota responde> :: <a resposta em uma frase> [[<nome da nota>]]\`. Responda em uma linha.`,
   },
 };
 let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
@@ -54,7 +55,7 @@ let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
 type Layout = (typeof LAYOUTS)["en"];
 function layout(): Layout {
   const base = LAYOUTS[vaultLang], own = (() => { try { return JSON.parse(readFileSync(`${import.meta.dir}/vault.json`, "utf8")) ?? {}; } catch { return {}; } })(), l: any = { ...base };
-  for (const k of ["inbox", "daily", "focus", "captured", "log", "findings", "calendar", "tasks"] as const) if (typeof own[k] === "string" && own[k].trim()) l[k] = own[k].trim().replace(/^\/+|\/+$/g, "");
+  for (const k of ["inbox", "daily", "focus", "captured", "log", "findings", "calendar", "tasks", "cards"] as const) if (typeof own[k] === "string" && own[k].trim()) l[k] = own[k].trim().replace(/^\/+|\/+$/g, "");
   if (Array.isArray(own.folders) && own.folders.every((f: unknown) => typeof f === "string")) l.folders = own.folders;
   for (const k of ["keys", "types"] as const) if (own[k] && typeof own[k] === "object") l[k] = { ...base[k], ...own[k] };
   return l;
@@ -89,7 +90,7 @@ async function notes(withBody = false): Promise<Note[]> {
     paths.push(path);
   }
   for await (const path of new Bun.Glob("*.md").scan(ROOT))
-    if (!/^(AGENTS|CLAUDE|GEMINI|README)\.md$/i.test(path) && path !== L.calendar && path !== L.tasks && !path.startsWith("_")) paths.push(path);
+    if (!/^(AGENTS|CLAUDE|GEMINI|README)\.md$/i.test(path) && path !== L.calendar && path !== L.tasks && path !== L.cards && !path.startsWith("_")) paths.push(path);
   // In parallel: on a vault under WSL's /mnt/c every file access is a round trip, and one by one they took ~0.8 s.
   const read = await Promise.all(paths.map(async (path) => {
     try {
@@ -172,6 +173,13 @@ async function focusDone(text: string) {
 }
 // Tasks.md (Tarefas.md) at the vault root: the to-do list, see todos.ts.
 const TODOS = () => `${ROOT}/${L.tasks}`;
+// Review.md (Revisão.md) at the vault root: the review cards, see cards.ts. Notes still carrying the old review fields in
+// their frontmatter (review_on, interval) show up as cards too, id "n:<path>", answered and removed in the note itself.
+const CARDS = () => `${ROOT}/${L.cards}`;
+async function allCards(ns?: Note[]): Promise<(Card & { path?: string })[]> {
+  const old = (ns ?? (await notes())).filter((n) => n.review_on).map((n) => ({ id: `n:${n.path}`, q: L.whatIs(n.title), a: `[[${basename(n.path, ".md")}]]`, next: n.review_on, interval: n.interval, added: "", path: n.path }));
+  return [...(await readCards(CARDS())), ...old];
+}
 // Calendar.md at the vault root: one line per item, `- YYYY-MM-DD HH:MM · what` (the time is optional). Plain Markdown,
 // so Obsidian shows it and agents can read it. Overlook keeps the lines sorted and leaves everything else alone.
 type CalItem = { date: string; time: string; title: string };
@@ -218,24 +226,27 @@ async function state() {
     findings: await bullets(L.findings),
     calendar: await calendar(),
     todos: await readTodos(TODOS()),
+    cards: await allCards(ns), cardsFile: L.cards,
     ...(({ pins, mode, cards }) => ({ pins, pinMode: mode, pinCards: cards }))(shownImages()),
   };
 }
 
-// Spaced review: remembered doubles the interval, forgot resets it to 1.
-async function review(path: string, remembered: boolean) {
+// Spaced review of a note that carries the old review fields: remembered doubles the interval, forgot resets it to 1;
+// null (removed) or remembered past RETIRE days takes the fields out, as a card leaves Review.md.
+async function review(path: string, remembered: boolean | null) {
   const note = (await notes()).find((n) => n.path === path); // known paths only: no ../
   if (!note) return null;
-  const interval = remembered ? Math.max(1, note.interval * 2) : 1;
+  const interval = remembered ? Math.max(1, note.interval * 2) : 1, drop = remembered === null || (remembered && interval > RETIRE);
   const review_on = today(interval);
   const f = Bun.file(`${ROOT}/${path}`);
   const txt = (await f.text()).replace(/^---\n([\s\S]*?)\n---/, (_, fm: string) => {
+    if (drop) return `---\n${fm.split("\n").filter((l) => !l.startsWith(`${L.keys.review}:`) && !l.startsWith(`${L.keys.interval}:`)).join("\n")}\n---`;
     const set = (s: string, k: string, v: string | number) =>
       new RegExp(`^${k}:`, "m").test(s) ? s.replace(new RegExp(`^${k}:.*$`, "m"), `${k}: ${v}`) : `${s}\n${k}: ${v}`;
     return `---\n${set(set(fm, L.keys.review, review_on), L.keys.interval, interval)}\n---`;
   });
   await Bun.write(f, txt);
-  return { review_on, interval };
+  return drop ? { retired: true } : { review_on, interval };
 }
 
 // Delete = move to the vault's .trash/ (Obsidian's "local" trash), so it can be restored from there.
@@ -822,7 +833,7 @@ if (cmd === "today") {
   console.log(`today: ${e.today} · daily note: ${e.focus ? "exists" : "missing"}`);
   list("focus", e.focus ?? []);
   list("captured", e.captured ?? []);
-  list("review", e.notes.filter((n) => n.review_on && n.review_on <= e.today).map((n) => `${n.review_on} ${n.path}`));
+  list("review", e.cards.filter((c) => !c.next || c.next <= e.today).map((c) => `${c.next || "new"} ${c.q}`));
   list("inbox", e.notes.filter((n) => n.folder === L.inbox).map((n) => n.path));
   list("gaps", e.missing.map((v) => `${v.n}× ${v.target}`));
   list("projects", e.notes.filter((n) => n.type === "project").map((n) => `${n.path} · ${n.summary}`));
@@ -895,7 +906,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/note/agent") {
       const topic = typeof b.topic === "string" ? b.topic.trim() : "";
       if (!topic || topic.length > 2000) return new Response("topic must be 1 to 2000 characters", { status: 400 });
-      const prompt = L.noteAgent(topic);
+      const prompt = L.noteAgent(topic, L.cards);
       return started(runTask(ROOT, import.meta.dir, str(b.agent) || defaultAgent(import.meta.dir), prompt, { model: str(b.model), effort: str(b.effort) }));
     }
     if (p === "/api/voice") return !process.env.TRANSCRIBE ? new Response("set TRANSCRIBE in .env", { status: 400 }) : typeof b.audio === "string" && b.audio ? (voice(b, process.env.TRANSCRIBE), json({ ok: true })) : new Response("missing audio", { status: 400 });
@@ -912,6 +923,18 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
+    // Review cards (Review.md): every change answers with the whole list too. A note's path makes a "What is X?" card.
+    if (p === "/api/cards/add" || p === "/api/cards/answer" || p === "/api/cards/remove") {
+      const id = String(b.id ?? ""), old = id.startsWith("n:") ? id.slice(2) : "";
+      let r: unknown;
+      if (p === "/api/cards/add") {
+        const n = typeof b.path === "string" ? (await notes()).find((x) => x.path === b.path) : null;
+        if (b.path !== undefined && !n) return new Response("no such note", { status: 400 });
+        r = await (n ? addCard(CARDS(), L.whatIs(n.title), `[[${basename(n.path, ".md")}]]`, today()) : addCard(CARDS(), b.q, b.a, today()));
+      } else if (old) r = (await review(old, p === "/api/cards/remove" ? null : !!b.remembered)) ?? "that note is gone: reload";
+      else r = p === "/api/cards/answer" ? await answerCard(CARDS(), id, !!b.remembered, today()) : (await removeCard(CARDS(), id)) || "that card is gone: reload";
+      return typeof r === "string" ? new Response(r, { status: 400 }) : json({ card: r, cards: await allCards() });
+    }
     // To-dos (Tasks.md): every change answers with the whole list, so the page just redraws it.
     if (p === "/api/focus/done") return typeof b.text === "string" && (await focusDone(b.text)) ? json({ focus: await section(L.focus) }) : new Response("not in today's focus", { status: 400 });
     if (p === "/api/todos/parse") return json(parseTask(String(b.text ?? "").slice(0, 400), today()));
