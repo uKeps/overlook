@@ -636,55 +636,105 @@ function tiles() {
 
 // ---------------------------------------------------------------- Notes
 let filter = "", query = "";
-// filter: "" = the overview (recent notes and the folders as collections), "*" = every note, else one folder.
+// Notes has two jobs before browsing: ask the vault (an agent answers from the notes, and looks it up when they don't have
+// it) and save what you learned (a link or a few lines become a note, written by an agent). Below, what's alive in the
+// vault: projects, notes linked but never written, one to rediscover, the collections. A collection opens the grid.
+// filter: "" = that overview, "*" = every note, "@project" = the projects, else one folder.
 function notes() {
   const count = {};
   for (const n of D.notes) count[n.folder] = (count[n.folder] || 0) + 1;
-  main.innerHTML = `<div class="nt-head"><div class="nt-title"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p></div>
-      <label class="nt-search glass">${icon("search", 18)}<input id="search" placeholder="Search titles and text" value="${esc(query)}" autocomplete="off" spellcheck="false" aria-label="Search notes"></label></div>
-    <div class="filters">${[["", "Overview", ""], ["*", "All", D.notes.length], ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])]
-      .map(([k, v, c]) => `<button class="fchip ${filter === k ? "on" : ""}" data-act="filter" data-k="${esc(k)}" ${k && k !== "*" ? `style="--c: ${folderColor(k)}"` : ""}>${esc(v)}${c === "" ? "" : `<small>${c}</small>`}</button>`).join("")}</div>
+  const chips = [["", "Overview", ""], ["*", "All", D.notes.length], ...(filter === "@project" ? [["@project", "Projects", D.notes.filter((n) => n.type === "project").length]] : []),
+    ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])];
+  main.innerHTML = `<div class="nt-head"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p></div>
+    <div class="nt-ask">
+      <textarea id="search" rows="1" placeholder="Ask the vault, or paste something you learned" autocomplete="off" spellcheck="false" aria-label="Ask the vault or search notes">${esc(query)}</textarea>
+      <div class="nt-ask-acts" hidden>
+        <button type="button" class="btn peach" data-act="vault-ask" title="An agent answers from your notes (and looks it up when they don't have it)">Ask the vault</button>
+        <button type="button" class="btn glass" data-act="vault-save" title="An agent writes it into the vault as a note">Save as a note</button>
+        <small>Enter asks · Shift+Enter for a new line</small>
+      </div>
+      <div class="nt-found" id="nt-found"></div>
+    </div>
+    ${filter ? `<div class="filters">${chips.map(([k, v, c]) => `<button class="fchip ${filter === k ? "on" : ""}" data-act="filter" data-k="${esc(k)}" ${k && !"*@".includes(k[0]) ? `style="--c: ${folderColor(k)}"` : ""}>${esc(v)}${c === "" ? "" : `<small>${c}</small>`}</button>`).join("")}</div>` : ""}
     <div id="nt-overview"></div><div class="grid" id="note-grid"></div><div id="text-hits"></div>`;
+  const box = $("#search");
+  box.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ACTIONS["vault-ask"](); } };
   grid();
-  if (matchMedia("(pointer: fine)").matches) $("#search").focus(); // the page is for finding: type right away
+  if (matchMedia("(pointer: fine)").matches) box.focus(); // the page is for asking: type right away
   ambient(art("notes"));
 }
 function notesOverview() {
-  const recent = D.notes.filter((n) => n.type !== "daily").sort((a, b) => b.mtime - a.mtime).slice(0, 6);
+  const projects = D.notes.filter((n) => n.type === "project").sort((a, b) => b.mtime - a.mtime);
+  const gaps = (D.missing || []).slice(0, 4);
+  // one old concept out of the review cycle, a different one each day
+  const pool = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 8);
+  const old = pool.length ? pool[hash(D.today) % pool.length] : null;
   const by = {};
-  for (const n of D.notes) (by[n.folder] ||= []).push(n);
-  const shelves = Object.keys(by).sort((a, b) => by[b].length - by[a].length).map((f) => `<button type="button" class="nt-shelf glass" data-act="filter" data-k="${esc(f)}" style="--c: ${folderColor(f)}">
-      <span class="nt-shelf-top"><b>${esc(folderLabel(f))}</b><small>${by[f].length}</small></span>
-      <span class="nt-shelf-list">${by[f].slice().sort((a, b) => b.mtime - a.mtime).slice(0, 3).map((n) => `<span>${esc(n.title)}</span>`).join("")}</span>
-    </button>`).join("");
-  return `<h3 class="hm-h">Recently touched</h3><div class="grid">${recent.map(noteCard).join("")}</div>
-    <h3 class="hm-h">Collections</h3><div class="nt-shelves">${shelves}</div>`;
+  for (const n of D.notes) by[n.folder] = (by[n.folder] || 0) + 1;
+  const side = (gaps.length ? `<section><h4>Missing notes <span>linked, never written</span></h4>
+      ${gaps.map((g) => `<div class="nt-gap"><a href="#/w/${encodeURIComponent(g.target)}" title="See who links it"><b>${esc(g.target)}</b><span>linked ${g.n}×</span></a>
+        <button type="button" data-act="vault-write" data-t="${esc(g.target)}" data-n="${g.n}" title="An agent writes it from the notes that link it">Write it</button></div>`).join("")}</section>` : "")
+    + (old ? `<section class="nt-redo" style="--c: ${folderColor(old.folder)}"><h4>Rediscover</h4><a href="${noteHref(old.path)}"><b>${esc(old.title)}</b></a>
+      <p>${esc(plain(old.summary) || "Out of the review cycle, untouched for a while.")}</p>
+      <div><a href="${noteHref(old.path)}">Reread ${icon("r", 12)}</a><button type="button" data-act="enroll" data-p="${esc(old.path)}">Add to review</button></div></section>` : "");
+  return `<div class="nt-alive ${side ? "" : "solo"}">
+      ${projects.length ? `<section><h4>Projects <a href="#/notes" data-act="filter" data-k="@project">All ${projects.length} ${icon("r", 11)}</a></h4>
+        ${projects.slice(0, 5).map((n) => `<a class="nt-proj" href="${noteHref(n.path)}"><span><b>${esc(n.title)}</b><small>${esc(plain(n.summary) || "No summary yet.")}</small></span><time>${esc(ago(n.mtime))}</time></a>`).join("")}</section>` : ""}
+      ${side ? `<div class="nt-side">${side}</div>` : ""}
+    </div>
+    <section class="nt-cols"><h4>Collections <a href="#/notes" data-act="filter" data-k="*">All ${D.notes.length} ${icon("r", 11)}</a></h4>
+      <div class="nt-colrow">${Object.keys(by).sort((a, b) => by[b] - by[a]).map((f) => `<button type="button" class="nt-col" data-act="filter" data-k="${esc(f)}" style="--c: ${folderColor(f)}"><i></i>${esc(folderLabel(f))}<small>${by[f]}</small></button>`).join("")}</div></section>`;
 }
-// Words a question carries that say nothing about the note ("o que é AWB", "what is AWB").
-const STOP = new Set(["o", "a", "os", "as", "que", "e", "de", "do", "da", "what", "is", "the", "of"]);
+// Words a question carries that say nothing about the note ("o que é AWB", "what is AWB", "quando a gente cobra").
+const STOP = new Set(["o", "a", "os", "as", "que", "e", "é", "de", "do", "da", "dos", "das", "um", "uma", "em", "no", "na", "para", "pra", "com", "por", "como", "quando", "qual", "quais", "onde", "porque", "gente", "what", "is", "the", "of", "an", "how", "when", "why", "which", "where", "do", "does", "we", "to", "in", "on", "for"]);
 let textTimer = 0;
+const hitRow = (n, line = "") => `<a class="nt-hit" href="${noteHref(n.path)}" style="--c: ${folderColor(n.folder)}"><i></i><b>${esc(n.title)}</b><small>${esc(folderLabel(n.folder))}${line ? ` · ${esc(line)}` : n.summary ? ` · ${esc(plain(n.summary))}` : ""}</small></a>`;
 function grid() {
   const q = fold(query).trim(), terms = q.split(/\s+/).filter((t) => t && !STOP.has(t));
-  const ov = $("#nt-overview"), overview = !filter && !q;
-  if (ov) ov.innerHTML = overview ? notesOverview() : "";
-  if (overview) { $("#note-grid").innerHTML = ""; $("#text-hits").innerHTML = ""; clearTimeout(textTimer); return; }
+  const acts = $(".nt-ask-acts"), box = $("#search");
+  if (acts) acts.hidden = !query.trim();
+  if (box) { box.style.height = "auto"; box.style.height = `${box.scrollHeight}px`; }
+  clearTimeout(textTimer);
+  if (!filter) return askMatches(q, terms);
+  $("#nt-found").innerHTML = "";
   const weight = (n) => (!q ? 0 : fold(n.title).startsWith(terms[0] || q) ? 0 : fold(n.title).includes(terms[0] || q) ? 1 : 2);
-  const ns = D.notes.filter((n) => (!filter || filter === "*" || n.folder === filter) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
+  const ns = D.notes.filter((n) => (filter === "*" || (filter === "@project" ? n.type === "project" : n.folder === filter)) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
     .sort((a, b) => weight(a) - weight(b) || b.mtime - a.mtime);
   $("#note-grid").innerHTML = ns.map(noteCard).join("") || `<p class="empty">No title matches "${esc(query)}".</p>`;
   // Then the text of the notes, a beat after typing stops.
-  const box = $("#text-hits");
-  clearTimeout(textTimer);
-  if (!box) return;
-  box.innerHTML = "";
+  const hitsBox = $("#text-hits");
+  if (!hitsBox) return;
+  hitsBox.innerHTML = "";
   if (terms.join("").length < 3) return;
-  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => !filter || filter === "*" || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
+  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => filter === "*" || filter === "@project" || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
   textTimer = setTimeout(async () => {
     const hits = (await api(`/api/search?q=${encodeURIComponent(terms.join(" "))}`).catch(() => [])).filter((h) => !shown.has(h.path) && inFolder(h.path));
     if (fold(query).trim() !== q || !$("#text-hits")) return;
     $("#text-hits").innerHTML = hits.length
-      ? `<h3>In the text</h3><div class="list glass">${hits.map((h) => `<a class="row" href="${noteHref(h.path)}"><span class="t">${esc(h.title)}<small>${esc(h.line)}</small></span></a>`).join("")}</div>`
-      : ns.length ? "" : `<p class="empty">Not in the text either. <button class="btn glass" data-act="capture">Capture it as a question</button></p>`;
+      ? `<h3>In the text</h3><div class="list glass">${hits.map((h) => `<a class="row" href="${noteHref(h.path)}"><span class="t">${esc(h.title)}<small>${esc(h.line)}</small></span></a>`).join("")}</div>` : "";
+  }, 250);
+}
+// The overview while you type: the notes that already talk about it, inside the box (a question matches on any of its
+// words, the most words first, titles ahead), then lines from the text; "See all" opens the grid.
+function askMatches(q, terms) {
+  $("#note-grid").innerHTML = ""; $("#text-hits").innerHTML = "";
+  const ov = $("#nt-overview"), found = $("#nt-found");
+  if (ov && (!q || !ov.innerHTML)) ov.innerHTML = notesOverview();
+  if (!found) return;
+  const words = terms.filter((t) => t.length > 2);
+  if (!words.length) { found.innerHTML = ""; return; }
+  const score = (n) => { const t = fold(n.title), rest = fold(`${n.summary} ${n.tags.join(" ")}`); return words.reduce((s, w) => s + (t.includes(w) ? 3 : rest.includes(w) ? 1 : 0), 0); };
+  const top = D.notes.map((n) => [n, score(n)]).filter(([, sc]) => sc > 0).sort((a, b) => b[1] - a[1] || b[0].mtime - a[0].mtime).slice(0, 5).map(([n]) => n);
+  const paint = (lines = []) => {
+    found.innerHTML = top.length || lines.length ? `<h5>Already in the vault</h5>${top.map((n) => hitRow(n)).join("")}${lines.join("")}
+      <button type="button" class="nt-all" data-act="filter" data-k="*">See every match ${icon("r", 11)}</button>` : "";
+  };
+  paint();
+  const shown = new Set(top.map((n) => n.path));
+  textTimer = setTimeout(async () => {
+    const hits = (await api(`/api/search?q=${encodeURIComponent(words.join(" "))}`).catch(() => [])).filter((h) => !shown.has(h.path)).slice(0, 3);
+    if (fold(query).trim() !== q || !$("#nt-found")) return;
+    paint(hits.map((h) => hitRow(D.notes.find((n) => n.path === h.path) || { path: h.path, title: h.title, folder: "", summary: "" }, h.line)));
   }, 250);
 }
 
@@ -3683,6 +3733,29 @@ const ACTIONS = {
   "orch-deck-show": () => deckShow(),
   "orch-vault-note": () => openVaultNotes(),
   "note-ask": (el) => askAgent(el.dataset.p),
+  // Ask the vault: an agent on the canvas answers from the notes, says which, and looks it up when they don't have it.
+  "vault-ask": () => {
+    const q = query.trim();
+    if (!q) return $("#search")?.focus();
+    agentOnCanvas(`My question: ${q}\n\nAnswer it from this vault's notes first: search them (titles and text) and cite the ones you used as [[links]]. If the vault doesn't have it, say so, look it up, answer, and ask me whether to save what you found as a note (following AGENTS.md). Answer in the language of my question.`);
+  },
+  // Save as a note: a link or a few lines (what you just learned) become a note, filed by an agent following AGENTS.md.
+  "vault-save": async () => {
+    const q = query.trim();
+    if (!q) return $("#search")?.focus();
+    try {
+      const r = await api("/api/note/agent", { topic: q });
+      query = ""; if (route().pg === "notes") notes();
+      toast(`An agent is writing the note · <a href="#/t/${esc(r.id)}">See it</a>`);
+    } catch (e) { toast(e.message); }
+  },
+  // Write a missing note: an agent writes it from the notes that already link it.
+  "vault-write": async (el) => {
+    try {
+      const r = await api("/api/note/agent", { topic: `${el.dataset.t}: the vault links [[${el.dataset.t}]] ${el.dataset.n} times but the note doesn't exist yet. Read the notes that link it first, then write it from what they say` });
+      toast(`An agent is writing "${esc(el.dataset.t)}" · <a href="#/t/${esc(r.id)}">See it</a>`);
+    } catch (e) { toast(e.message); }
+  },
   "note-canvas": (el) => noteToCanvas(el.dataset.p),
   "focus-done": async (el) => {
     el.classList.add("ticking");
