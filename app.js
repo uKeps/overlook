@@ -47,6 +47,7 @@ const I = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   terminal: '<polyline points="4 17 10 12 4 7"/><path d="M12 19h8"/>',
+  canvasBg: '<circle cx="6" cy="6" r="1.3"/><circle cx="12" cy="6" r="1.3"/><circle cx="18" cy="6" r="1.3"/><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/><circle cx="6" cy="18" r="1.3"/><circle cx="12" cy="18" r="1.3"/><circle cx="18" cy="18" r="1.3"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
 
@@ -712,13 +713,22 @@ const rekey = (from, to) => { for (const l of orchLinks) { if (l.a === from) l.a
 const cwdLabel = (c) => (c ? shortCwd(c) : `Vault (${D?.vault || "vault"})`);
 
 const CANVAS_TOP = 52; // the strip at the top of the canvas where the floating Fleet pill and the canvas HUD sit
-let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "tile", orchDir = "cols", orchRatio = 50,
+const CANVAS_BGS = [
+  ["dots", "Dots", "Classic dot matrix", 22],
+  ["sparse", "Calm", "Wide soft dots", 44],
+  ["grid", "Grid", "Fine hairline grid", 32],
+  ["plain", "Solid", "Clean matte surface", 0],
+  ["ambient", "Ambient", "Translucent glass", 0],
+];
+const VALID_BGS = new Set(CANVAS_BGS.map(([k]) => k));
+const bgEntry = (k) => CANVAS_BGS.find(([id]) => id === k) || CANVAS_BGS[0];
+let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "tile", orchDir = "cols", orchRatio = 50, orchBg = "dots",
   orchPanX = 24, orchPanY = CANVAS_TOP, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
   orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
 let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdData = null, cwdPaneKey = "";
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
-const CANVAS_KEY = "overlook.canvas", PANE_MIME = "text/x-overlook-pane";
+const CANVAS_KEY = "overlook.canvas", CANVAS_BG_KEY = "overlook.canvas-bg", PANE_MIME = "text/x-overlook-pane";
 const DISMISSED_KEY = "overlook:dismissed-sessions";
 let dismissedSessions = (() => {
   try { return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
@@ -733,6 +743,8 @@ function saveRailMode() {
   try { localStorage.setItem("overlook.rail-mode", orchRailMode); } catch {}
 }
 try {
+  const savedBg = localStorage.getItem(CANVAS_BG_KEY);
+  if (savedBg && VALID_BGS.has(savedBg)) orchBg = savedBg;
   const c = JSON.parse(localStorage.getItem(CANVAS_KEY) || "null");
   if (c) {
     orchPanes = c.panes || [];
@@ -743,6 +755,7 @@ try {
     orchZoom = c.zoom || 1;
     orchSeq = c.seq || 1;
     if (c.railMode) orchRailMode = c.railMode;
+    if (c.bg && VALID_BGS.has(c.bg)) orchBg = c.bg;
     // Where you were: the focused and maximized card, the split direction and divider.
     orchActive = c.active || ""; orchMax = c.max || "";
     if (c.dir) orchDir = c.dir;
@@ -767,7 +780,23 @@ function syncWires(force) {
 const termName = (p) => (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
 function saveCanvas() {
   syncWires();
-  try { localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio })); } catch {}
+  try {
+    localStorage.setItem(CANVAS_BG_KEY, orchBg);
+    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, bg: orchBg, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio }));
+  } catch {}
+}
+function setCanvasBg(v, silent = false) {
+  orchBg = VALID_BGS.has(v) ? v : "dots";
+  saveCanvas();
+  applyCanvasTransform();
+  $("#orch-bgmenu")?.setAttribute("hidden", "");
+  paintHud($("#orch-hud"), orchMode === "free" && !orchMax);
+  if (!silent) toast(`Canvas background: ${bgEntry(orchBg)[1]}`);
+}
+function cycleCanvasBg() {
+  const idx = CANVAS_BGS.findIndex(([k]) => k === orchBg);
+  const next = CANVAS_BGS[(idx + 1) % CANVAS_BGS.length][0];
+  setCanvasBg(next);
 }
 // Canvas terminal panes: xterm.js (the terminal of VS Code) on a real PTY (/ws/pty), in the user's Ghostty colors and font.
 // p.run picks what the PTY runs: { task } / { key } resumes an agent session's TUI, { agent, prompt } starts one, none = a shell.
@@ -1165,12 +1194,34 @@ function fitCanvasView() {
   applyCanvasTransform();
 }
 function applyCanvasTransform() {
-  const plane = $("#orch-plane"), zLbl = $("#orch-zoom-lbl");
-  if (plane) plane.style.transform = orchMode === "free" && !orchMax ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
+  const plane = $("#orch-plane"), zLbl = $("#orch-zoom-lbl"), canvas = $("#orch-canvas");
+  const free = orchMode === "free" && !orchMax;
+  if (plane) plane.style.transform = free ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
   plane?.style.setProperty("--z", orchZoom);
-  // The dot grid moves and scales with the plane, so the canvas reads as one infinite surface.
-  const canvas = $("#orch-canvas"), free = orchMode === "free" && !orchMax;
-  if (canvas) { canvas.style.backgroundPosition = free ? `${orchPanX}px ${orchPanY}px` : ""; canvas.style.backgroundSize = free ? `${22 * orchZoom}px ${22 * orchZoom}px` : ""; }
+  // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
+  // low zoom levels (>16px on-screen period) free of moiré shimmer or dot crowding.
+  if (canvas) {
+    const [bgId, , , baseStep] = bgEntry(orchBg);
+    canvas.dataset.bg = bgId;
+    if (free && baseStep > 0) {
+      let step = baseStep;
+      while (step * orchZoom < 16) step *= 2;
+      const px = Math.round(step * orchZoom * 100) / 100;
+      const lod = orchZoom < 0.85 ? Math.max(0.42, Math.min(1, (orchZoom - 0.1) / 0.75)) : 1;
+      const pos = `${orchPanX}px ${orchPanY}px`, sz = `${px}px ${px}px`;
+      canvas.style.setProperty("--bg-pos", pos);
+      canvas.style.setProperty("--bg-size", sz);
+      canvas.style.setProperty("--bg-lod", lod.toFixed(2));
+      canvas.style.backgroundPosition = pos;
+      canvas.style.backgroundSize = sz;
+    } else {
+      canvas.style.removeProperty("--bg-pos");
+      canvas.style.removeProperty("--bg-size");
+      canvas.style.removeProperty("--bg-lod");
+      canvas.style.backgroundPosition = "";
+      canvas.style.backgroundSize = "";
+    }
+  }
   if (zLbl) zLbl.textContent = `${Math.round(orchZoom * 100)}%`;
 }
 // Room for one more card (split: 6, canvas: 18): the oldest viewer card goes, never a terminal or a sticky.
@@ -1385,7 +1436,7 @@ function renderMultiChips() {
 }
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
 // before the terminal sees the key) without taking keys a shell or TUI uses.
-const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · Z full screen · R reload · / this help · Alt+drag moves a card";
+const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · B background · Z full screen · R reload · / this help · Alt+drag moves a card";
 // Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen); Esc leaves.
 function canvasFull(on = !document.body.classList.contains("canvas-full")) {
   document.body.classList.toggle("canvas-full", on);
@@ -1405,6 +1456,7 @@ window.addEventListener("keydown", (e) => {
     KeyN: () => newAgentTerm(defaultAgent()),
     KeyW: () => orchActive && ACTIONS["orch-unpin"]({ dataset: { key: orchActive } }),
     KeyF: () => { if (orchMode === "free") { fitCanvasView(); saveCanvas(); } },
+    KeyB: () => { if (orchMode === "free") cycleCanvasBg(); },
     KeyZ: () => canvasFull(),
     KeyR: () => location.reload(),
     Slash: () => toast(PANE_KEYS),
@@ -1756,6 +1808,7 @@ function agentsBody() {
         <div class="orch-plane" id="orch-plane"></div>
         <div class="orch-hud glass" id="orch-hud"></div>
         <div class="orch-newmenu" id="orch-newmenu" hidden></div>
+        <div class="orch-newmenu orch-bgmenu" id="orch-bgmenu" hidden></div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
   }
@@ -1994,6 +2047,7 @@ function paintHud(hud, isFree) {
   const b = (act, ic, tip, extra = "", on = false) => `<button type="button" class="hud-btn ${on ? "on" : ""}" data-act="${act}" ${extra} title="${tip}" aria-label="${tip}">${icon(ic, 14)}</button>`;
   const full = b("canvas-full", "expand", document.body.classList.contains("canvas-full") ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", document.body.classList.contains("canvas-full"));
   const make = b("orch-new", "plus", "New agent or shell (Ctrl+Alt+N opens your agent)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note");
+  const bgBtn = b("orch-bg-menu", "canvasBg", `Canvas background: ${bgEntry(orchBg)[1]} (B · Ctrl+Alt+B)`, `data-bg="${esc(orchBg)}"`, !($("#orch-bgmenu")?.hidden ?? true));
   const hudHtml = !isFree ? `${make}<span class="orch-hud-sep"></span>${full}` : `${b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select")}${b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan")}
       <span class="orch-hud-sep"></span>${make}<span class="orch-hud-sep"></span>
       ${b("orch-arrange", "grid", "Arrange the windows")}${b("orch-fit", "max", "Fit everything in view (Ctrl+Alt+F)")}
@@ -2001,6 +2055,7 @@ function paintHud(hud, isFree) {
       <button type="button" class="hud-btn" data-act="orch-zoom" data-d="-0.15" title="Zoom out" aria-label="Zoom out">−</button>
       <button type="button" class="hud-btn hud-zoom" data-act="orch-zoom" data-d="0" id="orch-zoom-lbl" title="Back to 100%">${Math.round(orchZoom * 100)}%</button>
       <button type="button" class="hud-btn" data-act="orch-zoom" data-d="0.15" title="Zoom in" aria-label="Zoom in">+</button>
+      <span class="orch-hud-sep"></span>${bgBtn}
       <span class="orch-hud-sep"></span>${full}
       <span class="hud-sel" id="orch-sel-cnt" ${orchSelected.size ? "" : "hidden"}>${orchSelected.size} selected</span>
       <button type="button" class="hud-btn danger" data-act="orch-del-sel" id="orch-del-sel" title="Close the selected cards (Delete)" ${orchSelected.size ? "" : "hidden"}>${icon("trash", 14)}</button>`;
@@ -2016,6 +2071,7 @@ async function orchPaint(force) {
     canvas.className = `orch-canvas ${orchMode === "free" ? `free tool-${orchTool}` : "tiled"}`; // keeps its size and dot grid
     plane.className = `orch-plane ${orchMode === "free" ? "free" : "single"}`;
     plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Open an agent with <b>+</b> (or Ctrl+Alt+N), or a session from the Fleet.</p></div>`;
+    applyCanvasTransform();
     paintHud(hud, orchMode === "free");
     drawLinks();
     return;
@@ -2605,6 +2661,9 @@ async function settingsPage() {
       <div class="img-set glass"><b>Card art</b><small>Your images, animated ascii scenes, or images when you have them.</small>
         <div class="seg" role="radiogroup">${[["auto", "Auto"], ["images", "Images"], ["ascii", "ASCII"]].map(([k, l]) =>
           `<button type="button" role="radio" aria-checked="${cardArt === k}" class="${cardArt === k ? "on" : ""}" data-act="set-art" data-v="${k}">${l}</button>`).join("")}</div></div>
+      <div class="img-set glass"><b>Canvas</b><small>Background surface for the free-form agent workbench.</small>
+        <div class="seg" role="radiogroup">${CANVAS_BGS.map(([k, l, d]) =>
+          `<button type="button" role="radio" aria-checked="${orchBg === k}" class="${orchBg === k ? "on" : ""}" data-act="set-canvas-bg" data-v="${k}" title="${esc(d)}">${l}</button>`).join("")}</div></div>
     </div>
     <h3>Theme</h3>
     <div class="themes">${THEMES.map(([k, l]) => `<button type="button" class="theme-sw ${(document.documentElement.dataset.theme || "overlook") === k ? "on" : ""}" data-act="set-theme" data-v="${k}">
@@ -2979,6 +3038,7 @@ const ACTIONS = {
   },
   "orch-new": (el) => {
     if (el?.dataset?.agent) return newAgentTerm(el.dataset.agent);
+    $("#orch-bgmenu")?.setAttribute("hidden", "");
     const menu = $("#orch-newmenu");
     if (!menu) return newAgentTerm(defaultAgent());
     if (!menu.hidden) return menu.setAttribute("hidden", "");
@@ -2986,6 +3046,17 @@ const ACTIONS = {
       `<button type="button" data-act="term-canvas">${icon("terminal", 14)} Shell</button>`].join("");
     menu.removeAttribute("hidden");
   },
+  "orch-bg-menu": () => {
+    $("#orch-newmenu")?.setAttribute("hidden", "");
+    const menu = $("#orch-bgmenu");
+    if (!menu) return cycleCanvasBg();
+    if (!menu.hidden) { menu.setAttribute("hidden", ""); paintHud($("#orch-hud"), orchMode === "free" && !orchMax); return; }
+    menu.innerHTML = CANVAS_BGS.map(([k, l, d]) => `<button type="button" class="${orchBg === k ? "on" : ""}" data-act="orch-bg" data-bg="${k}"><span class="bg-sw" data-sw="${k}"></span><span>${l}</span><small>${d}</small></button>`).join("");
+    menu.removeAttribute("hidden");
+    paintHud($("#orch-hud"), orchMode === "free" && !orchMax);
+  },
+  "orch-bg": (el) => setCanvasBg(el.dataset.bg || el.dataset.v),
+  "set-canvas-bg": (el) => { setCanvasBg(el.dataset.v); if (route().pg === "settings") settingsPage(); },
   "orch-dir": () => {
     orchDir = orchDir === "cols" ? "rows" : "cols";
     orchSigs.clear();
@@ -3237,6 +3308,10 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
   if (!e.target.closest("#orch-fleet-wrap")) $("#orch-fleet-wrap")?.classList.remove("open");
   if (!e.target.closest('#orch-newmenu, [data-act="orch-new"]')) $("#orch-newmenu")?.setAttribute("hidden", "");
+  if (!e.target.closest('#orch-bgmenu, [data-act="orch-bg-menu"]')) {
+    const bgm = $("#orch-bgmenu");
+    if (bgm && !bgm.hidden) { bgm.setAttribute("hidden", ""); paintHud($("#orch-hud"), orchMode === "free" && !orchMax); }
+  }
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const res = e.target.closest(".ev.result");
@@ -3283,6 +3358,7 @@ document.addEventListener("keydown", (e) => {
   if (pg === "agents" && orchMode === "free" && !orchMax) {
     if (e.key === "h") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "pan" } }); return; }
     if (e.key === "s") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "select" } }); return; }
+    if (e.key === "b" || e.key === "B") { e.preventDefault(); cycleCanvasBg(); return; }
   }
   if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }
   if (e.key === "v" || e.key === "V") { e.preventDefault(); ACTIONS["ui-toggle"](); }

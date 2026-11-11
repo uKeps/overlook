@@ -1253,13 +1253,51 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-pane.pane-flash { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash .7s ease-out; } /* outline: the shadows are !important */
 @keyframes pane-flash { 0% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
 
-/* Free 2D Maestri Canvas mode */
+/* Free 2D Maestri Canvas mode & Background Presets */
 .orch-canvas.free {
+  --bg-step: 22px;
+  --bg-dot-alpha: 18%;
+  --bg-dot-r: 1px;
+  --bg-lod: 1;
+  --bg-eff-alpha: calc(var(--bg-dot-alpha) * var(--bg-lod, 1));
   border: 1px solid rgba(255, 255, 255, .15);
   background-color: color-mix(in srgb, var(--bg) 72%, transparent);
-  background-image: radial-gradient(color-mix(in srgb, var(--ink) 18%, transparent) 1px, transparent 1px);
-  background-size: 22px 22px;
+  background-image: radial-gradient(color-mix(in srgb, var(--ink) var(--bg-eff-alpha), transparent) var(--bg-dot-r), transparent var(--bg-dot-r));
+  background-position: var(--bg-pos, 0 0);
+  background-size: var(--bg-size, 22px 22px);
   cursor: grab;
+  transition: background-color .2s var(--ease);
+}
+.orch-canvas.free[data-bg="dots"] {
+  --bg-step: 22px;
+  --bg-dot-alpha: 18%;
+  --bg-dot-r: 1px;
+}
+.orch-canvas.free[data-bg="sparse"] {
+  --bg-step: 44px;
+  --bg-dot-alpha: 10%;
+  --bg-dot-r: 0.85px;
+  background-color: color-mix(in srgb, var(--bg) 76%, transparent);
+}
+.orch-canvas.free[data-bg="grid"] {
+  --bg-step: 32px;
+  --bg-dot-alpha: 7%;
+  background-color: color-mix(in srgb, var(--bg) 76%, transparent);
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--ink) var(--bg-eff-alpha), transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--ink) var(--bg-eff-alpha), transparent) 1px, transparent 1px);
+}
+.orch-canvas.free[data-bg="plain"] {
+  background-color: color-mix(in srgb, var(--surface) 82%, var(--bg));
+  background-image: none;
+}
+.orch-canvas.free[data-bg="ambient"] {
+  background-color: color-mix(in srgb, var(--bg) 38%, transparent);
+  background-image: none;
+  border-color: rgba(255, 255, 255, .1);
+}
+html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
+  background-color: color-mix(in srgb, var(--surface) 35%, var(--bg));
 }
 .orch-canvas.free.panning { cursor: grabbing; user-select: none; }
 .orch-plane.free {
@@ -1980,6 +2018,33 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-newmenu[hidden] { display: none; }
 .orch-newmenu button { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 500 12.5px var(--body); text-align: left; }
 .orch-newmenu button:hover { background: rgba(255, 255, 255, .07); color: var(--ink); }
+.orch-bgmenu { min-width: 196px; }
+.orch-bgmenu button.on { color: var(--ink); background: rgba(255, 255, 255, .09); }
+.orch-bgmenu .bg-sw {
+  width: 14px; height: 14px; border-radius: 4px; flex: none;
+  border: 1px solid rgba(255, 255, 255, .18); background-color: var(--bg);
+}
+.orch-bgmenu .bg-sw[data-sw="dots"] {
+  background-image: radial-gradient(color-mix(in srgb, var(--ink) 45%, transparent) 1px, transparent 1px);
+  background-size: 4px 4px; background-position: 2px 2px;
+}
+.orch-bgmenu .bg-sw[data-sw="sparse"] {
+  background-image: radial-gradient(color-mix(in srgb, var(--ink) 30%, transparent) 1px, transparent 1px);
+  background-size: 6px 6px; background-position: 3px 3px;
+}
+.orch-bgmenu .bg-sw[data-sw="grid"] {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--ink) 22%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--ink) 22%, transparent) 1px, transparent 1px);
+  background-size: 5px 5px;
+}
+.orch-bgmenu .bg-sw[data-sw="plain"] { background: color-mix(in srgb, var(--surface) 85%, var(--bg)); }
+.orch-bgmenu .bg-sw[data-sw="ambient"] {
+  background: radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 70%),
+    color-mix(in srgb, var(--bg) 40%, transparent);
+}
+.orch-bgmenu button small { margin-left: auto; font: 400 11px var(--body); color: var(--faint); }
+.orch-bgmenu button.on small { color: var(--accent); }
 
 /* empty canvas: just the hint over the dot grid */
 .orch-empty { background: none !important; border: 0 !important; box-shadow: none !important; }
