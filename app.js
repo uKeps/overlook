@@ -147,7 +147,7 @@ function topBar() {
   const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) || (pg === "images" && id === "services") ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
     item("notes", "Notes", "notes") + item("review", "Review", "review", due().length) + item("graph", "Graph", "graph") +
-    item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) + item("settings", "Settings", "settings") +
+    item("agents", "Agents", "agents", run) + (S.services.length ? item("services", "Services", "services", S.services.filter((s) => !s.ok).length) : "") + item("settings", "Settings", "settings") +
     (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
     `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>` +
     `<button class="dock-fold" data-act="dock-mode" data-tip="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}" aria-label="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}">${icon(dockMode === "float" ? "pin" : "fold", 18)}</button>`;
@@ -646,11 +646,12 @@ let filter = "", query = "";
 // Notes has two jobs before browsing: ask the vault (an agent answers from the notes, and looks it up when they don't have
 // it) and save what you learned (a link or a few lines become a note, written by an agent). Below, what's alive in the
 // vault: projects, notes linked but never written, one to rediscover, the collections. A collection opens the grid.
-// filter: "" = that overview, "*" = every note, "@project" = the projects, else one folder.
+// filter: "" = that overview, "*" = every note, "@project" = the projects, "@check" = the deduced ones, else one folder.
+const FILTERS = { "@project": ["Projects", (n) => n.type === "project"], "@check": ["To check", (n) => confKind(n) === "warn"] };
 function notes() {
   const count = {};
   for (const n of D.notes) count[n.folder] = (count[n.folder] || 0) + 1;
-  const chips = [["", "Overview", ""], ["*", "All", D.notes.length], ...(filter === "@project" ? [["@project", "Projects", D.notes.filter((n) => n.type === "project").length]] : []),
+  const chips = [["", "Overview", ""], ["*", "All", D.notes.length], ...(FILTERS[filter] ? [[filter, FILTERS[filter][0], D.notes.filter(FILTERS[filter][1]).length]] : []),
     ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])];
   main.innerHTML = `<div class="nt-head"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p></div>
     <div class="nt-ask">
@@ -678,7 +679,14 @@ function notesOverview() {
   const old = pool.length ? pool[hash(D.today) % pool.length] : null;
   const by = {};
   for (const n of D.notes) by[n.folder] = (by[n.folder] || 0) + 1;
-  const side = (gaps.length ? `<section><h4>Missing notes <span>linked, never written</span></h4>
+  // written by deduction and never confirmed, the ones other notes lean on most first
+  const inLinks = {};
+  for (const n of D.notes) for (const l of new Set(n.links)) inLinks[l] = (inLinks[l] || 0) + 1;
+  const check = D.notes.filter(FILTERS["@check"][1]).sort((a, b) => (inLinks[nameOf(b.path)] || 0) - (inLinks[nameOf(a.path)] || 0));
+  const side = (check.length ? `<section><h4>To check <a href="#/notes" data-act="filter" data-k="@check" title="Written by deduction, never confirmed">All ${check.length} ${icon("r", 11)}</a></h4>
+      ${check.slice(0, 4).map((n) => `<div class="nt-gap"><a href="${noteHref(n.path)}" title="${esc(plain(n.summary))}"><b>${esc(n.title)}</b><span>${inLinks[nameOf(n.path)] ? `linked ${inLinks[nameOf(n.path)]}×` : esc(n.confidence)}</span></a>
+        <button type="button" data-act="vault-check" data-p="${esc(n.path)}" title="An agent compares it with its source and fixes it">Check it</button></div>`).join("")}</section>` : "")
+    + (gaps.length ? `<section><h4>Missing notes <span>linked, never written</span></h4>
       ${gaps.map((g) => `<div class="nt-gap"><a href="#/w/${encodeURIComponent(g.target)}" title="See who links it"><b>${esc(g.target)}</b><span>linked ${g.n}×</span></a>
         <button type="button" data-act="vault-write" data-t="${esc(g.target)}" data-n="${g.n}" title="An agent writes it from the notes that link it">Write it</button></div>`).join("")}</section>` : "")
     + (old ? `<section class="nt-redo" style="--c: ${folderColor(old.folder)}"><h4>Rediscover</h4><a href="${noteHref(old.path)}"><b>${esc(old.title)}</b></a>
@@ -692,7 +700,7 @@ function notesOverview() {
     <section class="nt-cols"><h4>Collections <a href="#/notes" data-act="filter" data-k="*">All ${D.notes.length} ${icon("r", 11)}</a></h4>
       <div class="nt-colrow">${Object.keys(by).sort((a, b) => by[b] - by[a]).map((f) => `<button type="button" class="nt-col" data-act="filter" data-k="${esc(f)}" style="--c: ${folderColor(f)}"><i></i>${esc(folderLabel(f))}<small>${by[f]}</small></button>`).join("")}</div></section>`;
 }
-// Words a question carries that say nothing about the note ("o que é AWB", "what is AWB", "quando a gente cobra").
+// Words a question carries that say nothing about the note ("o que é um frete", "what is a waybill", "quando a gente cobra").
 const STOP = new Set(["o", "a", "os", "as", "que", "e", "é", "de", "do", "da", "dos", "das", "um", "uma", "em", "no", "na", "para", "pra", "com", "por", "como", "quando", "qual", "quais", "onde", "porque", "gente", "what", "is", "the", "of", "an", "how", "when", "why", "which", "where", "do", "does", "we", "to", "in", "on", "for"]);
 let textTimer = 0;
 const hitRow = (n, line = "") => `<a class="nt-hit" href="${noteHref(n.path)}" style="--c: ${folderColor(n.folder)}"><i></i><b>${esc(n.title)}</b><small>${esc(folderLabel(n.folder))}${line ? ` · ${esc(line)}` : n.summary ? ` · ${esc(plain(n.summary))}` : ""}</small></a>`;
@@ -705,7 +713,7 @@ function grid() {
   if (!filter) return askMatches(q, terms);
   $("#nt-found").innerHTML = "";
   const weight = (n) => (!q ? 0 : fold(n.title).startsWith(terms[0] || q) ? 0 : fold(n.title).includes(terms[0] || q) ? 1 : 2);
-  const ns = D.notes.filter((n) => (filter === "*" || (filter === "@project" ? n.type === "project" : n.folder === filter)) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
+  const ns = D.notes.filter((n) => (filter === "*" || (FILTERS[filter] ? FILTERS[filter][1](n) : n.folder === filter)) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
     .sort((a, b) => weight(a) - weight(b) || b.mtime - a.mtime);
   $("#note-grid").innerHTML = ns.map(noteCard).join("") || `<p class="empty">No title matches "${esc(query)}".</p>`;
   // Then the text of the notes, a beat after typing stops.
@@ -713,7 +721,7 @@ function grid() {
   if (!hitsBox) return;
   hitsBox.innerHTML = "";
   if (terms.join("").length < 3) return;
-  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => filter === "*" || filter === "@project" || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
+  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => filter === "*" || !!FILTERS[filter] || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
   textTimer = setTimeout(async () => {
     const hits = (await api(`/api/search?q=${encodeURIComponent(terms.join(" "))}`).catch(() => [])).filter((h) => !shown.has(h.path) && inFolder(h.path));
     if (fold(query).trim() !== q || !$("#text-hits")) return;
@@ -758,7 +766,8 @@ async function reader(path) {
       <div class="box glass">
         <a class="btn peach" href="${obs(n.path)}">Open in Obsidian ${icon("ext", 16)}</a>
         <div class="rd-acts"><button class="btn glass" data-act="note-ask" data-p="${esc(n.path)}" title="Open an agent on the canvas that has read this note">${icon("spark", 15)} Ask an agent</button>
-          <button class="btn glass" data-act="note-canvas" data-p="${esc(n.path)}" title="Put this note on the canvas">${icon("grid", 15)} On canvas</button></div>
+          <button class="btn glass" data-act="note-canvas" data-p="${esc(n.path)}" title="Put this note on the canvas">${icon("grid", 15)} On canvas</button>
+          <a class="btn glass" href="#/graph/${encodeURIComponent(nameOf(n.path))}" title="This note and what it links to, on the map">${icon("graph", 15)} In the graph</a></div>
         ${((c) => c ? `<p class="empty" style="padding:10px 0 0">In review: ${!c.next || c.next <= D.today ? "due today" : `next ${rel.format(daysBetween(D.today, c.next), "day")}`}.</p>`
           : `<button class="btn glass" data-act="enroll" data-p="${esc(n.path)}">Add to review</button>`)((D.cards || []).find((x) => cardNote(x) === n))}</div>
       <div class="box glass"><h3>Linked from</h3>${n.backlinks.map((b) => `<a class="l" href="${noteHref(b.path)}">${esc(b.title)}</a>`).join("") || '<p class="empty" style="padding:0">Nothing links here yet.</p>'}</div>
@@ -853,16 +862,171 @@ let PALETTE = [], AREAS = [];
 // One colour per area while the palette lasts, then the same colours fainter (hashing put 9 areas on 6 colours).
 const areaColor = (a) => { const i = Math.max(0, AREAS.indexOf(a)), c = PALETTE[i % PALETTE.length]; return i < PALETTE.length ? c : alpha(c, .5); };
 let graphStop = null;
-function graph() {
-  main.innerHTML = `<div class="ph"><h1>Graph</h1><p>Click opens the note. Drag to move, scroll to zoom.</p></div>
-    <section class="graph glass"><canvas id="cv"></canvas></section>`;
+// The map: the notes in columns by what they are, data on the left and people on the right (database → table → worker →
+// platform → system → process → team → project), so a note sits in the same place every time. Click one to focus it and
+// what it links to; "What depends on it" follows the links rightwards, a guess, since links have no direction. A vault
+// without these types (fewer than 3 columns) gets the force graph ("Network"), which focuses the same way.
+const LANES = [
+  ["Databases", ["banco", "database", "db"]],
+  ["Tables", ["tabela", "table"]],
+  ["Workers", ["worker", "service", "job"]],
+  ["Platforms", ["plataforma", "platform", "modulo", "module"]],
+  ["Systems", ["sistema", "system", "app"]],
+  ["Processes", ["processo", "process"]],
+  ["Teams", ["setor", "team", "department", "empresa", "company"]],
+  ["Other", []],
+  ["Projects", ["project"]],
+  ["Concepts", ["concept", "mapa", "map", ""]],
+];
+const OTHER = 7, PROJECTS = 8, CONCEPTS = 9;
+const DOWN = (x, y) => y.lane > x.lane && y.lane < CONCEPTS;
+let gMode = "map", gDepth = 1, gImpact = false, gLast = "", gShow = new Set(); // gShow: the optional columns shown (projects, concepts)
+// "orders (table)" sits in Tables already: the type in brackets goes
+const gmTitle = (x) => x.n.title.replace(/\s*\(([^)]*)\)\s*$/, (m, w) => (w.toLowerCase() === (x.n.type || "").toLowerCase() ? "" : m)) || x.n.title;
+function gmModel() {
+  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => {
+    const t = (n.type || "").toLowerCase(), i = LANES.findIndex(([, ts]) => ts.includes(t));
+    return { id: nameOf(n.path), n, lane: i >= 0 ? i : OTHER, nb: new Set() };
+  });
+  const byId = new Map(nodes.map((x) => [x.id, x]));
+  for (const x of nodes) for (const l of x.n.links) { const y = byId.get(l); if (y && y !== x) { x.nb.add(y); y.nb.add(x); } }
+  return { nodes, byId };
+}
+// Steps from a note along its links (only the ones ok() allows), up to depth: note → steps away.
+function gmReach(start, depth, ok = () => true) {
+  const d = new Map([[start, 0]]), q = [start];
+  while (q.length) { const x = q.shift(); if (d.get(x) >= depth) continue; for (const y of x.nb) if (!d.has(y) && ok(x, y)) { d.set(y, d.get(x) + 1); q.push(y); } }
+  return d;
+}
+// The cheapest chain of links from a to b; going through a note costs more the more it links (a hub like the glossary
+// joins everything, so a path through it says little).
+function gmPath(a, b) {
+  const cost = new Map([[a, 0]]), prev = new Map(), open = new Set([a]);
+  while (open.size) {
+    let x = null;
+    for (const y of open) if (!x || cost.get(y) < cost.get(x)) x = y;
+    open.delete(x);
+    if (x === b) break;
+    for (const y of x.nb) { const c = cost.get(x) + 1 + (y === b ? 0 : y.nb.size / 30); if (c < (cost.get(y) ?? Infinity)) { cost.set(y, c); prev.set(y, x); open.add(y); } }
+  }
+  if (!cost.has(b)) return null;
+  const p = [b];
+  while (p[0] !== a) p.unshift(prev.get(p[0]));
+  return p;
+}
+// Notes it doesn't link but shares links with (two or more), shared hubs counting less (Adamic-Adar).
+function gmSuggest(me) {
+  const s = new Map();
+  for (const z of me.nb) for (const y of z.nb) if (y !== me && !me.nb.has(y)) { const o = s.get(y) || { k: 0, w: 0 }; o.k++; o.w += 1 / Math.log(2 + z.nb.size); s.set(y, o); }
+  return [...s].filter(([, o]) => o.k >= 2).sort((a, b) => b[1].w - a[1].w).slice(0, 4);
+}
+const laneColor = (i) => `var(--p${(i % 6) + 1})`;
+function graph(arg = "") {
+  graphStop?.(); graphStop = null; // redrawn in place (depth, layout) as well as from the route
+  if (arg !== gLast) { gImpact = false; gLast = arg; }
+  const [fid = "", tid = ""] = arg.split("/"), m = gmModel(), me = m.byId.get(fid), to = me && m.byId.get(tid), path = to ? gmPath(me, to) : null;
+  const canMap = new Set(m.nodes.map((x) => x.lane).filter((l) => l !== CONCEPTS && l !== OTHER)).size >= 3, mode = canMap ? gMode : "net";
+  const down = me ? gmReach(me, 2, DOWN) : null;
+  if (down?.size === 1) gImpact = false;
+  const reach = me ? (path ? new Map(path.map((x, i) => [x, i])) : gImpact ? down : gmReach(me, gDepth)) : null;
+  const vis = new Set(reach ? reach.keys() : m.nodes.filter((x) => mode === "net" || (x.lane !== CONCEPTS && x.lane !== PROJECTS) || gShow.has(x.lane)));
+  const opt = [[PROJECTS, "Projects"], [CONCEPTS, "Concepts"]].map(([l, t]) => [l, t, m.nodes.filter((x) => x.lane === l).length]).filter(([, , n]) => n);
+  main.innerHTML = `<div class="nt-head"><h1>Graph</h1><p>${path ? `From ${esc(me.n.title)} to ${esc(to.n.title)}` : me ? (gImpact ? `What may depend on ${esc(me.n.title)}` : `${esc(me.n.title)} and what it links to`)
+      : mode === "map" ? "Your notes by what they are: data on the left, people on the right. Click one to see what it touches." : "Every note and its links. Click one to see what it touches; drag to move, scroll to zoom."}</p></div>
+    <div class="gm-bar">
+      <input id="gm-find" list="gm-names" placeholder="Focus on a note…" autocomplete="off" spellcheck="false" aria-label="Focus on a note"><datalist id="gm-names">${m.nodes.map((x) => `<option value="${esc(x.n.title)}">`).join("")}</datalist>
+      ${me && !path ? `<div class="gm-seg" role="group" aria-label="How far from it">${[1, 2, 3].map((d) => `<button type="button" class="${!gImpact && gDepth === d ? "on" : ""}" data-act="gm-depth" data-d="${d}">${d === 1 ? "Its links" : `${d} steps`} <kbd>${d}</kbd></button>`).join("")}</div>
+        <a class="gm-clear" href="#/graph">Whole vault <kbd>Esc</kbd></a>`
+      : !me && mode === "map" ? opt.map(([l, t, n]) => `<button type="button" class="gm-chip ${gShow.has(l) ? "on" : ""}" data-act="gm-lane" data-l="${l}" title="Show the ${t.toLowerCase()} column too">${t} <small>${n}</small></button>`).join("") : ""}
+      ${canMap ? `<div class="gm-seg gm-mode" role="group" aria-label="Layout">${[["map", "Map"], ["net", "Network"]].map(([k, l]) => `<button type="button" class="${mode === k ? "on" : ""}" data-act="gm-mode" data-m="${k}">${l}</button>`).join("")}</div>` : ""}
+    </div>
+    ${path ? gmPathCard(path) : me ? gmCard(me, down, to) : ""}<div class="gm-wrap"><div id="gm-view"></div></div>`;
+  const find = $("#gm-find");
+  const pick = (input, go) => { input.onchange = () => { const x = m.nodes.find((y) => y.n.title === input.value.trim()); if (x) location.hash = go(x); }; };
+  pick(find, (x) => `#/graph/${encodeURIComponent(x.id)}`);
+  if ($("#gm-to")) pick($("#gm-to"), (x) => `#/graph/${encodeURIComponent(me.id)}/${encodeURIComponent(x.id)}`);
+  if (mode === "map") gmDraw($("#gm-view"), m, vis, me, reach);
+  else graphNet($("#gm-view"), reach ? new Set([...vis].map((x) => x.id)) : null, arg);
+  ambient(art("graph"));
+}
+// The note in focus, above the map (the map lists what it links to, so the full width goes to the map).
+function gmCard(me, down, to) {
+  const n = me.n, ring = (h) => [...down.values()].filter((d) => d === h).length, sugg = gImpact ? [] : gmSuggest(me);
+  return `<section class="gm-card" style="--c: ${laneColor(me.lane)}">
+    <div><span class="gm-type"><i></i>${esc(n.type || "note")}</span><h3>${esc(n.title)}</h3>${n.summary ? `<p>${esc(plain(n.summary))}</p>` : ""}
+      ${gImpact ? `<p class="gm-note">${ring(1)} link to it directly and ${ring(2)} through those. Read from the links between notes, which have no direction: some may not really depend on it.</p>` : ""}</div>
+    <div class="gm-acts"><a class="btn peach" href="${noteHref(n.path)}">Open the note</a>
+      ${down.size > 1 ? `<button type="button" class="btn glass" data-act="gm-impact">${gImpact ? "Back to its links" : `What depends on it <small>${down.size - 1}</small>`}</button>` : ""}
+      ${gImpact ? '<button type="button" class="btn glass" data-act="gm-ask" title="An agent reads these notes and says what would break">Ask an agent what breaks</button>' : ""}</div>
+    ${gImpact ? "" : `<div class="gm-foot">
+      <input id="gm-to" list="gm-names" placeholder="Path to another note…" autocomplete="off" spellcheck="false" aria-label="Path to another note">
+      ${to ? `<span class="gm-note">No chain of links reaches ${esc(to.n.title)}.</span>` : ""}
+      ${sugg.length ? `<div class="gm-sugg"><span>Might relate, not linked:</span>${sugg.map(([x, o]) => `<span class="gm-s" style="--c: ${laneColor(x.lane)}"><a href="#/graph/${encodeURIComponent(x.id)}" title="${o.k} links in common"><i></i>${esc(gmTitle(x))}</a><button type="button" data-act="gm-link" data-id="${esc(x.id)}" title="An agent reads both and links them if they really relate">Link</button></span>`).join("")}</div>` : ""}
+    </div>`}
+  </section>`;
+}
+function gmPathCard(path) {
+  const a = path[0], b = path.at(-1);
+  return `<section class="gm-card" style="--c: ${laneColor(a.lane)}">
+    <div><span class="gm-type"><i></i>Path · ${path.length - 1} ${path.length === 2 ? "step" : "steps"}</span><h3>${esc(a.n.title)} → ${esc(b.n.title)}</h3>
+      <div class="gm-chain">${path.map((x) => `<a href="#/graph/${encodeURIComponent(x.id)}" style="--c: ${laneColor(x.lane)}"><i></i>${esc(gmTitle(x))}</a>`).join('<span aria-hidden="true">→</span>')}</div></div>
+    <div class="gm-acts"><a class="btn glass" href="#/graph/${encodeURIComponent(a.id)}">Back to ${esc(gmTitle(a))}</a>
+      <button type="button" class="btn glass" data-act="gm-explain" title="An agent reads the chain and explains how one leads to the other">Ask an agent to explain it</button></div>
+  </section>`;
+}
+function gmDraw(el, m, vis, me, reach) {
+  const cols = LANES.map(() => []);
+  for (const x of m.nodes) if (vis.has(x)) cols[x.lane].push(x);
+  for (const c of cols) c.sort((a, b) => a.n.title.localeCompare(b.n.title));
+  // A few sweeps moving each note toward the rows of what it links in the columns beside it, so lines run flatter.
+  const pos = new Map(), at = () => cols.forEach((c) => c.forEach((x, i) => pos.set(x, (i + 0.5) / c.length)));
+  at();
+  for (let s = 0; s < 4; s++) for (const [i, c] of s % 2 ? [...cols.entries()].reverse() : [...cols.entries()]) {
+    const bc = new Map(c.map((x) => { const ys = [...x.nb].filter((y) => vis.has(y) && (s % 2 ? y.lane > i : y.lane < i)); return [x, ys.length ? ys.reduce((t, y) => t + pos.get(y), 0) / ys.length : pos.get(x)]; }));
+    c.sort((a, b) => bc.get(a) - bc.get(b)); at();
+  }
+  el.className = `gm${me ? " focus" : ""}`;
+  el.innerHTML = `<svg aria-hidden="true"></svg>${cols.map((c, i) => c.length ? `<div class="gm-lane" style="--c: ${laneColor(i)}"><h4>${LANES[i][0]} <small>${c.length}</small></h4>
+    ${c.map((x) => `<button type="button" class="gm-n ${x === me ? "me" : reach ? `h${reach.get(x)}` : ""}" data-act="gm-focus" data-id="${esc(x.id)}" title="${esc(x.n.title)}${x.n.summary ? ` · ${esc(plain(x.n.summary))}` : ""}"><i></i><span>${esc(gmTitle(x))}</span></button>`).join("")}</div>` : "").join("")}`;
+  const btn = new Map([...el.querySelectorAll(".gm-n")].map((b) => [m.byId.get(b.dataset.id), b]));
+  const pairs = [];
+  // focused, only the lines from one ring to the next (the whole tangle between them says nothing); the ones to it stand out
+  for (const x of btn.keys()) for (const y of x.nb) if (btn.has(y) && x.lane < y.lane && (!me || Math.abs(reach.get(x) - reach.get(y)) === 1)) pairs.push([x, y]);
+  const lit = (a, b) => !!me && (gImpact || a === me || b === me);
+  const svg = el.querySelector("svg");
+  const paint = () => {
+    const o = el.getBoundingClientRect();
+    svg.innerHTML = pairs.map(([a, b]) => {
+      const r = btn.get(a).getBoundingClientRect(), s = btn.get(b).getBoundingClientRect();
+      const x1 = r.right - o.left + 2, y1 = r.top + r.height / 2 - o.top, x2 = s.left - o.left - 2, y2 = s.top + s.height / 2 - o.top, k = Math.max(20, (x2 - x1) / 2);
+      return `<path class="${lit(a, b) ? "on" : ""}" data-a="${esc(a.id)}" data-b="${esc(b.id)}" d="M${x1.toFixed(1)} ${y1.toFixed(1)}C${(x1 + k).toFixed(1)} ${y1.toFixed(1)} ${(x2 - k).toFixed(1)} ${y2.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}"/>`;
+    }).join("");
+  };
+  const ro = new ResizeObserver(paint);
+  ro.observe(el);
+  graphStop = () => ro.disconnect();
+  // hovering a note lights it, its links and the lines between them
+  let hot = null;
+  const hl = (x) => {
+    if (x === hot) return;
+    hot = x; el.classList.toggle("hl", !!x);
+    for (const [y, b] of btn) b.classList.toggle("on", !!x && (y === x || x.nb.has(y)));
+    for (const p of svg.children) p.classList.toggle("hot", !!x && (p.dataset.a === x.id || p.dataset.b === x.id));
+  };
+  el.onpointerover = (e) => { const b = e.target.closest(".gm-n"); hl(b ? m.byId.get(b.dataset.id) : null); };
+  el.onpointerleave = () => hl(null);
+}
+// Network: every note and link as a force graph. keep (ids) narrows it to a focused note's neighbourhood.
+function graphNet(el, keep, focus) {
+  el.className = "";
+  el.innerHTML = '<section class="graph glass"><canvas id="cv"></canvas></section>';
   const cv = $("#cv"), ctx = cv.getContext("2d"), dpr = devicePixelRatio || 1;
   AREAS = [...new Set(D.notes.map((n) => n.area).filter(Boolean))].sort();
   PALETTE = ["--p1", "--p2", "--p3", "--p4", "--p5", "--p6"].map(tok);
   const ink = tok("--ink"), accent = tok("--accent"), bg = tok("--bg");
-  const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, a: n.area, c: n.area ? areaColor(n.area) : alpha(ink, .8) }));
+  const nodes = D.notes.filter((n) => n.type !== "daily" && (!keep || keep.has(nameOf(n.path)))).map((n) => ({ id: nameOf(n.path), t: n.title, p: n.path, a: n.area, c: n.area ? areaColor(n.area) : alpha(ink, .8) }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: alpha(ink, .25), ghost: true }; nodes.push(g); byId.set(v.target, g); }
+  if (!keep) for (const v of D.missing) if (!byId.has(v.target)) { const g = { id: v.target, t: v.target, c: alpha(ink, .25), ghost: true }; nodes.push(g); byId.set(v.target, g); }
   const edges = [];
   for (const n of D.notes) for (const l of new Set(n.links)) { const a = byId.get(nameOf(n.path)), b = byId.get(l); if (a && b && a !== b) edges.push([a, b]); }
   const deg = new Map();
@@ -872,7 +1036,7 @@ function graph() {
   const size = () => { W = cv.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; };
   size();
   nodes.forEach((n, i) => { const a = i * 2.4; n.x = W / 2 + Math.cos(a) * (60 + i * 6); n.y = H / 2 + Math.sin(a) * (60 + i * 6); n.vx = n.vy = 0; n.r = 2.5 + Math.sqrt(deg.get(n) || 0) * 0.9; n.m = alpha(ink, .3 + .45 * Math.min(1, (deg.get(n) || 0) / 25)); });
-  let hover = null, drag = null, pan = null, down = null, heat = 1;
+  let hov = null, drag = null, pan = null, down = null, heat = 1;
   // ponytail: O(n²) repulsion; fine up to ~500 notes, quadtree if the vault grows.
   function step() {
     for (const a of nodes) for (const b of nodes) {
@@ -897,6 +1061,7 @@ function graph() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * panX, dpr * panY);
+    const hover = hov || byId.get(focus) || null; // a focused note stays lit while the mouse is elsewhere
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
     for (const [a, b] of edges) {
       ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .55) : alpha(ink, .06);
@@ -943,7 +1108,7 @@ function graph() {
   cv.onpointermove = (e) => {
     if (drag) { [drag.x, drag.y] = world(e); if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 3) moved = true; heat = Math.max(heat, 0.3); wake(); }
     else if (pan) { panX = e.clientX - pan[0]; panY = e.clientY - pan[1]; draw(); }
-    else { wake(); hover = find(e); cv.style.cursor = hover ? "pointer" : "grab"; }
+    else { wake(); hov = find(e); cv.style.cursor = hov ? "pointer" : "grab"; }
   };
   cv.onpointerdown = (e) => {
     cv.setPointerCapture(e.pointerId);
@@ -951,8 +1116,8 @@ function graph() {
     if (!drag) { pan = [e.clientX - panX, e.clientY - panY]; cv.style.cursor = "grabbing"; }
   };
   cv.onpointerup = cv.onpointercancel = () => {
-    if (drag && !moved) location.hash = drag.ghost ? `#/w/${encodeURIComponent(drag.id)}` : noteHref(drag.p);
-    drag = pan = null; cv.style.cursor = hover ? "pointer" : "grab";
+    if (drag && !moved) location.hash = drag.ghost ? `#/w/${encodeURIComponent(drag.id)}` : drag.id === focus ? noteHref(drag.p) : `#/graph/${encodeURIComponent(drag.id)}`;
+    drag = pan = null; cv.style.cursor = hov ? "pointer" : "grab";
   };
   cv.onwheel = (e) => {
     e.preventDefault();
@@ -961,8 +1126,8 @@ function graph() {
     panX = sx - (sx - panX) * (k / zoom); panY = sy - (sy - panY) * (k / zoom); zoom = k;
     draw();
   };
-    ambient(art("graph"));
 }
+
 
 // ---------------------------------------------------------------- Agents (Maestro Orchestrator)
 const ROUTINES = {
@@ -3766,6 +3931,11 @@ const ACTIONS = {
       toast(`An agent is writing the note · <a href="#/t/${esc(r.id)}">See it</a>`);
     } catch (e) { toast(e.message); }
   },
+  // Check a deduced note: an agent compares it with its source, fixes it and marks it confirmed.
+  "vault-check": (el) => {
+    const n = D.notes.find((x) => x.path === el.dataset.p);
+    if (n) agentOnCanvas(`Check the note [[${nameOf(n.path)}]] (${n.path}): its confidence is "${n.confidence}", written by deduction and never confirmed. Compare what it says with its source (the code, the database, the documents it cites), fix what's wrong, and once it's confirmed update its confidence and date as AGENTS.md says. Tell me what changed. Answer in the language of the note.`);
+  },
   // Write a missing note: an agent writes it from the notes that already link it.
   "vault-write": async (el) => {
     try {
@@ -3774,6 +3944,31 @@ const ACTIONS = {
     } catch (e) { toast(e.message); }
   },
   "note-canvas": (el) => noteToCanvas(el.dataset.p),
+  // Graph: click a note to focus it (again: open it), how far around it, what depends on it, the layout.
+  "gm-focus": (el) => {
+    const id = el.dataset.id, n = D.notes.find((x) => nameOf(x.path) === id);
+    location.hash = id === route().arg.split("/")[0] && n ? noteHref(n.path) : `#/graph/${encodeURIComponent(id)}`;
+  },
+  "gm-depth": (el) => { gDepth = +el.dataset.d; gImpact = false; graph(route().arg); },
+  "gm-impact": () => { gImpact = !gImpact; graph(route().arg); },
+  "gm-link": (el) => {
+    const m = gmModel(), me = m.byId.get(route().arg.split("/")[0]), x = m.byId.get(el.dataset.id);
+    if (!me || !x) return;
+    const common = [...me.nb].filter((z) => x.nb.has(z)).map((z) => `[[${z.id}]]`).join(", ");
+    agentOnCanvas(`[[${me.id}]] and [[${x.id}]] don't link each other but both link ${common}. Read the two notes: if they really relate, add a [[${x.id}]] link in [[${me.id}]] where it fits (and the other way, if it makes sense), following AGENTS.md. If they don't, say so and change nothing. Answer in the language of the notes.`);
+  },
+  "gm-explain": () => {
+    const [a, b] = route().arg.split("/"), m = gmModel(), p = m.byId.get(a) && m.byId.get(b) && gmPath(m.byId.get(a), m.byId.get(b));
+    if (p) agentOnCanvas(`In this vault [[${a}]] connects to [[${b}]] through ${p.map((x) => `[[${x.id}]]`).join(" → ")}. Read those notes and explain in a few sentences how one leads to the other, and anything in between I should know. Answer in the language of the notes.`);
+  },
+  "gm-lane": (el) => { const l = +el.dataset.l; gShow.has(l) ? gShow.delete(l) : gShow.add(l); graph(route().arg); },
+  "gm-mode": (el) => { gMode = el.dataset.m; graph(route().arg); },
+  "gm-ask": () => {
+    const me = gmModel().byId.get(route().arg);
+    if (!me) return;
+    const down = gmReach(me, 2, DOWN), ring = (h) => [...down].filter(([, d]) => d === h).map(([x]) => `[[${x.id}]]`).join(", ") || "none";
+    agentOnCanvas(`I'm thinking of changing [[${me.id}]] (${me.n.type || "a note"}). In this vault these notes link to it and may depend on it:\n- directly: ${ring(1)}\n- through those: ${ring(2)}\n\nRead [[${me.id}]] and those notes, then tell me what would break or need changing if it changed, and what to check first. The list comes from links between notes, which have no direction, so say which ones don't really depend on it. Answer in the language of the notes.`);
+  },
   "focus-done": async (el) => {
     el.classList.add("ticking");
     try { const r = await api("/api/focus/done", { text: el.dataset.t }); setTimeout(() => { D.focus = r.focus; tdRender(true); }, 180); } catch (e) { el.classList.remove("ticking"); toast(e.message); }
@@ -4145,6 +4340,10 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "/" && pg !== "agents") { e.preventDefault(); cmdkOpen(); }
   if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
   if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }
+  if (pg === "graph" && route().arg) {
+    if (e.key === "1" || e.key === "2" || e.key === "3") { gDepth = +e.key; gImpact = false; graph(route().arg); }
+    if (e.key === "Escape") location.hash = "#/graph";
+  }
   const card = pg === "review" && due()[0];
   if (card) {
     if (e.key === " " && rvShown !== card.id) { e.preventDefault(); rvShown = card.id; review(); }
