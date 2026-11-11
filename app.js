@@ -890,42 +890,80 @@ function gmReach(start, depth, ok = () => true) {
   while (q.length) { const x = q.shift(); if (d.get(x) >= depth) continue; for (const y of x.nb) if (!d.has(y) && ok(x, y)) { d.set(y, d.get(x) + 1); q.push(y); } }
   return d;
 }
+// The cheapest chain of links from a to b; going through a note costs more the more it links (a hub like the glossary
+// joins everything, so a path through it says little).
+function gmPath(a, b) {
+  const cost = new Map([[a, 0]]), prev = new Map(), open = new Set([a]);
+  while (open.size) {
+    let x = null;
+    for (const y of open) if (!x || cost.get(y) < cost.get(x)) x = y;
+    open.delete(x);
+    if (x === b) break;
+    for (const y of x.nb) { const c = cost.get(x) + 1 + (y === b ? 0 : y.nb.size / 30); if (c < (cost.get(y) ?? Infinity)) { cost.set(y, c); prev.set(y, x); open.add(y); } }
+  }
+  if (!cost.has(b)) return null;
+  const p = [b];
+  while (p[0] !== a) p.unshift(prev.get(p[0]));
+  return p;
+}
+// Notes it doesn't link but shares links with (two or more), shared hubs counting less (Adamic-Adar).
+function gmSuggest(me) {
+  const s = new Map();
+  for (const z of me.nb) for (const y of z.nb) if (y !== me && !me.nb.has(y)) { const o = s.get(y) || { k: 0, w: 0 }; o.k++; o.w += 1 / Math.log(2 + z.nb.size); s.set(y, o); }
+  return [...s].filter(([, o]) => o.k >= 2).sort((a, b) => b[1].w - a[1].w).slice(0, 4);
+}
 const laneColor = (i) => `var(--p${(i % 6) + 1})`;
 function graph(arg = "") {
   graphStop?.(); graphStop = null; // redrawn in place (depth, layout) as well as from the route
   if (arg !== gLast) { gImpact = false; gLast = arg; }
-  const m = gmModel(), me = m.byId.get(arg);
+  const [fid = "", tid = ""] = arg.split("/"), m = gmModel(), me = m.byId.get(fid), to = me && m.byId.get(tid), path = to ? gmPath(me, to) : null;
   const canMap = new Set(m.nodes.map((x) => x.lane).filter((l) => l !== CONCEPTS && l !== OTHER)).size >= 3, mode = canMap ? gMode : "net";
   const down = me ? gmReach(me, 2, DOWN) : null;
   if (down?.size === 1) gImpact = false;
-  const reach = me ? (gImpact ? down : gmReach(me, gDepth)) : null;
+  const reach = me ? (path ? new Map(path.map((x, i) => [x, i])) : gImpact ? down : gmReach(me, gDepth)) : null;
   const vis = new Set(reach ? reach.keys() : m.nodes.filter((x) => mode === "net" || (x.lane !== CONCEPTS && x.lane !== PROJECTS) || gShow.has(x.lane)));
   const opt = [[PROJECTS, "Projects"], [CONCEPTS, "Concepts"]].map(([l, t]) => [l, t, m.nodes.filter((x) => x.lane === l).length]).filter(([, , n]) => n);
-  main.innerHTML = `<div class="nt-head"><h1>Graph</h1><p>${me ? (gImpact ? `What may depend on ${esc(me.n.title)}` : `${esc(me.n.title)} and what it links to`)
+  main.innerHTML = `<div class="nt-head"><h1>Graph</h1><p>${path ? `From ${esc(me.n.title)} to ${esc(to.n.title)}` : me ? (gImpact ? `What may depend on ${esc(me.n.title)}` : `${esc(me.n.title)} and what it links to`)
       : mode === "map" ? "Your notes by what they are: data on the left, people on the right. Click one to see what it touches." : "Every note and its links. Click one to see what it touches; drag to move, scroll to zoom."}</p></div>
     <div class="gm-bar">
       <input id="gm-find" list="gm-names" placeholder="Focus on a note…" autocomplete="off" spellcheck="false" aria-label="Focus on a note"><datalist id="gm-names">${m.nodes.map((x) => `<option value="${esc(x.n.title)}">`).join("")}</datalist>
-      ${me ? `<div class="gm-seg" role="group" aria-label="How far from it">${[1, 2, 3].map((d) => `<button type="button" class="${!gImpact && gDepth === d ? "on" : ""}" data-act="gm-depth" data-d="${d}">${d === 1 ? "Its links" : `${d} steps`} <kbd>${d}</kbd></button>`).join("")}</div>
+      ${me && !path ? `<div class="gm-seg" role="group" aria-label="How far from it">${[1, 2, 3].map((d) => `<button type="button" class="${!gImpact && gDepth === d ? "on" : ""}" data-act="gm-depth" data-d="${d}">${d === 1 ? "Its links" : `${d} steps`} <kbd>${d}</kbd></button>`).join("")}</div>
         <a class="gm-clear" href="#/graph">Whole vault <kbd>Esc</kbd></a>`
-      : mode === "map" ? opt.map(([l, t, n]) => `<button type="button" class="gm-chip ${gShow.has(l) ? "on" : ""}" data-act="gm-lane" data-l="${l}" title="Show the ${t.toLowerCase()} column too">${t} <small>${n}</small></button>`).join("") : ""}
+      : !me && mode === "map" ? opt.map(([l, t, n]) => `<button type="button" class="gm-chip ${gShow.has(l) ? "on" : ""}" data-act="gm-lane" data-l="${l}" title="Show the ${t.toLowerCase()} column too">${t} <small>${n}</small></button>`).join("") : ""}
       ${canMap ? `<div class="gm-seg gm-mode" role="group" aria-label="Layout">${[["map", "Map"], ["net", "Network"]].map(([k, l]) => `<button type="button" class="${mode === k ? "on" : ""}" data-act="gm-mode" data-m="${k}">${l}</button>`).join("")}</div>` : ""}
     </div>
-    ${me ? gmCard(me, down) : ""}<div class="gm-wrap"><div id="gm-view"></div></div>`;
+    ${path ? gmPathCard(path) : me ? gmCard(me, down, to) : ""}<div class="gm-wrap"><div id="gm-view"></div></div>`;
   const find = $("#gm-find");
-  find.onchange = () => { const x = m.nodes.find((y) => y.n.title === find.value.trim()); if (x) location.hash = `#/graph/${encodeURIComponent(x.id)}`; };
+  const pick = (input, go) => { input.onchange = () => { const x = m.nodes.find((y) => y.n.title === input.value.trim()); if (x) location.hash = go(x); }; };
+  pick(find, (x) => `#/graph/${encodeURIComponent(x.id)}`);
+  if ($("#gm-to")) pick($("#gm-to"), (x) => `#/graph/${encodeURIComponent(me.id)}/${encodeURIComponent(x.id)}`);
   if (mode === "map") gmDraw($("#gm-view"), m, vis, me, reach);
   else graphNet($("#gm-view"), reach ? new Set([...vis].map((x) => x.id)) : null, arg);
   ambient(art("graph"));
 }
 // The note in focus, above the map (the map lists what it links to, so the full width goes to the map).
-function gmCard(me, down) {
-  const n = me.n, ring = (h) => [...down.values()].filter((d) => d === h).length;
+function gmCard(me, down, to) {
+  const n = me.n, ring = (h) => [...down.values()].filter((d) => d === h).length, sugg = gImpact ? [] : gmSuggest(me);
   return `<section class="gm-card" style="--c: ${laneColor(me.lane)}">
     <div><span class="gm-type"><i></i>${esc(n.type || "note")}</span><h3>${esc(n.title)}</h3>${n.summary ? `<p>${esc(plain(n.summary))}</p>` : ""}
       ${gImpact ? `<p class="gm-note">${ring(1)} link to it directly and ${ring(2)} through those. Read from the links between notes, which have no direction: some may not really depend on it.</p>` : ""}</div>
     <div class="gm-acts"><a class="btn peach" href="${noteHref(n.path)}">Open the note</a>
       ${down.size > 1 ? `<button type="button" class="btn glass" data-act="gm-impact">${gImpact ? "Back to its links" : `What depends on it <small>${down.size - 1}</small>`}</button>` : ""}
       ${gImpact ? '<button type="button" class="btn glass" data-act="gm-ask" title="An agent reads these notes and says what would break">Ask an agent what breaks</button>' : ""}</div>
+    ${gImpact ? "" : `<div class="gm-foot">
+      <input id="gm-to" list="gm-names" placeholder="Path to another note…" autocomplete="off" spellcheck="false" aria-label="Path to another note">
+      ${to ? `<span class="gm-note">No chain of links reaches ${esc(to.n.title)}.</span>` : ""}
+      ${sugg.length ? `<div class="gm-sugg"><span>Might relate, not linked:</span>${sugg.map(([x, o]) => `<span class="gm-s" style="--c: ${laneColor(x.lane)}"><a href="#/graph/${encodeURIComponent(x.id)}" title="${o.k} links in common"><i></i>${esc(gmTitle(x))}</a><button type="button" data-act="gm-link" data-id="${esc(x.id)}" title="An agent reads both and links them if they really relate">Link</button></span>`).join("")}</div>` : ""}
+    </div>`}
+  </section>`;
+}
+function gmPathCard(path) {
+  const a = path[0], b = path.at(-1);
+  return `<section class="gm-card" style="--c: ${laneColor(a.lane)}">
+    <div><span class="gm-type"><i></i>Path · ${path.length - 1} ${path.length === 2 ? "step" : "steps"}</span><h3>${esc(a.n.title)} → ${esc(b.n.title)}</h3>
+      <div class="gm-chain">${path.map((x) => `<a href="#/graph/${encodeURIComponent(x.id)}" style="--c: ${laneColor(x.lane)}"><i></i>${esc(gmTitle(x))}</a>`).join('<span aria-hidden="true">→</span>')}</div></div>
+    <div class="gm-acts"><a class="btn glass" href="#/graph/${encodeURIComponent(a.id)}">Back to ${esc(gmTitle(a))}</a>
+      <button type="button" class="btn glass" data-act="gm-explain" title="An agent reads the chain and explains how one leads to the other">Ask an agent to explain it</button></div>
   </section>`;
 }
 function gmDraw(el, m, vis, me, reach) {
@@ -3896,10 +3934,20 @@ const ACTIONS = {
   // Graph: click a note to focus it (again: open it), how far around it, what depends on it, the layout.
   "gm-focus": (el) => {
     const id = el.dataset.id, n = D.notes.find((x) => nameOf(x.path) === id);
-    location.hash = id === route().arg && n ? noteHref(n.path) : `#/graph/${encodeURIComponent(id)}`;
+    location.hash = id === route().arg.split("/")[0] && n ? noteHref(n.path) : `#/graph/${encodeURIComponent(id)}`;
   },
   "gm-depth": (el) => { gDepth = +el.dataset.d; gImpact = false; graph(route().arg); },
   "gm-impact": () => { gImpact = !gImpact; graph(route().arg); },
+  "gm-link": (el) => {
+    const m = gmModel(), me = m.byId.get(route().arg.split("/")[0]), x = m.byId.get(el.dataset.id);
+    if (!me || !x) return;
+    const common = [...me.nb].filter((z) => x.nb.has(z)).map((z) => `[[${z.id}]]`).join(", ");
+    agentOnCanvas(`[[${me.id}]] and [[${x.id}]] don't link each other but both link ${common}. Read the two notes: if they really relate, add a [[${x.id}]] link in [[${me.id}]] where it fits (and the other way, if it makes sense), following AGENTS.md. If they don't, say so and change nothing. Answer in the language of the notes.`);
+  },
+  "gm-explain": () => {
+    const [a, b] = route().arg.split("/"), m = gmModel(), p = m.byId.get(a) && m.byId.get(b) && gmPath(m.byId.get(a), m.byId.get(b));
+    if (p) agentOnCanvas(`In this vault [[${a}]] connects to [[${b}]] through ${p.map((x) => `[[${x.id}]]`).join(" → ")}. Read those notes and explain in a few sentences how one leads to the other, and anything in between I should know. Answer in the language of the notes.`);
+  },
   "gm-lane": (el) => { const l = +el.dataset.l; gShow.has(l) ? gShow.delete(l) : gShow.add(l); graph(route().arg); },
   "gm-mode": (el) => { gMode = el.dataset.m; graph(route().arg); },
   "gm-ask": () => {
