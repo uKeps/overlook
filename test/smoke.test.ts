@@ -2224,6 +2224,13 @@ test("canvas background presets: 5 presets, octave zoom LOD anti-moire, HUD pick
   expect(appJs).toContain('data-act="set-canvas-bg"');
   expect(appJs).toContain('KeyB: () => { if (orchMode === "free") cycleCanvasBg(); },');
   expect(appJs).toContain('if (e.key === "b" || e.key === "B") { e.preventDefault(); cycleCanvasBg(); return; }');
+
+  // 6. Fullscreen Escape isolation: Esc inside a focused terminal stays in the terminal; clicking empty canvas blurs focus so Esc exits canvas-full
+  expect(appJs).toContain("const inCanvasCardFocus = () => Boolean(");
+  expect(appJs).toContain("function blurCanvasFocus(");
+  expect(appJs).toContain('navigator.keyboard?.lock?.(["Escape"])');
+  expect(appJs).toContain("if (isBg) blurCanvasFocus(");
+  expect(appJs).toContain('if (e.key === "Escape" && route().pg === "agents" && !document.querySelector("dialog[open]") && !inCanvasCardFocus())');
 });
 
 

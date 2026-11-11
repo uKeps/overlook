@@ -989,7 +989,15 @@ async function mountTerminalPane(card, p) {
       });
       st.term.attachCustomWheelEventHandler((e) => !(e.ctrlKey || e.altKey));
       // Which card has the keyboard: a ring and a blinking cursor on that one only.
-      st.el.addEventListener("focusin", () => { st.el.closest(".orch-pane")?.classList.add("typing"); st.term.options.cursorBlink = true; });
+      st.el.addEventListener("focusin", () => {
+        const pane = st.el.closest(".orch-pane");
+        if (pane) {
+          pane.classList.add("typing", "active");
+          orchActive = pane.dataset.key || paneKey(p);
+          $("#orch-plane")?.querySelectorAll(".orch-pane").forEach((n) => { if (n !== pane) n.classList.remove("active"); });
+        }
+        st.term.options.cursorBlink = true;
+      });
       st.el.addEventListener("focusout", () => { st.el.closest(".orch-pane")?.classList.remove("typing"); st.term.options.cursorBlink = false; });
     });
   }
@@ -998,7 +1006,10 @@ async function mountTerminalPane(card, p) {
   if (terms.get(p.id) !== st || !st.term) return; // closed while loading
   st.fit.fit();
   if (!st.ws) termConnect(st, p);
-  if (orchActive === paneKey(p) && !document.activeElement?.closest?.(".orch-talk, input, textarea:not(.xterm-helper-textarea)")) st.term.focus();
+  if (!st.mounted) {
+    st.mounted = true;
+    if (orchActive === paneKey(p) && !document.activeElement?.closest?.(".orch-talk, input, textarea:not(.xterm-helper-textarea)")) st.term.focus();
+  }
 }
 
 let termList = [], shellList = [], prefTerm = "", prefShell = "";
@@ -1196,7 +1207,7 @@ function fitCanvasView() {
 function applyCanvasTransform() {
   const plane = $("#orch-plane"), zLbl = $("#orch-zoom-lbl"), canvas = $("#orch-canvas");
   const free = orchMode === "free" && !orchMax;
-  if (plane) plane.style.transform = free ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
+  if (plane) plane.style.transform = free && orchPanes.length ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
   plane?.style.setProperty("--z", orchZoom);
   // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
   // low zoom levels (>16px on-screen period) free of moiré shimmer or dot crowding.
@@ -1437,14 +1448,37 @@ function renderMultiChips() {
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
 // before the terminal sees the key) without taking keys a shell or TUI uses.
 const PANE_KEYS = "Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent tile · W close · F fit · B background · Z full screen · R reload · / this help · Alt+drag moves a card";
-// Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen); Esc leaves.
+// Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen).
+// While a terminal or card has focus, Esc belongs to it (Keyboard Lock stops the browser from eating the first Esc);
+// clicking an empty spot on the canvas blurs the card so Esc leaves full screen.
+const inCanvasCardFocus = () => Boolean(
+  document.activeElement?.closest?.(".orch-pane, input, textarea, select, [contenteditable]") ||
+  document.querySelector(".orch-pane.typing")
+);
+function blurCanvasFocus(keepSel = false) {
+  for (const st of terms.values()) st.term?.blur?.();
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur?.();
+  $("#orch-plane")?.querySelectorAll(".orch-pane").forEach((n) => n.classList.remove("typing", "active"));
+  document.querySelectorAll(".orch-item.on").forEach((n) => n.classList.remove("on"));
+  orchActive = "";
+  if (!keepSel && orchSelected.size) { orchSelected.clear(); updateSelectionUI(); }
+}
 function canvasFull(on = !document.body.classList.contains("canvas-full")) {
   document.body.classList.toggle("canvas-full", on);
-  if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
-  if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  if (on) {
+    navigator.keyboard?.lock?.(["Escape"])?.catch?.(() => {});
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().then(() => navigator.keyboard?.lock?.(["Escape"])?.catch?.(() => {})).catch(() => {});
+    }
+  } else {
+    navigator.keyboard?.unlock?.();
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  }
   orchSigs.clear(); setTimeout(() => orchPaint(true), 60); // terminals refit to the new size
 }
-document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && document.body.classList.contains("canvas-full")) canvasFull(false); });
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && document.body.classList.contains("canvas-full") && !inCanvasCardFocus()) canvasFull(false);
+});
 window.addEventListener("keydown", (e) => {
   if (!e.ctrlKey || !e.altKey || e.metaKey || route().pg !== "agents") return;
   const keys = orchPanes.map(paneKey), i = keys.indexOf(orchActive);
@@ -1481,8 +1515,9 @@ window.addEventListener("keyup", (e) => {
 function bindCanvasInteractions(canvas) {
 
   canvas.addEventListener("pointerdown", (e) => {
-    if (orchMode !== "free" || orchMax) return;
     const isBg = e.target === canvas || e.target.id === "orch-plane" || e.target.classList?.contains("orch-links") || e.target.tagName === "svg";
+    if (isBg) blurCanvasFocus(e.shiftKey || e.metaKey || e.ctrlKey);
+    if (orchMode !== "free" || orchMax) return;
     // Over a card the mouse belongs to it (a terminal's middle-click paste, right-click, selection): only the
     // background pans, with the middle or right button, the Pan tool or Space held.
     if (!isBg && !isSpacePressed) return;
@@ -1777,7 +1812,8 @@ function agentsBody() {
     if (run) tuiInPlace(p, run);
   }
   orchPanes.forEach(ensurePaneRect);
-  if (!orchPanes.some((p) => paneKey(p) === orchActive)) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
+  if (orchActive && !orchPanes.some((p) => paneKey(p) === orchActive)) orchActive = orchMode === "free" ? "" : (orchPanes[0] ? paneKey(orchPanes[0]) : "");
+  if (!orchActive && orchMode !== "free" && orchPanes[0]) orchActive = paneKey(orchPanes[0]);
   if (orchMax && !orchPanes.some((p) => paneKey(p) === orchMax)) orchMax = "";
   const dBtn = $("#orch-dir-btn");
   if (dBtn) {
@@ -3341,10 +3377,17 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && cwdOpen) { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); return; }
   if (e.key === "Escape" && calDay && !document.querySelector("dialog[open]")) { calDay = ""; calRender(); return; }
   if (e.key === "Escape" && document.body.classList.contains("svc-full")) { svcFull(false); return; }
-  if (e.key === "Escape" && orchSelected.size > 0 && route().pg === "agents") {
-    orchSelected.clear();
-    updateSelectionUI();
-    return;
+  if (e.key === "Escape" && route().pg === "agents" && !document.querySelector("dialog[open]") && !inCanvasCardFocus()) {
+    if (orchSelected.size > 0) {
+      orchSelected.clear();
+      updateSelectionUI();
+      return;
+    }
+    if (document.body.classList.contains("canvas-full")) {
+      e.preventDefault();
+      canvasFull(false);
+      return;
+    }
   }
   if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax) {
     if (!e.target.closest("input, textarea, select, [contenteditable]")) {
