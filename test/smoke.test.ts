@@ -2086,7 +2086,7 @@ test("canvas background presets: 5 presets, octave zoom LOD anti-moire, HUD pick
   for (const [id, label, desc, step] of expectedPresets) {
     expect(appJs).toContain(`["${id}", "${label}", "${desc}", ${step}]`);
     expect(appCss).toContain(`.orch-canvas.free[data-bg="${id}"]`);
-    expect(appCss).toContain(`.orch-bgmenu .bg-sw[data-sw="${id}"]`);
+    expect(appCss).toContain(`.bg-sw[data-sw="${id}"]`);
   }
   expect(appCss).toContain('html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"]');
   expect(appCss).toContain("--bg-eff-alpha: calc(var(--bg-dot-alpha) * var(--bg-lod, 1));");
@@ -2226,10 +2226,10 @@ test("canvas background presets: 5 presets, octave zoom LOD anti-moire, HUD pick
     expect(cv.style.backgroundSize).toBe("");
   }
 
-  // 5. HUD button (data-act="orch-bg-menu"), #orch-bgmenu, Settings segmented control (data-act="set-canvas-bg"), and keyboard shortcuts (Ctrl+Alt+B / B) are wired
+  // 5. HUD button (data-act="orch-bg-menu") opening the shared menu with the presets, Settings segmented control (data-act="set-canvas-bg"), and keyboard shortcuts (Ctrl+Alt+B / B) are wired
   expect(appJs).toContain('b("orch-bg-menu", "canvasBg"');
-  expect(appJs).toContain('<div class="orch-newmenu orch-bgmenu" id="orch-bgmenu" hidden></div>');
-  expect(appJs).toContain('"orch-bg-menu": () => {');
+  expect(appJs).toContain('"orch-bg-menu": (el) => ctxAt(el, bgItems()),');
+  expect(appJs).toContain("const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));");
   expect(appJs).toContain('"orch-bg": (el) => setCanvasBg(el.dataset.bg || el.dataset.v),');
   expect(appJs).toContain('"set-canvas-bg": (el) => { setCanvasBg(el.dataset.v); if (route().pg === "settings") settingsPage(); },');
   expect(appJs).toContain('data-act="set-canvas-bg"');

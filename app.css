@@ -994,55 +994,56 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 
 
 
-/* Interactive PC Folder Browser Popover (#cwd-pop) */
+/* The folder picker (#cwd-pop): the same surface as the canvas menus. A search line, the places, where you are,
+   then the folders as quiet rows (a click opens one, "Use" on hover picks it). */
 .cwd-pop {
   position: fixed; z-index: 999;
-  width: min(540px, calc(100vw - 24px)); max-height: calc(100vh - 80px);
-  border-radius: var(--r); padding: 12px; display: flex; flex-direction: column; gap: 8px;
-  background: color-mix(in srgb, var(--surface) 97%, #08080a);
-  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
-  box-shadow: 0 24px 64px rgba(0, 0, 0, .58);
+  width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 80px);
+  border-radius: 14px; padding: 6px; display: flex; flex-direction: column; gap: 4px;
+  background: color-mix(in srgb, var(--surface) 96%, #000); border: 1px solid rgba(255, 255, 255, .1);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: cv-pop .12s var(--float-ease);
 }
-.cwd-top { display: flex; align-items: center; gap: 6px; }
-.cwd-top input {
-  flex: 1; height: 32px; padding: 0 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 65%, transparent);
-  font: 12px var(--mono); color: var(--ink);
+.cwd-top { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 4px 0 10px; border-bottom: 1px solid rgba(255, 255, 255, .07); }
+.cwd-top > svg { flex: none; color: var(--faint); }
+.cwd-top input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font: 13px var(--body); color: var(--ink); }
+.cwd-top input::placeholder { color: var(--faint); }
+.cwd-top input:focus-visible { outline: none; } /* the whole line is the field: no ring around the bare input */
+.cwd-x { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--faint); }
+.cwd-x:hover { color: var(--ink); background: rgba(255, 255, 255, .07); }
+.cwd-roots { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 4px 0; }
+.cwd-chip {
+  height: 26px; padding: 0 10px; border-radius: 7px; font: 500 12px var(--body); color: var(--muted);
+  transition: color .15s, background .15s;
 }
-.cwd-top input:focus { outline: none; border-color: var(--accent); }
-.cwd-roots { display: flex; flex-wrap: wrap; gap: 5px; }
-.cwd-roots .fchip { height: 24px; padding: 0 9px; font: 500 11px var(--mono); }
-.cwd-cur {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--surface-2) 45%, transparent);
-  border: 1px solid var(--line);
-}
-.cwd-path { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
-.cwd-up { height: 24px; padding: 0 8px; font: 500 11px var(--mono); }
-.cwd-cur code { font: 600 12px var(--mono); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cwd-cur-acts { display: flex; align-items: center; gap: 6px; flex: none; }
-.cwd-cur-acts .fchip, .cwd-cur-acts .btn { height: 25px; padding: 0 9px; font: 500 11px var(--mono); }
+.cwd-chip:hover { color: var(--ink); background: rgba(255, 255, 255, .06); }
+.cwd-chip.on { color: var(--ink); background: rgba(255, 255, 255, .1); }
+.cwd-cur { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 6px; }
+.cwd-path { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.cwd-path span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 13px var(--body); color: var(--ink); }
+.cwd-up { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; color: var(--muted); }
+.cwd-up:hover { color: var(--ink); background: rgba(255, 255, 255, .07); }
+.cwd-use { flex: none; height: 28px; padding: 0 12px; border-radius: 8px; font-size: 12px; }
 .cwd-list {
-  max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
-  padding-right: 2px;
+  max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; padding: 2px 0 2px;
+  border-top: 1px solid rgba(255, 255, 255, .07); scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .16) transparent;
 }
-.cwd-row {
-  display: flex; align-items: center; gap: 6px; border-radius: 7px; padding-right: 4px;
-  border: 1px solid transparent; transition: background .12s, border-color .12s;
-}
-.cwd-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); border-color: var(--line); }
+.cwd-row { display: flex; align-items: center; border-radius: 7px; transition: background .12s; }
+.cwd-row:hover { background: rgba(255, 255, 255, .06); }
 .cwd-open {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px; text-align: left; font: 500 12.5px var(--mono); color: var(--ink);
+  flex: 1; min-width: 0; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; text-align: left;
+  font: 500 13px var(--body); color: var(--ink);
 }
-.cwd-open svg { color: var(--accent); flex: none; }
-.cwd-open b { font-weight: 500; color: var(--ink); }
-.cwd-open small { margin-left: auto; font: 11px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cwd-git {
-  padding: 1px 6px; border-radius: 99px; font: 600 10px var(--mono); text-transform: uppercase;
-  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+.cwd-open svg { flex: none; color: var(--faint); }
+.cwd-open b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cwd-git { flex: none; font: 500 10.5px var(--body); color: var(--faint); }
+.cwd-sel {
+  flex: none; height: 24px; margin-right: 4px; padding: 0 10px; border-radius: 6px; font: 500 12px var(--body); color: var(--accent);
+  opacity: 0; transition: opacity .12s, background .12s;
 }
-.cwd-sel { height: 24px; padding: 0 9px; font: 500 11px var(--mono); }
+.cwd-row:hover .cwd-sel, .cwd-sel:focus-visible { opacity: 1; }
+.cwd-sel:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cwd-empty { padding: 14px 10px; font-size: 12.5px; color: var(--faint); }
+@media (pointer: coarse) { .cwd-sel { opacity: 1; } .cwd-open { height: 42px; } }
 
 .orch-presets {
   display: none; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 6px; padding: 8px 6px 2px; border-top: 1px solid var(--line);
@@ -1372,25 +1373,42 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 }
 .orch-sticky-input:focus { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 
-/* Floating Canvas HUD (bottom-right) */
-/* top-right, in the strip the panes keep clear of (CANVAS_TOP in app.js): at the bottom it ran into the app dock */
-/* HUD: a floating strip of icon buttons (names and shortcuts in their tooltips) */
+/* ---------- The canvas chrome: small islands floating over it (Maestri-style) ----------
+   ☰ top left (pages, search, layout), the tools top centre, the view bottom right; everything else is a right-click. */
+.cv-island {
+  position: absolute; z-index: 15;
+  background: color-mix(in srgb, var(--surface) 94%, #000);
+  border: 1px solid rgba(255, 255, 255, .09); border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+/* top left: the ☰ menu (pages are in the dock, as on every page) */
+.cv-tl { top: 10px; left: 10px; width: 40px; height: 40px; padding: 3px; display: flex; border-radius: 999px; }
+.cv-tl-btn {
+  height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 999px;
+  color: var(--muted); font: 500 13px var(--body); transition: color .15s, background .15s;
+}
+.cv-tl-btn:first-child { flex: none; width: 32px; }
+.cv-tl-btn:hover { color: var(--ink); background: rgba(255, 255, 255, .08); }
 .orch-hud {
-  position: absolute; right: 10px; top: 10px; z-index: 15; max-width: calc(100% - 150px); overflow-x: auto; scrollbar-width: none;
-  display: inline-flex; align-items: center; gap: 2px; padding: 3px;
-  border-radius: 10px; background: color-mix(in srgb, var(--surface) 92%, #000);
-  border: 1px solid rgba(255, 255, 255, .1); box-shadow: 0 10px 28px rgba(0, 0, 0, .4);
+  top: 10px; left: 50%; translate: -50% 0; max-width: calc(100% - 340px);
+  display: inline-flex; align-items: center; gap: 2px; padding: 4px;
 }
+.orch-hud.cv-br { top: auto; bottom: 12px; left: auto; right: 12px; translate: none; max-width: calc(100% - 24px); }
 .hud-btn {
-  flex: none; min-width: 28px; height: 28px; padding: 0 6px; display: grid; place-items: center; border: 0; border-radius: 7px;
-  background: none; color: var(--muted); font: 500 13px/1 var(--body); transition: color .15s, background .15s;
+  flex: none; min-width: 32px; height: 32px; padding: 0 6px; display: grid; place-items: center; border: 0; border-radius: 9px;
+  background: none; color: var(--muted); font: 500 14px/1 var(--body);
+  transition: color .15s, background .15s, transform .16s var(--ease); transform-origin: center top; /* swells like the dock */
 }
+.cv-br .hud-btn { transform-origin: center bottom; }
+/* the ☰ / Home pill: only the icon and the label swell (magnify inside), so nothing leaves its outline */
+.cv-tl-btn > * { transition: transform .16s var(--ease); }
 .hud-btn:hover { color: var(--ink); background: rgba(255, 255, 255, .07); }
-.hud-btn.on { color: var(--ink); background: rgba(255, 255, 255, .1); }
+.hud-btn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .hud-btn.danger:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
-.hud-zoom { min-width: 44px; font: 500 11px/1 var(--body); color: var(--faint); }
-.hud-sel { padding: 0 6px; font: 500 11px var(--body); color: var(--muted); white-space: nowrap; }
-.orch-hud .orch-hud-sep { flex: none; width: 1px; height: 16px; background: rgba(255, 255, 255, .1); margin: 0 3px; }
+.hud-zoom { min-width: 48px; font: 500 12px/1 var(--body); color: var(--ink); }
+.hud-sel { padding: 0 6px; font: 500 11.5px var(--body); color: var(--accent); white-space: nowrap; }
+.orch-hud .orch-hud-sep { flex: none; width: 1px; height: 18px; background: rgba(255, 255, 255, .1); margin: 0 4px; }
+@media (max-width: 760px) { .orch-hud:not(.cv-br) { top: 58px; left: 10px; right: 10px; translate: none; max-width: none; overflow-x: auto; scrollbar-width: none; } }
 .orch-marquee {
   position: absolute; pointer-events: none; z-index: 20;
   border: 1.5px solid var(--accent);
@@ -2003,76 +2021,165 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 
 /* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD and the Fleet stay on it */
 body.canvas-full { padding: 0; }
-body.canvas-full :is(.top, .cal, #dockwrap, .orch-deck) { display: none !important; }
+body.canvas-full :is(.top, .cal, #dockwrap) { display: none !important; }
 body.canvas-full main { max-width: none; margin: 0; padding: 0; }
 body.canvas-full .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
 body.canvas-full .orch-canvas { border-radius: 0; border: 0; }
 body.canvas-full .orch-work { gap: 0; }
 
 
-/* "+" in the HUD: which agent to open in a new terminal (or a plain shell) */
-.orch-newmenu {
-  position: absolute; top: 52px; right: 10px; z-index: 16; min-width: 180px; padding: 4px; display: flex; flex-direction: column;
-  border-radius: 10px; border: 1px solid rgba(255, 255, 255, .1); background: color-mix(in srgb, var(--surface) 96%, #000); box-shadow: 0 14px 34px rgba(0, 0, 0, .45);
-}
-.orch-newmenu[hidden] { display: none; }
-.orch-newmenu button { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 500 12.5px var(--body); text-align: left; }
-.orch-newmenu button:hover { background: rgba(255, 255, 255, .07); color: var(--ink); }
-.orch-bgmenu { min-width: 196px; }
-.orch-bgmenu button.on { color: var(--ink); background: rgba(255, 255, 255, .09); }
-.orch-bgmenu .bg-sw {
+/* background swatches (the Background menu) */
+.bg-sw {
   width: 14px; height: 14px; border-radius: 4px; flex: none;
   border: 1px solid rgba(255, 255, 255, .18); background-color: var(--bg);
 }
-.orch-bgmenu .bg-sw[data-sw="dots"] {
+.bg-sw[data-sw="dots"] {
   background-image: radial-gradient(color-mix(in srgb, var(--ink) 45%, transparent) 1px, transparent 1px);
   background-size: 4px 4px; background-position: 2px 2px;
 }
-.orch-bgmenu .bg-sw[data-sw="sparse"] {
+.bg-sw[data-sw="sparse"] {
   background-image: radial-gradient(color-mix(in srgb, var(--ink) 30%, transparent) 1px, transparent 1px);
   background-size: 6px 6px; background-position: 3px 3px;
 }
-.orch-bgmenu .bg-sw[data-sw="grid"] {
+.bg-sw[data-sw="grid"] {
   background-image:
     linear-gradient(to right, color-mix(in srgb, var(--ink) 22%, transparent) 1px, transparent 1px),
     linear-gradient(to bottom, color-mix(in srgb, var(--ink) 22%, transparent) 1px, transparent 1px);
   background-size: 5px 5px;
 }
-.orch-bgmenu .bg-sw[data-sw="plain"] { background: color-mix(in srgb, var(--surface) 85%, var(--bg)); }
-.orch-bgmenu .bg-sw[data-sw="ambient"] {
+.bg-sw[data-sw="plain"] { background: color-mix(in srgb, var(--surface) 85%, var(--bg)); }
+.bg-sw[data-sw="ambient"] {
   background: radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 70%),
     color-mix(in srgb, var(--bg) 40%, transparent);
 }
-.orch-bgmenu button small { margin-left: auto; font: 400 11px var(--body); color: var(--faint); }
-.orch-bgmenu button.on small { color: var(--accent); }
 
 /* empty canvas: just the hint over the dot grid */
 .orch-empty { background: none !important; border: 0 !important; box-shadow: none !important; }
 
 /* ---------- Terminal cards: a Ghostty window under Hyprland (decorations.lua, lucid-glass.lua) ----------
-   No title bar: Alt+drag moves it, its edges resize it, `exit` closes it, Ctrl+Alt+W / Enter close / maximize it.
+   A slim title bar (its name; drag it, or Alt+drag anywhere, to move), its edges resize it, `exit` closes it.
    No border either: a border's width follows the canvas zoom (--bw), so the terminal's box changed size on every zoom
    step and the shell redrew its prompt each time. The ring and the shadow are box-shadows: they never take room. */
 .orch-pane[data-kind="terminal"] {
   --ring: transparent; /* Ghostty has no outline; only the card with the keyboard gets a faint one */
-  min-width: 320px; min-height: 160px; border: 0; border-radius: 18px; background: transparent;
+  min-width: 320px; min-height: 160px; border: 0; border-radius: 12px; background: transparent;
   backdrop-filter: blur(20px) saturate(1.17);
   box-shadow: 0 0 0 calc(2 * var(--bw, 1px)) var(--ring), 0 0 20px rgba(0, 0, 0, .6);
 }
 .orch-pane[data-kind="terminal"].typing { --ring: rgba(255, 255, 255, .12); } /* has the keyboard */
 .orch-plane.free .orch-pane[data-kind="terminal"].selected { --ring: var(--accent); }
-.orch-pane[data-kind="terminal"] > .orch-head { display: none; }
+.orch-pane[data-kind="terminal"] > .orch-head {
+  height: 28px; border-radius: 12px 12px 0 0; border-bottom-color: rgba(255, 255, 255, .06);
+  background: color-mix(in srgb, var(--win-bg) 95%, transparent);
+}
+.orch-pane[data-kind="terminal"] .wl { width: 10px; height: 10px; }
+.orch-plane.free .orch-pane[data-kind="terminal"].collapsed { height: 28px !important; }
+.orch-pane[data-kind="terminal"].collapsed > .orch-head { border-radius: 12px; }
 /* the window surface: the theme background at 95% over the blur; the text stays at full strength */
 .orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
-.orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 18px; }
-.orch-pane[data-kind="terminal"]:has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 18px 18px 0 0; }
-.orch-pane[data-kind="terminal"] > .orch-talk { border-radius: 0 0 18px 18px; border-top-color: rgba(255, 255, 255, .06); }
+.orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 0 0 12px 12px; }
+.orch-pane[data-kind="terminal"]:has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 0; }
+.orch-pane[data-kind="terminal"] > .orch-talk { border-radius: 0 0 12px 12px; border-top-color: rgba(255, 255, 255, .06); }
 /* clip, not hidden: a hidden overflow can still be scrolled by the browser (focusing the terminal's input) */
 .orch-term-view { flex: 1; min-width: 0; min-height: 0; overflow: clip; cursor: text; }
 /* The padding sits on xterm's own element: its FitAddon subtracts that padding from the box it measures, so every
    row and column it counts is on screen (padding on the outer box made it count cells that were then cut off). */
 .orch-term-view .xterm { height: 100%; padding: 10px 12px; }
 .orch-term-view .xterm-viewport { background: transparent !important; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .18) transparent; }
-/* the canvas chrome stays quiet until it's used */
-.orch-hud { opacity: .45; transition: opacity .2s; }
-.orch-hud:is(:hover, :focus-within) { opacity: 1; }
+
+/* ---------- Canvas page: the canvas is the whole screen; the header, the week strip and the dock step aside ---------- */
+body.canvas-page { padding: 0; }
+body.canvas-page :is(.top, .cal) { display: none !important; }
+body.canvas-page main { max-width: none !important; margin: 0 !important; padding: 0 !important; }
+body.canvas-page .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
+body.canvas-page .orch-work { gap: 0; }
+body.canvas-page .orch-canvas { border-radius: 0; border: 0; }
+body.canvas-page .orch-canvas.tiled { padding: 60px 10px 100px; } /* the split's panes end above the dock */
+body.canvas-page.dock-float .orch-canvas.tiled { padding-bottom: 70px; }
+/* the Fleet pill sits after the ☰ button (10 + 40 + 8), as tall as the islands */
+body.canvas-page .orch-fleet-wrap.float { left: 58px; }
+/* a phone: the dock spans the bottom, so the view bar and the map sit above it */
+@media (max-width: 760px) { body.canvas-page .orch-hud.cv-br { bottom: 84px; } body.canvas-page .cv-map { bottom: 136px; } }
+/* a pinned dock (~600px wide) meets the view bar below ~1280px: the view bar and the map rise above it */
+@media (max-width: 1280px) { body.canvas-page:not(.dock-float) .orch-hud.cv-br { bottom: 100px; } body.canvas-page:not(.dock-float) .cv-map { bottom: 152px; } }
+body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill {
+  height: 40px; padding: 0 16px; border-color: rgba(255, 255, 255, .09);
+  background: color-mix(in srgb, var(--surface) 94%, #000); box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+/* the task bar floats under the tools while it's open (✦), and folds away once a task started */
+body.canvas-page .orch-deck {
+  position: absolute; z-index: 40; top: 60px; left: 50%; translate: -50% 0; width: min(760px, calc(100% - 24px));
+  display: none; border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--float-ease); }
+@keyframes cv-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.orch-empty small { display: block; margin-top: 6px; font-size: 12px; color: var(--faint); }
+
+/* ---------- The right-click menu (also what the floating buttons open) ---------- */
+.ctx-menu {
+  position: fixed; z-index: 1000; min-width: 220px; max-width: 320px; padding: 5px; display: flex; flex-direction: column;
+  background: color-mix(in srgb, var(--surface) 96%, #000); border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: ctx-in .12s ease-out;
+  max-height: calc(100vh - 16px); overflow-y: auto; scrollbar-width: thin; /* a long menu on a short window scrolls */
+}
+/* opacity only: a transform would make the menu the containing block of its fixed submenus */
+@keyframes ctx-in { from { opacity: 0; } }
+.ctx-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 32px; padding: 0 10px; border-radius: 7px;
+  color: var(--ink); text-align: left; white-space: nowrap;
+}
+.ctx-item:hover:not(:disabled), .ctx-item:focus-visible, .ctx-row.open > .ctx-item { background: rgba(255, 255, 255, .08); outline: none; }
+.ctx-item:disabled { color: var(--faint); opacity: .5; cursor: default; }
+.ctx-item.danger { color: var(--bad); }
+.ctx-item.danger:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.ctx-ic { flex: none; width: 16px; display: grid; place-items: center; color: var(--muted); }
+.ctx-item.danger .ctx-ic { color: inherit; }
+.ctx-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ctx-item kbd { border: 0; padding: 0; font: 500 10.5px var(--mono); color: var(--faint); }
+.ctx-on { display: grid; color: var(--accent); }
+.ctx-more { display: grid; margin-right: -4px; color: var(--faint); }
+.ctx-sep { flex: none; height: 1px; margin: 5px 8px; background: rgba(255, 255, 255, .08); }
+.ctx-row { position: relative; }
+/* placed by ctxBuild (fixed, beside its row, inside the window), overlapping the parent by 2px: no gap closes it */
+.ctx-menu.ctx-sub { position: fixed; display: none; max-height: min(420px, 70vh); animation: none; }
+.ctx-row.open > .ctx-sub { display: flex; }
+@media (pointer: coarse) { .ctx-item { min-height: 42px; } }
+
+/* rename in place, and a card locked in place (no resize edges, no grab cursor) */
+.win-title.editing { pointer-events: auto; }
+.win-rename {
+  width: min(260px, 100%); height: 22px; padding: 0 8px; border-radius: 6px; outline: none; text-align: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); background: rgba(0, 0, 0, .35); color: var(--ink); font: 500 12px var(--body);
+}
+.orch-pane.locked .orch-resize { display: none !important; }
+.orch-plane.free .orch-pane.locked .orch-head { cursor: default; }
+
+/* ---------- The map (bottom right, over the view bar, like Maestri's) ----------
+   A window onto the canvas: its dot grid, the cards as coloured blocks, everything off screen dimmed around a white frame. */
+.cv-map {
+  right: 12px; bottom: 64px; width: 252px; height: 172px; overflow: hidden; border-radius: 16px;
+  background-color: color-mix(in srgb, var(--surface) 90%, transparent);
+  background-image: radial-gradient(color-mix(in srgb, var(--ink) 9%, transparent) 1px, transparent 1px); background-size: 12px 12px;
+  backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  animation: cv-pop .18s var(--float-ease);
+}
+.cv-map svg { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.cv-map .mb { fill: color-mix(in srgb, var(--ink) 55%, transparent); cursor: pointer; transition: filter .15s; }
+.cv-map .mb.m-terminal { fill: var(--accent-2); }
+.cv-map .mb.m-sticky { fill: var(--warn); }
+.cv-map .mb:is(.m-task, .m-agent) { fill: var(--accent); }
+.cv-map .mb.on { stroke: #fff; stroke-width: 1.5; }
+.cv-map .mb:hover { filter: brightness(1.18); }
+.cv-map .map-dim { fill: rgba(0, 0, 0, .42); pointer-events: none; }
+/* (not .frame: that class is the embedded apps' iframe, and its CSS height would stretch an SVG rect) */
+.cv-map .map-frame { fill: color-mix(in srgb, #fff 4%, transparent); stroke: rgba(255, 255, 255, .92); stroke-width: 1.5; pointer-events: none; }
+.cv-map.dragging svg, .cv-map.dragging .mb { cursor: grabbing; }
+.cv-map-x {
+  position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--ink); background: color-mix(in srgb, var(--surface-2) 85%, transparent); box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+  opacity: 0; transition: opacity .15s, background .15s;
+}
+.cv-map:is(:hover, :focus-within) .cv-map-x { opacity: 1; }
+.cv-map-x:hover { background: var(--surface-2); }
+@media (pointer: coarse) { .cv-map-x { opacity: 1; } }
+@media (max-width: 760px) { .cv-map { width: 184px; height: 126px; } }
