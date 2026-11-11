@@ -33,7 +33,7 @@ const DEFAULTS: Agent[] = [
     canvas: ["--append-system-prompt", "{canvas}"] },
   { id: "agy", name: "Antigravity", process: "agy", efforts: EFFORTS, effort: "high",
     run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "accept-edits", "--output-format", "stream-json", "--print-timeout", "10m"],
-    open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] }, tui: ["agy", "-i", "{prompt}"] },
+    open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] }, tui: ["agy", "--log-file", "{log}", "-i", "{prompt}"] },
   { id: "codex", name: "Codex", process: "codex", run: ["codex", "exec", "{prompt}"] },
   { id: "gemini", name: "Gemini", process: "gemini", run: ["gemini", "-p", "{prompt}"] },
 ];
@@ -558,11 +558,13 @@ export function agentArgv(a: Agent, session: string): string[] | string {
 }
 // A new TUI: `tui` (or the bare CLI) with the first prompt and the session id the pane picked.
 export function tuiArgv(a: Agent, session: string, prompt: string, model = "", effort = ""): string[] | string {
-  const args: string[] = [], vals: Record<string, string> = { prompt: notFlag(prompt), session, model, effort };
+  const log = session && tuiLogs(a) ? agentLog(session) : "";
+  if (log) mkdirSync(dirname(log), { recursive: true });
+  const args: string[] = [], vals: Record<string, string> = { prompt: notFlag(prompt), session, model, effort, log };
   for (const x of a.tui ?? [a.run?.[0] ?? ""]) {
-    const used = [...x.matchAll(/\{(prompt|session|model|effort)\}/g)].map((m) => m[1]);
+    const used = [...x.matchAll(/\{(prompt|session|model|effort|log)\}/g)].map((m) => m[1]);
     if (used.some((k) => !vals[k])) { if (args.at(-1)?.startsWith("-")) args.pop(); continue; }
-    const v = x.replace(/\{(prompt|session|model|effort)\}/g, (_, k) => vals[k]);
+    const v = x.replace(/\{(prompt|session|model|effort|log)\}/g, (_, k) => vals[k]);
     args.push(v);
   }
   return withBin(a, args);
@@ -570,6 +572,13 @@ export function tuiArgv(a: Agent, session: string, prompt: string, model = "", e
 const withBin = (a: Agent, [head, ...rest]: string[]) => { const b = head && bin(head); return b ? [b, ...rest] : `${a.name} has no interactive command`; };
 export const tuiOk = (a: Agent) => !!a.run && (!!a.tui || Object.values(a.open ?? {}).some((c) => c[0] === "{terminal}"));
 export const tuiResumes = (a: Agent) => !!a.tui?.some((x) => x.includes("{session}"));
+// A CLI that can't take a session id up front (agy) logs to {log}, a file named after the pane's id; the conversation
+// it created is read back from there. ponytail: agy's log line; another CLI's needs its own pattern.
+export const tuiLogs = (a: Agent) => !!a.tui?.some((x) => x.includes("{log}"));
+export const agentLog = (sid: string) => `${import.meta.dir}/cache/agent-logs/${sid}.log`;
+export const loggedConversation = (sid: string) => {
+  try { return [...readFileSync(agentLog(sid), "utf8").matchAll(/Created conversation ([0-9a-f-]{36})/g)].at(-1)?.[1] ?? ""; } catch { return ""; }
+};
 // Claude Code writes a session's transcript once it has a turn: a pane opened and closed before the first message has
 // nothing to resume, so it starts again with the same id. ponytail: claude's layout; other agents with {session} resume blindly.
 export const sessionStarted = (sid: string) => { try { return [...new Bun.Glob(`*/${sid}.jsonl`).scanSync(`${homedir()}/.claude/projects`)].length > 0; } catch { return false; } };
