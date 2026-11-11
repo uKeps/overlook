@@ -447,9 +447,9 @@ function place() {
 const move = (d) => { idx = (idx + d + SG.length) % SG.length; place(); };
 
 // ---------------------------------------------------------------- Home (Minimal): the to-do list
-// Tasks live in Tasks.md in the vault (todos.ts). The page shows today's (late ones roll in), adds a task from one typed
-// line ("pagar o servidor dia 15 todo mês"), and edits one in place when clicked. Upcoming, someday and done fold into one
-// line; one more line shows only when something needs you (an agent waiting, notes to review, the inbox).
+// Tasks live in Tasks.md in the vault (todos.ts). The page shows today's focus (from the daily note) and today's tasks
+// (late ones roll in), adds a task from one typed line ("pagar o servidor dia 15 todo mês"), and edits one in place when
+// clicked. Upcoming, someday and done fold into one line. Beside it, "Today": the calendar, the agents, the vault.
 let tdOpen = "", tdMore = false, tdTimer = 0, tdGone = null;
 const tdAll = () => D.todos || [];
 const tdDay = (d) => {
@@ -486,12 +486,14 @@ const tdEditor = (t) => `<div class="td-edit" data-id="${esc(t.id)}">
   </div>`;
 function todoHome() {
   main.innerHTML = `<section class="td-home">
-      <header class="td-hello"><h1>${esc(dayName(D.today, { weekday: "long", day: "numeric", month: "long" }))}</h1><p id="td-count"></p></header>
-      <form class="td-add" id="td-add"><span class="td-plus">${icon("plus", 17)}</span>
-        <input id="td-in" placeholder="Add a task… try &quot;amanhã 9h toda segunda&quot;" autocomplete="off" spellcheck="false" aria-label="Add a task"><kbd>Enter</kbd></form>
-      <div class="td-chips" id="td-chips"></div>
-      <div id="td-list"></div>
-      <div id="td-nudge"></div>
+      <div class="td-main">
+        <header class="td-hello"><h1>${esc(dayName(D.today, { weekday: "long", day: "numeric", month: "long" }))}</h1><p id="td-count"></p></header>
+        <form class="td-add" id="td-add"><span class="td-plus">${icon("plus", 17)}</span>
+          <input id="td-in" placeholder="Add a task… try &quot;amanhã 9h toda segunda&quot;" autocomplete="off" spellcheck="false" aria-label="Add a task"><kbd>Enter</kbd></form>
+        <div class="td-chips" id="td-chips"></div>
+        <div id="td-list"></div>
+      </div>
+      <aside class="td-side" id="td-side" aria-label="Today"></aside>
     </section>`;
   const inp = $("#td-in");
   // While typing, what the line will become: the date, time, repeat and importance read from it.
@@ -518,7 +520,7 @@ function todoHome() {
       if (!r.todo.due || r.todo.due > D.today) toast(r.todo.due ? `Added for ${tdDay(r.todo.due).toLowerCase()}` : "Added to someday");
     } catch (err) { inp.value = text; toast(err.message); }
   };
-  tdRender(true); tdNudge();
+  tdRender(true); tdSide();
   if (matchMedia("(pointer: fine)").matches) inp.focus();
 }
 // force: redraw even while a field in the list has the keyboard (after a save); the refreshes leave a typist alone.
@@ -527,11 +529,18 @@ function tdRender(force = false) {
   if (!box || (!force && box.contains(document.activeElement) && document.activeElement.matches("input, textarea, select"))) return;
   const open = tdAll().filter((t) => !t.done), now = open.filter((t) => t.due && t.due <= D.today).sort(tdSort);
   const later = open.filter((t) => t.due > D.today).sort(tdSort), someday = open.filter((t) => !t.due);
-  const done = tdAll().filter((t) => t.done && t.doneOn === D.today);
-  $("#td-count").textContent = now.length ? `${now.length} for today` : open.length ? "Nothing left for today" : "Nothing to do. Add the first thing above.";
+  const done = tdAll().filter((t) => t.done && t.doneOn === D.today), focus = D.focus || [];
+  $("#td-count").textContent = [focus.length && `${focus.length} focus`, now.length ? `${now.length} for today` : open.length ? "nothing left for today" : "nothing to do yet"].filter(Boolean).join(" · ").replace(/^./, (c) => c.toUpperCase());
+  // Today's focus, from the daily note: ticking one ticks it there. Without one, the morning routine can pick it.
+  const morning = (S?.tasks || []).find((t) => t.routine === "morning" && !t.end);
+  const top = focus.length ? `<h4 class="td-group td-focus-h">Focus <span>from today's note</span></h4>
+      <div class="td-list">${focus.map((f) => `<div class="td-task focus"><button type="button" class="td-check" data-act="focus-done" data-t="${esc(f)}" aria-label="Done"></button><span class="td-text">${emLinks(f)}</span></div>`).join("")}</div>
+      ${now.length ? '<h4 class="td-group">Tasks</h4>' : ""}`
+    : morning ? `<a class="td-start" href="#/t/${esc(morning.id)}">${icon("target", 14)} The morning routine is picking today's focus…</a>`
+    : D.routines ? `<button type="button" class="td-start" data-act="start-day">${icon("target", 14)} Start the day <small>an agent picks today's focus in the daily note</small></button>` : "";
   const days = [...new Set(later.map((t) => t.due))];
   const fold = [later.length && `${later.length} upcoming`, someday.length && `${someday.length} someday`, done.length && `${done.length} done today`].filter(Boolean).join(" · ");
-  box.innerHTML = `<div class="td-list">${now.map((t) => tdRow(t)).join("")}</div>
+  box.innerHTML = `${top}<div class="td-list">${now.map((t) => tdRow(t)).join("")}</div>
     ${fold ? `<button type="button" class="td-fold ${tdMore ? "on" : ""}" data-act="td-more">${fold} <span>${tdMore ? "▾" : "▸"}</span></button>` : ""}
     ${tdMore ? `${days.map((d) => `<h4 class="td-group">${esc(tdDay(d))}</h4><div class="td-list">${later.filter((t) => t.due === d).map((t) => tdRow(t, true)).join("")}</div>`).join("")}
       ${someday.length ? `<h4 class="td-group">Someday</h4><div class="td-list">${someday.map((t) => tdRow(t, true)).join("")}</div>` : ""}
@@ -568,18 +577,30 @@ async function tdSave(id, patch) {
   } catch (e) { toast(e.message); D = await api("/api").catch(() => D); }
   tdRender(true);
 }
-// One line when something needs you, the most pressing first; nothing at all otherwise.
-function tdNudge() {
-  const el = $("#td-nudge");
+// "Today", beside the list: the calendar's items for today, the agents (who waits for you first), and the vault's living
+// parts (notes to review, the inbox, today's captures) above the notes you touched last. An empty block isn't drawn.
+function tdSide() {
+  const el = $("#td-side");
   if (!el) return;
-  const wait = fleetItems().filter((it) => it.group === "waiting");
-  const xs = [
-    ...wait.map((it) => `<button type="button" data-act="home-agent" data-kind="${it.kind}" data-id="${esc(it.id)}">An agent is waiting for you: ${esc(it.title)} <b>Answer ${icon("r", 12)}</b></button>`),
-    due().length && `<a href="#/review">${due().length} ${due().length === 1 ? "note" : "notes"} to review <b>Review ${icon("r", 12)}</b></a>`,
-    inbox().length && `<a href="${noteHref(inbox()[0].path)}">${inbox().length} in the inbox <b>Open ${icon("r", 12)}</b></a>`,
-  ].filter(Boolean);
-  el.className = xs.length ? "td-nudge" : "";
-  el.innerHTML = xs.length ? `<i></i>${xs[0]}${xs.length > 1 ? `<small>+${xs.length - 1} more</small>` : ""}` : "";
+  const it = dayItems(D.today);
+  const cal = [...it.events.map((e) => ({ t: e.time, x: esc(e.title) })), ...it.scheduled.map((e) => ({ t: e.time, x: `<i>${icon("bolt", 11)}</i>${esc(e.prompt)}` }))]
+    .sort((a, b) => (a.t || "").localeCompare(b.t || ""));
+  const fleet = fleetItems().filter((x) => x.group !== "done" && x.kind !== "terminal"), wait = fleet.filter((x) => x.group === "waiting");
+  const shown = [...wait, ...fleet.filter((x) => x.group !== "waiting").slice(0, Math.max(1, 3 - wait.length))];
+  const name = (x) => { const a = x.kind === "agent" && S.agents?.find((y) => y.key === x.id); return a ? a.cwd.split("/").filter(Boolean).pop() || "~" : x.title; };
+  const daily = D.notes.find((n) => n.path === `${D.daily}/${D.today}.md`);
+  const vault = [[due().length, "to review", "#/review", "Review"], [inbox().length, "in the inbox", inbox()[0] && noteHref(inbox()[0].path), "Process"],
+    [(D.captured || []).length, "captured today", daily && noteHref(daily.path), "Open"]].filter(([n, , href]) => n && href);
+  const recent = D.notes.filter((n) => n.type !== "daily" && n.folder !== D.daily).sort((a, b) => b.mtime - a.mtime).slice(0, 3);
+  el.innerHTML = [
+    cal.length && `<section class="td-blk"><h4>Calendar</h4>${cal.map((c) => `<div class="td-ev"><b>${esc(c.t || "all day")}</b><span>${c.x}</span></div>`).join("")}</section>`,
+    fleet.length && `<section class="td-blk"><h4>Agents <a href="#/agents">${fleet.length} working</a></h4>${shown.map((x) => `<button type="button" class="td-ag ${x.group === "waiting" ? "w" : ""}" data-act="home-agent" data-kind="${x.kind}" data-id="${esc(x.id)}" title="Open it on the canvas">
+        <span class="d"></span><span class="nm">${esc(name(x))}${x.group === "waiting" ? "<small>waiting for you</small>" : ""}</span>${x.group === "waiting" ? `<b>Answer ${icon("r", 11)}</b>` : ""}</button>`).join("")}</section>`,
+    (vault.length || recent.length) && `<section class="td-blk"><h4>Vault <a href="#/notes">${D.notes.length} notes</a></h4>
+      ${vault.map(([n, l, href, go]) => `<a class="td-v" href="${esc(href)}"><b>${n}</b>${esc(l)}<span>${go} ${icon("r", 11)}</span></a>`).join("")}
+      ${vault.length && recent.length ? '<div class="td-sep"></div>' : ""}
+      ${recent.map((n) => `<a class="td-nt" href="${noteHref(n.path)}" style="--c: ${folderColor(n.folder)}"><i></i>${esc(n.title)}</a>`).join("")}</section>`,
+  ].filter(Boolean).join("");
 }
 // A task with a time pings you then: a toast here, and a notification when the browser allows (asked the first time
 // you give a task a time). Only within ten minutes of it, so opening the page late doesn't ring the whole morning.
@@ -3663,6 +3684,10 @@ const ACTIONS = {
   "orch-vault-note": () => openVaultNotes(),
   "note-ask": (el) => askAgent(el.dataset.p),
   "note-canvas": (el) => noteToCanvas(el.dataset.p),
+  "focus-done": async (el) => {
+    el.classList.add("ticking");
+    try { const r = await api("/api/focus/done", { text: el.dataset.t }); setTimeout(() => { D.focus = r.focus; tdRender(true); }, 180); } catch (e) { el.classList.remove("ticking"); toast(e.message); }
+  },
   "td-done": (el) => { const t = tdAll().find((x) => x.id === el.dataset.id); if (!t) return; el.classList.add("ticking"); setTimeout(() => tdSave(t.id, { done: !t.done }), 180); },
   "td-edit": (el) => { tdOpen = el.dataset.id; tdRender(true); $(".td-edit .td-title")?.focus(); },
   "td-move": (el) => tdSave(el.dataset.id, { due: addDays(D.today, Number(el.dataset.d)) }),
@@ -4080,13 +4105,13 @@ async function system() { S = await api("/api/system"); }
 setInterval(async () => {
   await system(); topBar();
   const { pg } = route();
-  if (!pg) { tiles(); tdNudge(); }
+  if (!pg) { tiles(); tdSide(); }
   else if (pg === "agents" && !cwdOpen && !document.activeElement?.closest?.(".orch-talk, .orch-sticky-wrap")) agentsBody();
   else if (pg === "services") services();
 }, 10000);
-setInterval(async () => { await vault(); topBar(); if (!route().pg) { tiles(); tdRender(); } }, 60000); // Tasks.md edited in Obsidian shows up
+setInterval(async () => { await vault(); topBar(); if (!route().pg) { tiles(); tdRender(); tdSide(); } }, 60000); // Tasks.md edited in Obsidian shows up
 // (the to-do list redraws unless you're typing in it: a draft survives switching windows)
-addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg) uiMode === "minimal" ? (tdRender(), tdNudge()) : home(); else if (pg === "notes") grid(); });
+addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg) uiMode === "minimal" ? (tdRender(), tdSide()) : home(); else if (pg === "notes") grid(); });
 setInterval(clock, 1000);
 clock();
 Promise.all([vault(), system()]).then(render);

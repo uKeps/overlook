@@ -19,6 +19,7 @@ test("a typed line: dates, times, repeats and importance come out of the text (p
     ["01/02 renovar domínio", { text: "renovar domínio", due: "2027-02-01" }], // a past dd/mm is next year's
     ["reunião às 14:30 na quinta-feira", { text: "reunião", due: "2026-11-12", time: "14:30" }],
     ["Responder o Guilherme #vps hoje !!", { text: "Responder o Guilherme #vps", due: T, prio: true }],
+    ["ligar pro banco ontem", { text: "ligar pro banco", due: "2026-11-10" }],
     ["comprar pão", { text: "comprar pão", due: "", time: "", repeat: "", prio: false }],
   ];
   for (const [line, want] of cases) expect([line, parseTask(line, T)]).toEqual([line, expect.objectContaining(want)]);

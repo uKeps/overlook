@@ -102,6 +102,7 @@ export function parseTask(input: string, today: string): Parsed {
   take(W("depois de amanh[ãa]"), () => { due = addDays(today, 2); })
     || take(W("(?:amanh[ãa]|tomorrow)"), () => { due = addDays(today, 1); })
     || take(W("(?:hoje|today|tonight)"), () => { due = today; })
+    || take(W("(?:ontem|yesterday)"), () => { due = addDays(today, -1); }) // something already late
     || take(W("(?:(?:na )?semana que vem|(?:na )?pr[óo]xima semana|next week)"), () => { due = nextWeekday(today, [1], true); })
     || take(W("(?:(?:no )?m[êe]s que vem|(?:no )?pr[óo]ximo m[êe]s|next month)"), () => { due = addMonths(today, 1); })
     || take(W("(?:em|in|daqui a) (\\d{1,3}) (dias?|days?|semanas?|weeks?)"), (m) => { due = addDays(today, Number(m[1]) * (unit(m[2]) === "week" ? 7 : 1)); })

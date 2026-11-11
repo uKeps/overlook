@@ -155,6 +155,21 @@ async function section(name: string) {
   return sec.split("\n").filter((l) => /^\s*- /.test(l) && !/^\s*- \[[xX]\]/.test(l) && !/→\s*\[\[/.test(l)).map((l) => l.replace(/^\s*- (\[.\] )?/, ""));
 }
 
+// Ticks a focus item in today's daily note (`- [x] …`), so the Home and Obsidian agree it's done (section() then drops it).
+async function focusDone(text: string) {
+  const f = Bun.file(`${ROOT}/${L.daily}/${today()}.md`);
+  if (!(await f.exists())) return false;
+  const lines = (await f.text()).split("\n");
+  let inside = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^## /.test(lines[i])) { inside = lines[i].trim() === `## ${L.focus}`; continue; }
+    if (!inside || !/^\s*- /.test(lines[i]) || /^\s*- \[[xX]\]/.test(lines[i]) || lines[i].replace(/^\s*- (\[.\] )?/, "") !== text) continue;
+    lines[i] = lines[i].replace(/^(\s*)- (\[.\] )?/, "$1- [x] ");
+    await Bun.write(f, lines.join("\n"));
+    return true;
+  }
+  return false;
+}
 // Tasks.md (Tarefas.md) at the vault root: the to-do list, see todos.ts.
 const TODOS = () => `${ROOT}/${L.tasks}`;
 // Calendar.md at the vault root: one line per item, `- YYYY-MM-DD HH:MM · what` (the time is optional). Plain Markdown,
@@ -898,6 +913,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     // To-dos (Tasks.md): every change answers with the whole list, so the page just redraws it.
+    if (p === "/api/focus/done") return typeof b.text === "string" && (await focusDone(b.text)) ? json({ focus: await section(L.focus) }) : new Response("not in today's focus", { status: 400 });
     if (p === "/api/todos/parse") return json(parseTask(String(b.text ?? "").slice(0, 400), today()));
     if (p === "/api/todos/add" || p === "/api/todos/edit" || p === "/api/todos/delete") {
       const r = p.endsWith("/add") ? await addTodo(TODOS(), String(b.text ?? "").slice(0, 400), today())
