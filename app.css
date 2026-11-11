@@ -774,7 +774,6 @@ html[data-ui="minimal"] body.home { display: block; }
 html[data-ui="minimal"] .top,
 html[data-ui="minimal"] .cal,
 html[data-ui="minimal"] main { max-width: 1120px; }
-html[data-ui="minimal"] body.home main,
 html[data-ui="minimal"] body.cal-float main,
 html[data-ui="minimal"] .glass:not(.orch-pane) { background: var(--glass); border-color: var(--line); }
 html[data-ui="minimal"] .btn.peach:hover,
@@ -2216,39 +2215,6 @@ html[data-ui] .nc-wrap > .nc.glass:hover { border-color: color-mix(in srgb, var(
 .hm-h a { display: inline-flex; align-items: center; gap: 4px; font: 500 12px var(--body); color: var(--faint); transition: color .15s; }
 .hm-h a:hover { color: var(--accent); }
 
-/* Home: a capture line always there, the live agents, what needs you, where you left off */
-.hm-capture {
-  grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 16px; border-radius: 14px;
-  background: color-mix(in srgb, var(--surface) 70%, transparent); border: 1px solid var(--line); transition: border-color .15s, background .15s;
-}
-.hm-capture:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--surface) 90%, transparent); }
-.hm-capture > svg { flex: none; color: var(--accent); }
-.hm-capture input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font: 14.5px var(--body); color: var(--ink); }
-.hm-capture input::placeholder { color: var(--faint); }
-.hm-capture:focus-within kbd { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-#hm-agents .hm-h, #hm-agents:empty + .hm-h { margin-top: 0; }
-.hm-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-.hm-agent {
-  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px 12px; border-radius: 12px; text-align: left;
-  background: color-mix(in srgb, var(--surface) 55%, transparent); border: 1px solid var(--line); transition: background .15s, border-color .15s, transform .2s var(--ease);
-}
-.hm-agent:hover { background: color-mix(in srgb, var(--surface) 85%, transparent); border-color: color-mix(in srgb, var(--ink) 16%, transparent); transform: translateY(-1px); }
-.hm-agent .fl-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
-.hm-agent.waiting { border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.hm-agent.waiting .fl-dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
-.hm-agent-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.hm-agent-txt b { font: 500 13px var(--body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hm-agent-txt small { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hm-agent.waiting .hm-agent-txt small { color: color-mix(in srgb, var(--accent) 85%, var(--ink)); }
-.hm-agent-go { flex: none; display: inline-flex; align-items: center; gap: 3px; font: 500 11.5px var(--body); color: var(--faint); transition: color .15s; }
-.hm-agent:hover .hm-agent-go, .hm-agent.waiting .hm-agent-go { color: var(--accent); }
-.hm-more { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--faint); }
-.hm-more:hover { color: var(--accent); }
-.hm-notes { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.hm-notes .nc { min-height: 132px; padding: 15px; }
-.hm-notes .nc h4 { font-size: 14.5px; }
-.hm-notes .nc p { -webkit-line-clamp: 2; }
-
 /* Notes: a search you can't miss, then the overview (recent + collections) or the grid */
 .nt-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; margin-bottom: 18px; }
 .nt-title { display: flex; align-items: baseline; gap: 14px; }
@@ -2281,4 +2247,169 @@ html[data-ui] .nt-shelf.glass:hover { border-color: color-mix(in srgb, var(--c) 
 /* Reader: the hand-offs under "Open in Obsidian" */
 .rd-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .rd-acts .btn { justify-content: center; padding: 0 10px; }
-html[data-ui="minimal"] .min-home.solo { grid-template-columns: minmax(0, 1fr); } /* no art: no side stage */
+
+/* ---------- Home (Minimal): the to-do list ----------
+   One calm column: the day, one line to add, today's tasks. Upcoming, someday and done fold into one line; a task opens
+   in place when clicked. The page starts near the top (not centred), so nothing reads as cut off above the dock. */
+html[data-ui="minimal"] body.home main { margin-top: 0; background: none; } /* no panel around the list: it read as a cut-out box */
+html[data-ui="minimal"] body.home.cal-float main { background: none; }
+/* the underline is the focus here: no ring around the bare fields */
+/* (and no global 1px accent ring from `input:focus`: these fields show focus their own way) */
+:is(.td-add input, .td-title, .td-note, .td-chip select):focus-visible { outline: none; }
+:is(.td-add input, .td-title, .td-note, .td-chip select, .cwd-top input):focus { box-shadow: none; }
+.td-chip:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.td-home { width: min(1000px, 100%); margin: 6vh auto 40px; display: grid; grid-template-columns: minmax(0, 1fr) 272px; gap: 64px; align-items: start; }
+.td-home:has(.td-side:empty) { width: min(620px, 100%); grid-template-columns: minmax(0, 1fr); }
+.td-main { min-width: 0; display: flex; flex-direction: column; }
+@media (max-width: 960px) { .td-home { width: min(620px, 100%); grid-template-columns: minmax(0, 1fr); gap: 40px; } }
+.td-hello h1 { font: 600 30px/1.1 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.td-hello p { margin-top: 8px; font-size: 14px; color: var(--faint); }
+/* the add field: just a line under it, which warms up on focus (no box, no ring) */
+.td-add {
+  margin-top: 28px; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 4px;
+  border-bottom: 1px solid var(--line); transition: border-color .2s;
+}
+.td-add:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.td-plus { display: grid; color: var(--faint); transition: color .2s; }
+.td-add:focus-within .td-plus { color: var(--accent); }
+.td-add input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font: 15.5px var(--body); color: var(--ink); }
+.td-add input::placeholder { color: var(--faint); }
+.td-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; padding: 0 2px; }
+.td-chips:not(:empty) { margin-top: 10px; }
+.td-chips .chip { display: inline-flex; align-items: center; gap: 5px; font: 500 11.5px var(--body); padding: 3px 9px; border-radius: 99px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); animation: ctx-in .15s ease-out; }
+.td-chips .chip.b { color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 12%, transparent); }
+#td-list { margin-top: 14px; }
+.td-list { display: flex; flex-direction: column; }
+.td-task { position: relative; display: flex; align-items: center; gap: 14px; min-height: 44px; padding: 0 8px; border-radius: 11px; transition: background .15s; }
+.td-task:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.td-check {
+  flex: none; width: 19px; height: 19px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--ink) 38%, transparent);
+  display: grid; place-items: center; transition: border-color .15s, background .15s, transform .15s var(--ease);
+}
+.td-check:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.td-task.prio .td-check { border-color: var(--accent); }
+.td-task.done .td-check, .td-check.ticking { border-color: var(--accent); background: var(--accent); transform: scale(.92); }
+.td-task.done .td-check::after, .td-check.ticking::after { content: ""; width: 5px; height: 9px; margin-top: -2px; border: solid var(--accent-ink); border-width: 0 2px 2px 0; rotate: 45deg; }
+.td-text { flex: 1; min-width: 0; text-align: left; font: 15px/1.4 var(--body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
+.td-task.done .td-text { color: var(--faint); text-decoration: line-through; }
+.td-meta { flex: none; display: flex; align-items: center; gap: 9px; font: 12px var(--body); color: var(--faint); transition: opacity .15s; }
+.td-meta .late { color: var(--bad); opacity: .8; }
+.td-meta .rep { color: var(--accent-2); }
+.td-acts { position: absolute; right: 6px; display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.td-task:is(:hover, :focus-within) .td-acts { opacity: 1; pointer-events: auto; }
+.td-task:is(:hover, :focus-within):has(.td-acts) .td-meta { opacity: 0; }
+.td-acts button { height: 28px; min-width: 28px; padding: 0 9px; display: grid; place-items: center; border-radius: 8px; font: 500 12px var(--body); color: var(--muted); background: color-mix(in srgb, var(--surface) 92%, transparent); transition: color .15s, background .15s; }
+.td-acts button:hover { color: var(--ink); background: var(--surface-2); }
+.td-acts button[data-act="td-del"]:hover { color: var(--bad); }
+@media (pointer: coarse) { .td-acts { position: static; opacity: 1; pointer-events: auto; } .td-task:has(.td-acts) .td-meta { display: none; } }
+.td-fold { align-self: flex-start; margin-top: 16px; padding: 6px 8px; border-radius: 8px; font: 500 13px var(--body); color: var(--faint); transition: color .15s, background .15s; }
+.td-fold:hover, .td-fold.on { color: var(--muted); }
+.td-fold:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.td-group { margin: 16px 8px 4px; font: 600 11px var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+/* a task opened in place */
+.td-edit {
+  margin: 4px -6px; padding: 12px 14px 10px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(0, 0, 0, .35); animation: ctx-in .15s ease-out;
+}
+.td-edit-top { display: flex; align-items: center; gap: 14px; }
+.td-title { flex: 1; min-width: 0; height: 32px; border: 0; background: none; outline: none; font: 15px var(--body); color: var(--ink); border-bottom: 1px solid var(--line); }
+.td-title:focus { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.td-ctl { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0 33px; }
+.td-chip {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 9px;
+  font: 500 12.5px var(--body); color: var(--muted); background: color-mix(in srgb, var(--ink) 5%, transparent); border: 1px solid transparent; cursor: pointer; transition: color .15s, background .15s, border-color .15s;
+}
+.td-chip:hover { color: var(--ink); }
+.td-chip.on { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.td-chip > button { display: inline-flex; align-items: center; gap: 6px; height: 100%; color: inherit; font: inherit; }
+.td-chip svg { color: var(--faint); }
+.td-chip.on svg { color: var(--accent); }
+/* the native pickers stay under their chip (showPicker opens them there); invisible but rendered */
+.td-chip input[type="date"], .td-chip input[type="time"] { position: absolute; left: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
+.td-chip select { appearance: none; border: 0; background: none; outline: none; color: inherit; font: inherit; cursor: pointer; padding-right: 2px; }
+.td-chip select option { background: var(--surface); color: var(--ink); }
+.td-x { width: 18px; height: 18px; margin-right: -4px; display: grid; place-items: center; border-radius: 50%; color: var(--faint); font-size: 14px; line-height: 1; }
+.td-x:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.td-note { display: block; width: calc(100% - 33px); margin: 10px 0 0 33px; min-height: 22px; padding: 2px 0; border: 0; background: none; outline: none; resize: none; overflow: hidden; font: 13.5px/1.5 var(--body); color: var(--muted); }
+.td-note::placeholder { color: var(--faint); }
+.td-foot { display: flex; justify-content: space-between; margin: 8px 0 0 33px; }
+.td-foot button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; margin-left: -8px; border-radius: 8px; font: 500 12.5px var(--body); color: var(--faint); transition: color .15s, background .15s; }
+.td-foot button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.td-foot button svg { color: var(--accent); }
+.td-foot .del { margin: 0 -8px 0 0; }
+.td-foot .del:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.toast .toast-act { margin-left: 6px; color: var(--accent); font-weight: 600; }
+
+/* today's focus (from the daily note) above the tasks, in its own colour; the morning routine's button when there's none */
+.td-focus-h { display: flex; gap: 8px; align-items: baseline; margin-top: 4px; }
+.td-focus-h span { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--faint); opacity: .8; }
+.td-task.focus .td-check { border-color: var(--p3); }
+.td-task.focus .td-check:hover { background: color-mix(in srgb, var(--p3) 16%, transparent); }
+.td-task.focus .td-check.ticking { background: var(--p3); border-color: var(--p3); }
+.td-task.focus .td-text { cursor: default; }
+.td-text em { font-style: normal; color: var(--accent); }
+.td-start {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; margin: 2px 0 6px; padding: 8px 12px; border-radius: 10px;
+  font: 500 13.5px var(--body); color: var(--ink); background: color-mix(in srgb, var(--p3) 9%, transparent); border: 1px solid color-mix(in srgb, var(--p3) 30%, transparent);
+}
+.td-start svg { color: var(--p3); }
+.td-start small { font-weight: 400; font-size: 12px; color: var(--faint); }
+.td-start:hover { background: color-mix(in srgb, var(--p3) 14%, transparent); }
+
+/* "Today": the calendar, the agents, the vault, quiet blocks beside the list */
+.td-side { display: flex; flex-direction: column; gap: 30px; padding-top: 8px; }
+.td-blk h4 { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 10px; font: 600 11px var(--body); letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+.td-blk h4 a { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); transition: color .15s; }
+.td-blk h4 a:hover { color: var(--accent); }
+.td-ev { display: flex; gap: 12px; padding: 5px 0; font-size: 13px; color: var(--muted); }
+.td-ev b { flex: none; width: 46px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+.td-ev i { font-style: normal; color: var(--ok); margin-right: 4px; vertical-align: -1px; }
+.td-ev span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-ag { width: calc(100% + 20px); display: flex; align-items: center; gap: 10px; margin: 0 -10px; padding: 8px 10px; border-radius: 10px; text-align: left; font-size: 13px; color: var(--muted); transition: background .15s, color .15s; }
+.td-ag:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink); }
+.td-ag .d { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.td-ag.w { color: var(--ink); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.td-ag.w .d { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.td-ag .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-ag small { font-size: 11.5px; color: var(--faint); }
+.td-ag b { flex: none; display: inline-flex; align-items: center; gap: 2px; font: 500 12px var(--body); color: var(--accent); }
+.td-v { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; color: var(--muted); transition: color .15s; }
+.td-v b { min-width: 18px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.td-v span { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; font: 500 12px var(--body); color: var(--accent); opacity: .85; }
+.td-v:hover { color: var(--ink); }
+.td-v:hover span { opacity: 1; }
+.td-sep { height: 1px; margin: 8px 0; background: var(--line); }
+.td-nt { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 13px; color: var(--muted); min-width: 0; transition: color .15s; }
+.td-nt i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.td-nt:hover { color: var(--ink); }
+.td-nt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.td-nt i { display: inline-block; margin-right: 10px; vertical-align: 1px; }
+
+/* ---------- The header (Minimal): the name, a search you can find, the time, capture ----------
+   Quiet: no boxes around the buttons, one soft pill for the search. The Classic/Minimal switch lives in Settings (and V). */
+html[data-ui="minimal"] .top { padding: 18px 0 14px; gap: 14px; }
+html[data-ui="minimal"] .crumb { align-items: center; gap: 8px; font: 500 14px var(--body); color: var(--faint); }
+html[data-ui="minimal"] .crumb b { display: inline-flex; align-items: center; gap: 8px; font: 600 14.5px var(--display); color: var(--ink); letter-spacing: -.01em; }
+html[data-ui="minimal"] .crumb b::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+html[data-ui="minimal"] .crumb span:first-of-type { opacity: .5; }
+html[data-ui="minimal"] #ui-btn { display: none; }
+html[data-ui="minimal"] .top .btn.glass { border: 0; background: none; box-shadow: none; }
+html[data-ui="minimal"] .top .search-btn.btn.glass {
+  order: -1; margin: 0 auto; width: min(340px, 34vw); height: 36px; padding: 0 12px; justify-content: flex-start; gap: 10px;
+  border-radius: 10px; background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--faint); font-weight: 400; transition: background .15s, color .15s;
+}
+html[data-ui="minimal"] .top .search-btn.btn.glass:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--muted); }
+html[data-ui="minimal"] .top .search-btn kbd { margin-left: auto; border: 0; }
+html[data-ui="minimal"] .top .crumb { order: -2; }
+html[data-ui="minimal"] .clock span { font: 500 12.5px var(--body); color: var(--faint); }
+html[data-ui="minimal"] .top .cap-btn { height: 34px; padding: 0 10px; gap: 7px; border-radius: 9px; color: var(--muted); }
+html[data-ui="minimal"] .top .cap-btn svg { color: var(--accent); }
+html[data-ui="minimal"] .top .cap-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+html[data-ui="minimal"] .top .cap-btn kbd { border: 0; }
+@media (max-width: 640px) { html[data-ui="minimal"] .top .search-btn.btn.glass { width: auto; margin: 0 0 0 auto; } html[data-ui="minimal"] .top .cap-btn span { display: none; } }
+/* the week strip: compact days on the left, the month on the right, no box (not even the theme's glass band) */
+html[data-ui="minimal"] .cal.glass { background: transparent; }
+html[data-ui="minimal"] .cal:not(.month) .cal-grid { flex: 0 1 auto; gap: 2px; }
+html[data-ui="minimal"] .cal:not(.month) .day { flex: 0 0 auto; min-width: 64px; justify-content: center; color: var(--faint); }
+html[data-ui="minimal"] .cal:not(.month) .day:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }

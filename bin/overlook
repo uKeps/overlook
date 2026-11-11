@@ -4,10 +4,27 @@
 //   overlook peers                    the cards wired to this one
 //   overlook send <card> <message…>   type the message into that card as a prompt (or pipe it in on stdin)
 //   overlook read <card> [lines]      what that card's screen shows
+//   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
 // <card> is a card id or part of its name, as `overlook peers` prints them.
 const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
 const [cmd, card, ...rest] = process.argv.slice(2);
-const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines]";
+const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook todo [task]";
+// To-dos work from any terminal on this machine (the canvas's variables aren't needed).
+if (cmd === "todo") {
+  const base = url || `http://127.0.0.1:${process.env.PORT || 3333}`, text = [card, ...rest].filter(Boolean).join(" ").trim();
+  const r = await fetch(base + (text ? "/api/todos/add" : "/api/todos"), text ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) } : {})
+    .catch(() => { console.error(`overlook: Overlook isn't running at ${base}`); process.exit(1); });
+  if (!r.ok) { console.error(`overlook: ${await r.text()}`); process.exit(1); }
+  const { todo, todos, today } = await r.json();
+  const show = (t: any) => `${t.due && today && t.due < today ? `[late ${t.due}] ` : ""}${t.time ? `${t.time} ` : ""}${t.text}${t.due && !text ? "" : t.due ? ` · ${t.due}` : ""}${t.repeat ? ` (${t.repeat})` : ""}`;
+  if (text) console.log(`added: ${show(todo)}`);
+  else {
+    const open = todos.filter((t: any) => !t.done), now = open.filter((t: any) => t.due && t.due <= today);
+    console.log(now.map(show).join("\n") || "Nothing for today.");
+    if (open.length > now.length) console.log(`(${open.length - now.length} more upcoming or without a date)`);
+  }
+  process.exit(0);
+}
 if (!url || !from || !token) { console.error("overlook: run this inside a terminal card on the Overlook canvas"); process.exit(2); }
 async function call(path: string, body: object) {
   const r = await fetch(url + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, token, ...body }) }).catch((e) => { console.error(`overlook: ${e.message}`); process.exit(1); });

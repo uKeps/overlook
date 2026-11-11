@@ -2248,3 +2248,22 @@ test("canvas background presets: 5 presets, octave zoom LOD anti-moire, HUD pick
 
 
 
+
+test("to-dos: add from one typed line, complete a repeating one, delete; Tasks.md holds them and isn't a note", async () => {
+  const add = await (await post("/api/todos/add", { text: "water the plants every day 9am !" })).json();
+  expect(add.todo).toMatchObject({ text: "water the plants", repeat: "every day", time: "09:00", due: TODAY, prio: true });
+  const id = add.todo.id;
+  const done = await (await post("/api/todos/edit", { id, done: true })).json();
+  const next = done.todos.find((t: any) => t.id === id);
+  expect(next.done).toBe(false);
+  expect(next.due > TODAY).toBe(true); // back tomorrow
+  expect(done.todos.some((t: any) => t.done && t.doneOn === TODAY && t.text === "water the plants")).toBe(true);
+  expect((await post("/api/todos/edit", { id, due: "soon" })).status).toBe(400);
+  expect(readFileSync(`${VAULT}/Tasks.md`, "utf8")).toContain("🔁 every day");
+  expect((await (await fetch(`${BASE}/api`)).json()).notes.some((n: any) => n.path === "Tasks.md")).toBe(false);
+  const parsed = await (await post("/api/todos/parse", { text: "call mom tomorrow" })).json();
+  expect(parsed).toMatchObject({ text: "call mom", due: new Date(Date.now() + 864e5).toLocaleDateString("sv") });
+  const del = await (await post("/api/todos/delete", { id })).json();
+  expect(del.todos.some((t: any) => t.id === id)).toBe(false);
+  expect((await (await fetch(`${BASE}/api/todos`)).json()).todos.length).toBe(del.todos.length);
+});
