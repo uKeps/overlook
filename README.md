@@ -33,6 +33,9 @@ vault (or set it in **Settings**) and restart. Run it from the repo folder: Bun 
 - **Calendar** strip: events from `Calendar.md` (`- 2026-11-03 14:00 · Exam`) and agent tasks scheduled to run
   once or on a repeat.
 - **Notes**, a reader with backlinks, a graph, full-text search (`/`) and quick capture (`C`) into the daily note.
+- **Graph**: a map of the notes in columns by type (database → table → worker → platform → system → process → team),
+  read from `type` in the frontmatter. Click a note to see what it links to (1–3 steps); "What depends on it" lights
+  what may break if it changes and can hand that list to an agent. Vaults without those types get the force graph.
 - **Review**: what you ask the vault comes back as a card in 1, 2, 4… days until you know it. Asking on Notes, the
   agent that answers adds the card to `Review.md`; "Save as a note" adds one for the new note. One card at a time
   waits on the Home; the page lists them all. Remove what is useless or out of date; known ones leave on their own.
