@@ -320,8 +320,43 @@ function suggestions() {
   for (const n of D.notes.filter((n) => n.type === "project").sort((a, b) => b.mtime - a.mtime).slice(0, 5)) s.push({ cat: "Project", ic: "bolt", title: n.title, sub: plain(n.summary), meta: [["Area", n.area || "-"], ["Touched", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
   const outside = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
   for (const n of outside) s.push({ cat: "Rediscover", ic: "leaf", title: n.title, sub: plain(n.summary), meta: [["Out of the cycle", "never reviewed"], ["Area", n.area || "-"]], href: noteHref(n.path), action: "Reread" });
-  return s.length ? s : [{ cat: "All caught up", ic: "leaf", piece: "bonsai", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" }];
+  return s.length ? s : [CAUGHT_UP];
 }
+const CAUGHT_UP = { cat: "All caught up", ic: "leaf", piece: "bonsai", title: "Nothing needs attention right now", sub: "Capture an idea or open an old note.", meta: [], href: "#/notes", action: "See notes" };
+// One colour per vault folder (the graph's area palette), so a note's home reads at a glance on every page.
+const folderColor = (f) => `var(--p${(hash(f || ".") % 6) + 1})`;
+// A note as a card: its folder, title, summary and age; on hover, hand it to an agent or put it on the canvas.
+const noteCard = (n, i = 0) => `<div class="nc-wrap" style="--c: ${folderColor(n.folder)}">
+    <a class="nc glass" href="${noteHref(n.path)}" style="animation-delay:${Math.min(i, 12) * 25}ms">
+      <span class="nc-folder">${esc(folderLabel(n.folder))}</span>
+      <h4>${esc(n.title)}</h4>
+      <p>${esc(n.type === "daily" ? "Daily note" : plain(n.summary) || "No one-line summary.")}</p>
+      <span class="f">${n.type ? `<span class="pill">${esc(n.type)}</span>` : ""}${confKind(n) === "warn" ? `<span class="pill conf warn">${esc(n.confidence)}</span>` : ""}${n.review_on ? '<span class="pill peach">in cycle</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${ago(n.mtime)}</span></span>
+    </a>
+    <div class="nc-acts">
+      <button type="button" data-act="note-ask" data-p="${esc(n.path)}" title="Open an agent on the canvas that has read this note">${icon("spark", 13)} Ask an agent</button>
+      <button type="button" data-act="note-canvas" data-p="${esc(n.path)}" title="Put this note on the canvas">${icon("grid", 13)} On canvas</button>
+    </div>
+  </div>`;
+// From any page: go to the canvas and run `make` there once it's built (agents() calls it), so the card it adds lands
+// in view on the real canvas.
+let afterCanvas = null;
+function toCanvas(make) {
+  if (route().pg === "agents") return make();
+  afterCanvas = make;
+  location.hash = "#/agents";
+}
+// "Ask an agent": a new agent on the canvas, in the vault, that starts by reading the note and waits for questions.
+function askAgent(path) {
+  const n = D.notes.find((x) => x.path === path), agent = defaultAgent();
+  if (!agent) return toast("No agent with a terminal is set up yet: see Settings › Agents");
+  const prompt = `Read the note "${path}" in this vault${n ? ` ("${n.title}")` : ""}. In three short lines, tell me what it is about and what is still open in it, in the language the note is written in. Then wait for my questions.`;
+  toCanvas(() => {
+    const p = { kind: "terminal", id: `term_${Date.now()}`, cwd: "", run: newTuiRun(agent, prompt) };
+    if (addPane(p)) { saveCanvas(); focusPane(paneKey(p)); }
+  });
+}
+const noteToCanvas = (path) => toCanvas(() => { if (addPane({ kind: "note", id: path })) { saveCanvas(); focusPane(`note:${path}`); } });
 
 let idx = 0, SG = [];
 // Themes (the colours live in app.css); the choice is per browser and applied before the first paint (index.html).
@@ -342,11 +377,23 @@ function home() {
   SG = suggestions();
   idx = Math.min(idx, SG.length - 1);
   if (uiMode === "minimal") {
-    const need = needsYou() + (D.focus?.length ? 0 : 1), run = runningNow();
-    main.innerHTML = `<section class="min-home">
+    // The queue keeps what asks for something today; projects and old notes show under "where you left off".
+    SG = SG.filter((s) => s.cat !== "Project" && s.cat !== "Rediscover");
+    if (!SG.length) SG = [CAUGHT_UP];
+    idx = Math.min(idx, SG.length - 1);
+    const need = needsYou() + (D.focus?.length ? 0 : 1);
+    const recent = D.notes.filter((n) => n.type !== "daily").sort((a, b) => b.mtime - a.mtime).slice(0, 6);
+    // the side stage is for card art; without any it only repeated the first row, so the page goes full width
+    const stage = cardArt === "ascii" || !!D.pins?.length;
+    main.innerHTML = `<section class="min-home ${stage ? "" : "solo"}">
         <header class="min-hello"><h1>${esc(dayName(D.today, { weekday: "long", day: "numeric", month: "long" }))}</h1>
-          <p>${need ? `${need} ${need === 1 ? "thing needs" : "things need"} you` : "Nothing needs you right now"}${run ? `, ${run} ${run === 1 ? "agent" : "agents"} running` : ""}</p></header>
+          <p id="hm-status"></p></header>
+        <form class="hm-capture" id="hm-capture">${icon("spark", 16)}
+          <input id="hm-cap" placeholder="Capture an idea, a link, a question… Enter saves it to today's note" autocomplete="off" aria-label="Capture to today's note">
+          <kbd>Enter</kbd></form>
         <div class="min-queue">
+          <div id="hm-agents"></div>
+          <h3 class="hm-h">Next up</h3>
           <div class="min-rows">${SG.map((s, i) => `<div class="min-row ${i === idx ? "on" : ""}" data-i="${i}">
             <button type="button" class="min-sel" data-act="go" data-i="${i}">
               <span class="min-txt"><b>${emLinks(s.raw || s.title)}</b><small>${esc(s.sub)}</small></span>
@@ -354,11 +401,23 @@ function home() {
             </button>
             ${cta(s, "min-go", 13)}
           </div>`).join("")}</div>
+          <h3 class="hm-h">Pick up where you left off <a href="#/notes">All notes ${icon("r", 12)}</a></h3>
+          <div class="grid hm-notes">${recent.map(noteCard).join("")}</div>
         </div>
-        <aside class="min-stage glass" id="min-stage"></aside>
+        ${stage ? '<aside class="min-stage glass" id="min-stage"></aside>' : ""}
       </section>
       <section class="tiles" id="tiles"></section>`;
-    place(); tiles();
+    $("#hm-status").dataset.need = need;
+    $("#hm-capture").onsubmit = async (e) => {
+      e.preventDefault();
+      const inp = $("#hm-cap"), text = inp.value.trim();
+      if (!text) return;
+      inp.value = "";
+      // redraw only if you're still on the Home (you may have moved on while it saved)
+      try { await api("/api/capture", { text }); toast("Captured in the daily note"); D = await api("/api"); if (!route().pg) home(); topBar(); }
+      catch (err) { inp.value = text; toast(err.message); }
+    };
+    place(); tiles(); homeAgents();
     return;
   }
   const card = (s, i) => {
@@ -426,6 +485,25 @@ function place() {
 }
 const move = (d) => { idx = (idx + d + SG.length) % SG.length; place(); };
 
+// Home: the agent sessions that are waiting for you or working, live (the 10 s refresh redraws it), one click from the
+// canvas. Terminals already on the canvas aren't repeated.
+function homeAgents() {
+  const box = $("#hm-agents"), st = $("#hm-status");
+  if (!box) return;
+  const live = fleetItems().filter((it) => it.group !== "done" && it.kind !== "terminal");
+  const wait = live.filter((it) => it.group === "waiting").length, need = Number(st?.dataset.need || 0) + wait;
+  if (st) st.textContent = `${need ? `${need} ${need === 1 ? "thing needs" : "things need"} you` : "Nothing needs you right now"}${live.length ? ` · ${live.length} ${live.length === 1 ? "agent" : "agents"} working` : ""}`;
+  box.innerHTML = live.length ? `<h3 class="hm-h">Agents <a href="#/agents">Open the canvas ${icon("r", 12)}</a></h3>
+    <div class="hm-agents">${live.slice(0, 6).map((it) => {
+      // a live process is named by its folder (they're all "Claude Code"); a session keeps its own title
+      const a = it.kind === "agent" && S.agents?.find((x) => x.key === it.id);
+      const name = a ? a.cwd.split("/").filter(Boolean).pop() || "~" : it.title, sub = a ? `${it.title} · ${duration(a.seconds)}` : it.needs || it.sub;
+      return `<button type="button" class="hm-agent ${it.group}" data-act="home-agent" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${esc(a ? `${it.title} in ${a.cwd}` : it.title)}: open it on the canvas">
+        <span class="fl-dot"></span><span class="hm-agent-txt"><b>${esc(name)}</b><small>${esc(sub)}</small></span>
+        <span class="hm-agent-go">${it.group === "waiting" ? "Answer" : "Open"} ${icon("r", 12)}</span></button>`;
+    }).join("")}</div>
+    ${live.length > 6 ? `<a class="hm-more" href="#/agents">${live.length - 6} more on the canvas</a>` : ""}` : "";
+}
 function tiles() {
   const el = $("#tiles");
   if (!el) return;
@@ -445,37 +523,49 @@ function tiles() {
 
 // ---------------------------------------------------------------- Notes
 let filter = "", query = "";
+// filter: "" = the overview (recent notes and the folders as collections), "*" = every note, else one folder.
 function notes() {
   const count = {};
   for (const n of D.notes) count[n.folder] = (count[n.folder] || 0) + 1;
-  main.innerHTML = `<div class="ph"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p>
-      <div class="r"><input class="search glass" id="search" placeholder="Filter notes" value="${esc(query)}" autocomplete="off"></div></div>
-    <div class="filters">${[["", "All", D.notes.length], ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])]
-      .map(([k, v, c]) => `<button class="fchip ${filter === k ? "on" : ""}" data-act="filter" data-k="${esc(k)}">${esc(v)}<small>${c}</small></button>`).join("")}</div>
-    <div class="grid" id="note-grid"></div><div id="text-hits"></div>`;
+  main.innerHTML = `<div class="nt-head"><div class="nt-title"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p></div>
+      <label class="nt-search glass">${icon("search", 18)}<input id="search" placeholder="Search titles and text" value="${esc(query)}" autocomplete="off" spellcheck="false" aria-label="Search notes"></label></div>
+    <div class="filters">${[["", "Overview", ""], ["*", "All", D.notes.length], ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])]
+      .map(([k, v, c]) => `<button class="fchip ${filter === k ? "on" : ""}" data-act="filter" data-k="${esc(k)}" ${k && k !== "*" ? `style="--c: ${folderColor(k)}"` : ""}>${esc(v)}${c === "" ? "" : `<small>${c}</small>`}</button>`).join("")}</div>
+    <div id="nt-overview"></div><div class="grid" id="note-grid"></div><div id="text-hits"></div>`;
   grid();
+  if (matchMedia("(pointer: fine)").matches) $("#search").focus(); // the page is for finding: type right away
   ambient(art("notes"));
+}
+function notesOverview() {
+  const recent = D.notes.filter((n) => n.type !== "daily").sort((a, b) => b.mtime - a.mtime).slice(0, 6);
+  const by = {};
+  for (const n of D.notes) (by[n.folder] ||= []).push(n);
+  const shelves = Object.keys(by).sort((a, b) => by[b].length - by[a].length).map((f) => `<button type="button" class="nt-shelf glass" data-act="filter" data-k="${esc(f)}" style="--c: ${folderColor(f)}">
+      <span class="nt-shelf-top"><b>${esc(folderLabel(f))}</b><small>${by[f].length}</small></span>
+      <span class="nt-shelf-list">${by[f].slice().sort((a, b) => b.mtime - a.mtime).slice(0, 3).map((n) => `<span>${esc(n.title)}</span>`).join("")}</span>
+    </button>`).join("");
+  return `<h3 class="hm-h">Recently touched</h3><div class="grid">${recent.map(noteCard).join("")}</div>
+    <h3 class="hm-h">Collections</h3><div class="nt-shelves">${shelves}</div>`;
 }
 // Words a question carries that say nothing about the note ("o que é AWB", "what is AWB").
 const STOP = new Set(["o", "a", "os", "as", "que", "e", "de", "do", "da", "what", "is", "the", "of"]);
 let textTimer = 0;
 function grid() {
   const q = fold(query).trim(), terms = q.split(/\s+/).filter((t) => t && !STOP.has(t));
+  const ov = $("#nt-overview"), overview = !filter && !q;
+  if (ov) ov.innerHTML = overview ? notesOverview() : "";
+  if (overview) { $("#note-grid").innerHTML = ""; $("#text-hits").innerHTML = ""; clearTimeout(textTimer); return; }
   const weight = (n) => (!q ? 0 : fold(n.title).startsWith(terms[0] || q) ? 0 : fold(n.title).includes(terms[0] || q) ? 1 : 2);
-  const ns = D.notes.filter((n) => (!filter || n.folder === filter) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
+  const ns = D.notes.filter((n) => (!filter || filter === "*" || n.folder === filter) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
     .sort((a, b) => weight(a) - weight(b) || b.mtime - a.mtime);
-  $("#note-grid").innerHTML = ns.map((n, i) => `<a class="nc glass" href="${noteHref(n.path)}" style="animation-delay:${Math.min(i, 12) * 25}ms">
-      <h4>${esc(n.title)}</h4>
-      <p>${esc(n.type === "daily" ? "Daily note" : plain(n.summary) || "No one-line summary.")}</p>
-      <span class="f">${n.type ? `<span class="pill">${esc(n.type)}</span>` : ""}${confKind(n) === "warn" ? `<span class="pill conf warn">${esc(n.confidence)}</span>` : ""}${n.review_on ? '<span class="pill peach">in cycle</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${ago(n.mtime)}</span></span></a>`).join("")
-    || `<p class="empty">No title matches "${esc(query)}".</p>`;
+  $("#note-grid").innerHTML = ns.map(noteCard).join("") || `<p class="empty">No title matches "${esc(query)}".</p>`;
   // Then the text of the notes, a beat after typing stops.
   const box = $("#text-hits");
   clearTimeout(textTimer);
   if (!box) return;
   box.innerHTML = "";
   if (terms.join("").length < 3) return;
-  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => !filter || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
+  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => !filter || filter === "*" || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
   textTimer = setTimeout(async () => {
     const hits = (await api(`/api/search?q=${encodeURIComponent(terms.join(" "))}`).catch(() => [])).filter((h) => !shown.has(h.path) && inFolder(h.path));
     if (fold(query).trim() !== q || !$("#text-hits")) return;
@@ -497,6 +587,8 @@ async function reader(path) {
     <aside class="rail">
       <div class="box glass">
         <a class="btn peach" href="${obs(n.path)}">Open in Obsidian ${icon("ext", 16)}</a>
+        <div class="rd-acts"><button class="btn glass" data-act="note-ask" data-p="${esc(n.path)}" title="Open an agent on the canvas that has read this note">${icon("spark", 15)} Ask an agent</button>
+          <button class="btn glass" data-act="note-canvas" data-p="${esc(n.path)}" title="Put this note on the canvas">${icon("grid", 15)} On canvas</button></div>
         ${n.review_on ? `<p class="empty" style="padding:10px 0 0">In the cycle: review ${n.review_on <= D.today ? "today" : rel.format(daysBetween(D.today, n.review_on), "day")}, interval ${n.interval} d.</p>`
           : `<button class="btn glass" data-act="enroll" data-p="${esc(n.path)}">Add to the review cycle</button>`}</div>
       <div class="box glass"><h3>Linked from</h3>${n.backlinks.map((b) => `<a class="l" href="${noteHref(b.path)}">${esc(b.title)}</a>`).join("") || '<p class="empty" style="padding:0">Nothing links here yet.</p>'}</div>
@@ -1542,6 +1634,7 @@ function agents() {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); deckShow(false); }
   };
   agentsBody();
+  if (afterCanvas) { const make = afterCanvas; afterCanvas = null; make(); } // a hand-off from another page (toCanvas)
   orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); }, 2000);
   ambient(art("agents"));
 }
@@ -3476,6 +3569,9 @@ const ACTIONS = {
   "cv-menu": (el) => mainMenu(el),
   "orch-deck-show": () => deckShow(),
   "orch-vault-note": () => openVaultNotes(),
+  "note-ask": (el) => askAgent(el.dataset.p),
+  "note-canvas": (el) => noteToCanvas(el.dataset.p),
+  "home-agent": (el) => toCanvas(() => ACTIONS["orch-sel"]({ dataset: { kind: el.dataset.kind, id: el.dataset.id } })),
   "orch-map": () => { orchMapOpen = !orchMapOpen; saveCanvas(); drawMap(); paintHud($("#orch-hud"), orchMode === "free" && !orchMax); },
   "term-new-pane": () => newTermPane(),
   "term-launch-app": async (el) => {
@@ -3868,12 +3964,13 @@ async function system() { S = await api("/api/system"); }
 setInterval(async () => {
   await system(); topBar();
   const { pg } = route();
-  if (!pg) tiles();
+  if (!pg) { tiles(); homeAgents(); }
   else if (pg === "agents" && !cwdOpen && !document.activeElement?.closest?.(".orch-talk, .orch-sticky-wrap")) agentsBody();
   else if (pg === "services") services();
 }, 10000);
 setInterval(async () => { await vault(); topBar(); if (!route().pg) tiles(); }, 60000);
-addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg) home(); else if (pg === "notes") grid(); });
+// (the Home redraws only while its capture line is empty: a draft survives switching windows)
+addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg && !$("#hm-cap")?.value) home(); else if (pg === "notes") grid(); });
 setInterval(clock, 1000);
 clock();
 Promise.all([vault(), system()]).then(render);
