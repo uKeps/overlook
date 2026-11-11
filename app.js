@@ -700,7 +700,7 @@ function notesOverview() {
     <section class="nt-cols"><h4>Collections <a href="#/notes" data-act="filter" data-k="*">All ${D.notes.length} ${icon("r", 11)}</a></h4>
       <div class="nt-colrow">${Object.keys(by).sort((a, b) => by[b] - by[a]).map((f) => `<button type="button" class="nt-col" data-act="filter" data-k="${esc(f)}" style="--c: ${folderColor(f)}"><i></i>${esc(folderLabel(f))}<small>${by[f]}</small></button>`).join("")}</div></section>`;
 }
-// Words a question carries that say nothing about the note ("o que é AWB", "what is AWB", "quando a gente cobra").
+// Words a question carries that say nothing about the note ("o que é um frete", "what is a waybill", "quando a gente cobra").
 const STOP = new Set(["o", "a", "os", "as", "que", "e", "é", "de", "do", "da", "dos", "das", "um", "uma", "em", "no", "na", "para", "pra", "com", "por", "como", "quando", "qual", "quais", "onde", "porque", "gente", "what", "is", "the", "of", "an", "how", "when", "why", "which", "where", "do", "does", "we", "to", "in", "on", "for"]);
 let textTimer = 0;
 const hitRow = (n, line = "") => `<a class="nt-hit" href="${noteHref(n.path)}" style="--c: ${folderColor(n.folder)}"><i></i><b>${esc(n.title)}</b><small>${esc(folderLabel(n.folder))}${line ? ` · ${esc(line)}` : n.summary ? ` · ${esc(plain(n.summary))}` : ""}</small></a>`;
@@ -881,7 +881,7 @@ const LANES = [
 const OTHER = 7, PROJECTS = 8, CONCEPTS = 9;
 const DOWN = (x, y) => y.lane > x.lane && y.lane < CONCEPTS;
 let gMode = "map", gDepth = 1, gImpact = false, gLast = "", gShow = new Set(); // gShow: the optional columns shown (projects, concepts)
-// "minuta (tabela)" sits in Tables already: the type in brackets goes
+// "orders (table)" sits in Tables already: the type in brackets goes
 const gmTitle = (x) => x.n.title.replace(/\s*\(([^)]*)\)\s*$/, (m, w) => (w.toLowerCase() === (x.n.type || "").toLowerCase() ? "" : m)) || x.n.title;
 function gmModel() {
   const nodes = D.notes.filter((n) => n.type !== "daily").map((n) => {
