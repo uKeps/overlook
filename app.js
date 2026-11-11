@@ -94,7 +94,12 @@ function ago(ms) {
   return "now";
 }
 const duration = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : `${Math.floor(s / 86400)} d`);
-const due = () => D.notes.filter((n) => n.review_on && n.review_on <= D.today).sort((a, b) => a.review_on.localeCompare(b.review_on));
+// Review cards (Review.md): due when they have no date yet or it has come. A card points at a note through the first
+// [[link]] in its answer (or, for a note with the old review fields, its path) and shows that note's summary as it is now.
+const due = () => (D.cards || []).filter((c) => !c.next || c.next <= D.today).sort((a, b) => (a.next || "").localeCompare(b.next || ""));
+const cardNote = (c) => (c.path ? D.notes.find((n) => n.path === c.path) : resolveNote(c.a.match(/\[\[([^\]|#]+)/)?.[1]?.trim()));
+let cyc = [{}]; // a key no D.cards equals, so the first call builds the set even when the server sends no cards
+const inCycle = (n) => { if (cyc[0] !== D.cards) cyc = [D.cards, new Set((D.cards || []).map((c) => cardNote(c)?.path))]; return cyc[1].has(n.path); };
 const inbox = () => D.notes.filter((n) => n.folder === D.inbox);
 // Confidence (frontmatter confidence / confianca): how far to trust a note before deciding on it, and how old the check is.
 const CONF = { medido: "ok", measured: "ok", confirmed: "ok", deducao: "warn", inferred: "warn", hypothesis: "warn" };
@@ -184,7 +189,7 @@ function dayItems(d) {
   return {
     events: (D.calendar || []).filter((e) => e.date === d),
     scheduled: (S.schedule || []).filter((e) => occursOn(e, d)).map((e) => ({ ...e, time: e.at.slice(11) })),
-    reviews: D.notes.filter((n) => n.review_on && (n.review_on === d || (d === D.today && n.review_on < d))),
+    reviews: (D.cards || []).filter((c) => c.next === d || (d === D.today && (!c.next || c.next < d))),
   };
 }
 function calDays() {
@@ -244,7 +249,7 @@ function calDayRender() {
   $("#cd-list").innerHTML = [
     ...it.events.map((e) => row("target", e.time, esc(e.title), "", x(`data-act="cal-del" data-date="${e.date}" data-time="${e.time}" data-title="${esc(e.title)}"`))),
     ...it.scheduled.map((e) => row("bolt", e.time, `${esc(e.prompt)}<small>${esc([runnerName(e.agent), e.model, e.effort, REPEAT[e.repeat]].filter(Boolean).join(" · "))}${e.error ? ` · <em>${esc(e.error)}</em>` : ""}</small>`, "", x(`data-act="sched-del" data-id="${esc(e.id)}"`))),
-    ...it.reviews.map((n) => row("review", "", `<a href="${noteHref(n.path)}">Review ${esc(n.title)}</a>`)),
+    ...it.reviews.map((c) => row("review", "", `<a href="#/review">Review: ${esc(c.q)}</a>`)),
   ].join("") || `<p class="empty">Nothing on this day yet.</p>`;
   if (calFormDay !== d) { calFormDay = d; calFormRender(); }
 }
@@ -313,12 +318,12 @@ function suggestions() {
       : { cat: "Today", ic: "target", title: "Pick today's focus", sub: "Runs the morning routine: an agent reads the vault and writes up to 3 things for today in the daily note.", meta: [["Takes", "about a minute"]], href: "#/", act: "start-day", action: "Start the day" });
   }
   for (const f of D.focus || []) { const a = ln(f); s.push({ cat: "Today's focus", ic: "target", title: unlink(f), raw: f, sub: "Picked for today in the daily note.", meta: [["Source", "Daily note"]], href: a ? `#/w/${encodeURIComponent(a)}` : obs(dailyPath()), action: "Open" }); }
-  for (const n of due()) s.push({ cat: "Review", ic: "review", title: n.title, sub: "Before opening: do you remember what it is about?", meta: [["Due", n.review_on === D.today ? "today" : `${daysBetween(n.review_on, D.today)} d ago`], ["Interval", `${n.interval} d`]], href: "#/review", action: "Review" });
+  for (const c of due()) s.push({ cat: "Review", ic: "review", title: c.q, sub: "Do you remember the answer? Try before opening it.", meta: [["Due", !c.next || c.next === D.today ? "today" : `${daysBetween(c.next, D.today)} d ago`], ["Interval", `${c.interval || 1} d`]], href: "#/review", action: "Review" });
   for (const c of D.captured || []) s.push({ cat: "Captured today", ic: "spark", title: unlink(c), raw: c, sub: "Raw capture. It becomes a note once it fits in one sentence, or it dies.", meta: [["Status", "In the daily note"]], href: obs(dailyPath()), action: "Open in Obsidian" });
   for (const n of inbox()) s.push({ cat: "Inbox", ic: "inbox", title: n.title, sub: "Process: becomes a permanent note or leaves the vault.", meta: [["Arrived", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
   for (const v of D.missing.slice(0, 3)) s.push({ cat: "Gap", ic: "gap", title: v.target, sub: `Linked ${v.n}× and doesn't exist yet. Write it when you need it, not out of duty.`, meta: [["Linked", `${v.n}×`]], href: `#/w/${encodeURIComponent(v.target)}`, action: "See who links it" });
   for (const n of D.notes.filter((n) => n.type === "project").sort((a, b) => b.mtime - a.mtime).slice(0, 5)) s.push({ cat: "Project", ic: "bolt", title: n.title, sub: plain(n.summary), meta: [["Area", n.area || "-"], ["Touched", ago(n.mtime)]], href: noteHref(n.path), action: "Open" });
-  const outside = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
+  const outside = D.notes.filter((n) => n.type === "concept" && !inCycle(n)).sort((a, b) => a.mtime - b.mtime).slice(0, 2);
   for (const n of outside) s.push({ cat: "Rediscover", ic: "leaf", title: n.title, sub: plain(n.summary), meta: [["Out of the cycle", "never reviewed"], ["Area", n.area || "-"]], href: noteHref(n.path), action: "Reread" });
   return s.length ? s : [CAUGHT_UP];
 }
@@ -331,7 +336,7 @@ const noteCard = (n, i = 0) => `<div class="nc-wrap" style="--c: ${folderColor(n
       <span class="nc-folder">${esc(folderLabel(n.folder))}</span>
       <h4>${esc(n.title)}</h4>
       <p>${esc(n.type === "daily" ? "Daily note" : plain(n.summary) || "No one-line summary.")}</p>
-      <span class="f">${n.type ? `<span class="pill">${esc(n.type)}</span>` : ""}${confKind(n) === "warn" ? `<span class="pill conf warn">${esc(n.confidence)}</span>` : ""}${n.review_on ? '<span class="pill peach">in cycle</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${ago(n.mtime)}</span></span>
+      <span class="f">${n.type ? `<span class="pill">${esc(n.type)}</span>` : ""}${confKind(n) === "warn" ? `<span class="pill conf warn">${esc(n.confidence)}</span>` : ""}${inCycle(n) ? '<span class="pill peach">in review</span>' : ""}<span>${esc(n.area)}</span><span style="margin-left:auto">${ago(n.mtime)}</span></span>
     </a>
     <div class="nc-acts">
       <button type="button" data-act="note-ask" data-p="${esc(n.path)}" title="Open an agent on the canvas that has read this note">${icon("spark", 13)} Ask an agent</button>
@@ -577,8 +582,8 @@ async function tdSave(id, patch) {
   } catch (e) { toast(e.message); D = await api("/api").catch(() => D); }
   tdRender(true);
 }
-// "Today", beside the list: the calendar's items for today, the agents (who waits for you first), and the vault's living
-// parts (notes to review, the inbox, today's captures) above the notes you touched last. An empty block isn't drawn.
+// "Today", beside the list: the calendar's items for today, the agents (who waits for you first), one review card, and the
+// vault's living parts (the inbox, today's captures) above the notes you touched last. An empty block isn't drawn.
 function tdSide() {
   const el = $("#td-side");
   if (!el) return;
@@ -589,13 +594,15 @@ function tdSide() {
   const shown = [...wait, ...fleet.filter((x) => x.group !== "waiting").slice(0, Math.max(1, 3 - wait.length))];
   const name = (x) => { const a = x.kind === "agent" && S.agents?.find((y) => y.key === x.id); return a ? a.cwd.split("/").filter(Boolean).pop() || "~" : x.title; };
   const daily = D.notes.find((n) => n.path === `${D.daily}/${D.today}.md`);
-  const vault = [[due().length, "to review", "#/review", "Review"], [inbox().length, "in the inbox", inbox()[0] && noteHref(inbox()[0].path), "Process"],
+  const card = due()[0];
+  const vault = [[inbox().length, "in the inbox", inbox()[0] && noteHref(inbox()[0].path), "Process"],
     [(D.captured || []).length, "captured today", daily && noteHref(daily.path), "Open"]].filter(([n, , href]) => n && href);
   const recent = D.notes.filter((n) => n.type !== "daily" && n.folder !== D.daily).sort((a, b) => b.mtime - a.mtime).slice(0, 3);
   el.innerHTML = [
     cal.length && `<section class="td-blk"><h4>Calendar</h4>${cal.map((c) => `<div class="td-ev"><b>${esc(c.t || "all day")}</b><span>${c.x}</span></div>`).join("")}</section>`,
     fleet.length && `<section class="td-blk"><h4>Agents <a href="#/agents">${fleet.length} working</a></h4>${shown.map((x) => `<button type="button" class="td-ag ${x.group === "waiting" ? "w" : ""}" data-act="home-agent" data-kind="${x.kind}" data-id="${esc(x.id)}" title="Open it on the canvas">
         <span class="d"></span><span class="nm">${esc(name(x))}${x.group === "waiting" ? "<small>waiting for you</small>" : ""}</span>${x.group === "waiting" ? `<b>Answer ${icon("r", 11)}</b>` : ""}</button>`).join("")}</section>`,
+    card && `<section class="td-blk td-rv"><h4>Do you remember? <a href="#/review">${due().length} to review</a></h4>${cardFace(card)}</section>`,
     (vault.length || recent.length) && `<section class="td-blk"><h4>Vault <a href="#/notes">${D.notes.length} notes</a></h4>
       ${vault.map(([n, l, href, go]) => `<a class="td-v" href="${esc(href)}"><b>${n}</b>${esc(l)}<span>${go} ${icon("r", 11)}</span></a>`).join("")}
       ${vault.length && recent.length ? '<div class="td-sep"></div>' : ""}
@@ -620,7 +627,7 @@ setInterval(() => {
 function tiles() {
   const el = $("#tiles");
   if (!el) return;
-  const next = D.notes.filter((n) => n.review_on > D.today).sort((a, b) => a.review_on.localeCompare(b.review_on))[0];
+  const next = (D.cards || []).filter((c) => c.next > D.today).sort((a, b) => a.next.localeCompare(b.next))[0];
   const on = S.services.filter((s) => s.ok).length;
   const names = { claude: "Claude", agy: "AGY", codex: "Codex", gemini: "Gemini" };
   el.innerHTML = `
@@ -629,7 +636,7 @@ function tiles() {
     <a class="tile glass" href="#/services"><span class="k">${icon("services", 16)} Services</span><span class="v">${on}/${S.services.length}</span>
       <span class="s">${esc(S.services.map((s) => `${s.ok ? "●" : "○"} ${s.name}`).join("  ")) || "none configured"}</span></a>
     <a class="tile glass" href="#/review"><span class="k">${icon("review", 16)} Review</span><span class="v">${due().length}</span>
-      <span class="s">${next ? `next: ${esc(next.title)} ${rel.format(daysBetween(D.today, next.review_on), "day")}` : "no notes in the cycle"}</span></a>
+      <span class="s">${next ? `next: ${esc(next.q)} ${rel.format(daysBetween(D.today, next.next), "day")}` : "no cards yet"}</span></a>
     <a class="tile glass" href="#/notes"><span class="k">${icon("notes", 16)} Notes</span><span class="v">${D.notes.length}</span>
       <span class="s">${D.missing.length} ${D.missing.length === 1 ? "gap" : "gaps"} · ${D.notes.filter((n) => Date.now() - n.mtime < 7 * 864e5).length} touched this week</span></a>`;
 }
@@ -667,7 +674,7 @@ function notesOverview() {
   const projects = D.notes.filter((n) => n.type === "project").sort((a, b) => b.mtime - a.mtime);
   const gaps = (D.missing || []).slice(0, 4);
   // one old concept out of the review cycle, a different one each day
-  const pool = D.notes.filter((n) => n.type === "concept" && !n.review_on).sort((a, b) => a.mtime - b.mtime).slice(0, 8);
+  const pool = D.notes.filter((n) => n.type === "concept" && !inCycle(n)).sort((a, b) => a.mtime - b.mtime).slice(0, 8);
   const old = pool.length ? pool[hash(D.today) % pool.length] : null;
   const by = {};
   for (const n of D.notes) by[n.folder] = (by[n.folder] || 0) + 1;
@@ -752,8 +759,8 @@ async function reader(path) {
         <a class="btn peach" href="${obs(n.path)}">Open in Obsidian ${icon("ext", 16)}</a>
         <div class="rd-acts"><button class="btn glass" data-act="note-ask" data-p="${esc(n.path)}" title="Open an agent on the canvas that has read this note">${icon("spark", 15)} Ask an agent</button>
           <button class="btn glass" data-act="note-canvas" data-p="${esc(n.path)}" title="Put this note on the canvas">${icon("grid", 15)} On canvas</button></div>
-        ${n.review_on ? `<p class="empty" style="padding:10px 0 0">In the cycle: review ${n.review_on <= D.today ? "today" : rel.format(daysBetween(D.today, n.review_on), "day")}, interval ${n.interval} d.</p>`
-          : `<button class="btn glass" data-act="enroll" data-p="${esc(n.path)}">Add to the review cycle</button>`}</div>
+        ${((c) => c ? `<p class="empty" style="padding:10px 0 0">In review: ${!c.next || c.next <= D.today ? "due today" : `next ${rel.format(daysBetween(D.today, c.next), "day")}`}.</p>`
+          : `<button class="btn glass" data-act="enroll" data-p="${esc(n.path)}">Add to review</button>`)((D.cards || []).find((x) => cardNote(x) === n))}</div>
       <div class="box glass"><h3>Linked from</h3>${n.backlinks.map((b) => `<a class="l" href="${noteHref(b.path)}">${esc(b.title)}</a>`).join("") || '<p class="empty" style="padding:0">Nothing links here yet.</p>'}</div>
       <div class="box glass"><h3>Links to</h3>${[...new Set(n.links)].map((l) => `<a class="l" href="#/w/${encodeURIComponent(l)}" style="${resolveNote(l) ? "" : "opacity:.5"}">${esc(l)}</a>`).join("") || '<p class="empty" style="padding:0">No links.</p>'}</div>
       <button class="quiet-danger" data-act="trash" data-p="${esc(n.path)}">${icon("trash", 14)} Move to trash</button>
@@ -787,47 +794,56 @@ function wiki(name) {
 }
 
 // ---------------------------------------------------------------- Review
-let queue = [], pos = 0, revealed = false, done = 0;
+// Cards come back in 1, 2, 4… days until you know them. This page and the Home's "Do you remember?" share the open answer.
+let rvShown = "", rvDone = 0;
+// The answer as written (its trailing [[note]] becomes a link below); a card that is only a link shows the note's
+// summary as it is today, so it doesn't go stale.
+const cardText = (c) => unlink(c.a.replace(/\s*\[\[[^\]]*\]\]\s*$/, "")).trim() || plain(cardNote(c)?.summary || "");
+function cardAnswer(c) {
+  const n = cardNote(c);
+  return `<p>${esc(cardText(c) || "No answer written yet. Ask again to get one.")}</p>
+    <div class="rv-src">${n ? `<a href="${noteHref(n.path)}">${esc(n.title)} ${icon("r", 11)}</a>` : ""}${c.added ? `<span>asked ${esc(rel.format(-daysBetween(c.added, D.today), "day"))}</span>` : ""}</div>`;
+}
+function cardFace(c, big) {
+  const k = (x) => (big ? ` <kbd>${x}</kbd>` : ""), id = esc(c.id);
+  return `<p class="rv-q">${esc(c.q)}</p>${rvShown === c.id ? `<div class="rv-a">${cardAnswer(c)}</div>
+    <div class="rv-acts"><button type="button" class="btn glass" data-act="card-no" data-id="${id}">Forgot${k(1)}</button><button type="button" class="btn peach" data-act="card-yes" data-id="${id}">Remembered${k(2)}</button>
+      <button type="button" class="rv-rm" data-act="card-rm" data-id="${id}" title="Useless or out of date: take it out">Remove</button></div>`
+    : `<div class="rv-acts"><button type="button" class="btn ${big ? "peach" : "glass"}" data-act="card-show" data-id="${id}">Show answer${k("space")}</button>${big ? "<small>Answer it in your head first.</small>" : ""}</div>`}`;
+}
 function review() {
-  queue = due(); pos = 0; revealed = false; done = 0;
-  flashcard();
+  const cards = D.cards || [], now = due(), c = now[0];
+  const later = cards.filter((x) => x.next > D.today).sort((a, b) => a.next.localeCompare(b.next));
+  const when = (x) => (!x.next || x.next <= D.today ? "today" : rel.format(daysBetween(D.today, x.next), "day"));
+  // to start with (while there are few cards): the concepts the other notes link most, not in review yet
+  const inLinks = {};
+  for (const x of D.notes) for (const l of new Set(x.links)) inLinks[l] = (inLinks[l] || 0) + 1;
+  const start = cards.length >= 10 ? [] : D.notes.filter((x) => x.type === "concept" && x.summary && !inCycle(x))
+    .sort((a, b) => (inLinks[nameOf(b.path)] || 0) - (inLinks[nameOf(a.path)] || 0) || a.title.localeCompare(b.title)).slice(0, 5);
+  main.innerHTML = `<div class="nt-head"><h1>Review</h1><p>${cards.length ? `${cards.length} ${cards.length === 1 ? "card" : "cards"} · ` : ""}what you ask the vault comes back in 1, 2, 4… days until you know it</p></div>
+    ${c ? `<section class="rv-card"><span class="rv-n">${now.length} to review today</span>${cardFace(c, true)}</section>`
+      : `<section class="rv-card rv-done"><p class="rv-q">${rvDone ? `${rvDone} reviewed. That's all for today.` : cards.length ? "Nothing to review today." : "No cards yet."}</p>
+        <p>${cards.length ? (later[0] ? `Next: “${esc(later[0].q)}” ${esc(when(later[0]))}.` : "") : 'Ask the vault something on <a href="#/notes">Notes</a>: the question comes back here tomorrow, with the answer the agent gave.'}</p></section>`}
+    ${cards.length || start.length ? `<div class="nt-alive ${cards.length && start.length ? "" : "solo"}">
+      ${cards.length ? `<section><h4>All cards <span>${cards.length}</span></h4>${[...now, ...later].map((x) => `<div class="rv-row">
+        <span><b>${esc(x.q)}</b><small>${esc(cardText(x))}</small></span><time>${esc(when(x))}</time>
+        <span class="rv-row-acts"><button type="button" data-act="vault-ask" data-q="${esc(x.q)}" title="An agent answers it again on the canvas">Ask again</button><button type="button" data-act="card-rm" data-id="${esc(x.id)}" title="Take it out">Remove</button></span></div>`).join("")}</section>` : ""}
+      ${start.length ? `<section><h4>Start with what the vault leans on</h4>${start.map((x) => `<div class="nt-gap"><a href="${noteHref(x.path)}"><b>${esc(x.title)}</b><span>linked ${inLinks[nameOf(x.path)] || 0}×</span></a>
+        <button type="button" data-act="enroll" data-p="${esc(x.path)}" title="Adds the card “${esc(D.cardsFile === "Revisão.md" ? "O que é" : "What is")} ${esc(x.title)}?”">Add</button></div>`).join("")}</section>` : ""}
+    </div>` : ""}`;
+  ambient(art(c ? c.q : "review"));
 }
-function flashcard() {
-  const n = queue[pos];
-  if (!n) {
-    const next = D.notes.filter((x) => x.review_on > D.today).sort((a, b) => a.review_on.localeCompare(b.review_on));
-    // What to learn first: concepts, the most linked first (the vocabulary the other notes lean on).
-    const inLinks = {};
-    for (const x of D.notes) for (const l of new Set(x.links)) inLinks[l] = (inLinks[l] || 0) + 1;
-    const pool = D.notes.filter((x) => !x.review_on && x.summary && x.type !== "daily");
-    const outside = (pool.some((x) => x.type === "concept") ? pool.filter((x) => x.type === "concept") : pool)
-      .sort((a, b) => (inLinks[nameOf(b.path)] || 0) - (inLinks[nameOf(a.path)] || 0) || a.title.localeCompare(b.title)).slice(0, 8);
-    const five = outside.slice(0, 5).map((x) => x.path);
-    main.innerHTML = `<div class="ph"><h1>${done ? `${done} reviewed. Done.` : "Nothing due today"}</h1>
-        <p>Remembered doubles the interval; forgot resets it to 1 day.</p></div>
-      <h3>Coming up</h3><div class="list glass">${next.slice(0, 8).map((x) => `<a class="row" href="${noteHref(x.path)}"><span class="t">${esc(x.title)}</span><span class="x">${x.review_on} · ${x.interval} d</span></a>`).join("") || '<p class="empty">No notes in the cycle yet.</p>'}</div>
-      <div class="rv-head"><h3>Add to the cycle</h3>${five.length > 1 ? `<button class="btn peach" data-act="enroll-5" data-ps="${esc(JSON.stringify(five))}" title="Five a day keeps the daily review short">Add the top ${five.length}</button>` : ""}</div><div class="list glass">${outside.map((x) => `<div class="row hov"><a class="t" href="${noteHref(x.path)}">${esc(x.title)}<small>${esc(plain(x.summary))}</small></a>
-        <button class="btn glass" data-act="enroll" data-p="${esc(x.path)}">Add</button></div>`).join("") || '<p class="empty">All of them already are.</p>'}</div>`;
-    ambient(art("review"));
-    return;
-  }
-  main.innerHTML = `<section class="flash glass">
-      <span class="n">${pos + 1} of ${queue.length} · ${esc(n.folder)}</span>
-      <h2>${esc(n.title)}</h2>
-      ${revealed ? `<p class="ans glass">${esc(plain(n.summary) || "No one-line summary. Open the note.")}</p>
-        <div class="acts"><button class="btn glass" data-act="no">Forgot <kbd>1</kbd></button><button class="btn peach" data-act="yes">Remembered <kbd>2</kbd></button>
-        <a class="btn glass r" href="${noteHref(n.path)}">Read the note</a></div>`
-      : `<div class="acts"><button class="btn peach" data-act="show">Show answer <kbd>space</kbd></button></div>`}
-    </section>`;
-  ambient(art(n.title));
+// Answer or remove a card, then redraw whichever page shows it (this one, or the Home's column).
+async function cardDo(what, id, remembered) {
+  try {
+    const r = await api(`/api/cards/${what}`, { id, remembered });
+    D.cards = r.cards; rvShown = "";
+    if (what === "answer") rvDone++;
+    toast(what === "remove" ? "Card removed" : r.card.retired ? "You know this one: it left the review" : `Back ${rel.format(r.card.interval, "day")}`);
+  } catch (e) { toast(e.message); }
+  rvRedraw();
 }
-async function answer(remembered) {
-  const n = queue[pos];
-  const r = await api("/api/review", { path: n.path, remembered });
-  toast(`${n.title}: back in ${r.interval} d`);
-  pos++; revealed = false; done++;
-  D = await api("/api"); topBar(); flashcard();
-}
+function rvRedraw() { topBar(); if (route().pg === "review") review(); else if (!route().pg) tdSide(); }
 
 // ---------------------------------------------------------------- Graph
 // The canvas can't read CSS variables, so the graph takes the theme's colours when it draws.
@@ -3592,7 +3608,7 @@ function route() { const [, pg = "", ...r] = location.hash.split("/"); return { 
 function render() {
   if (!D) return;
   if (cwdOpen) { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); }
-  if (document.activeElement?.closest?.("#dockwrap")) document.activeElement.blur(); // a floating dock folds after you pick a page
+  if (document.activeElement?.closest?.("#dockwrap, .crumb")) document.activeElement.blur(); // a floating dock folds after you pick a page; no ring left on the name
   graphStop?.(); graphStop = null; clearInterval(orchTimer);
   const { pg, arg } = route();
   if (pg !== "agents" && document.body.classList.contains("canvas-full")) canvasFull(false); // full screen is the canvas's
@@ -3648,7 +3664,8 @@ const ACTIONS = {
   ...CAL_ACTIONS, ...IMG_ACTIONS,
   prev: () => move(-1), next: () => move(1), go: (el) => { idx = Number(el.dataset.i); place(); },
   filter: (el) => { filter = el.dataset.k; notes(); },
-  show: () => { revealed = true; flashcard(); }, yes: () => answer(true), no: () => answer(false),
+  "card-show": (el) => { rvShown = el.dataset.id; rvRedraw(); },
+  "card-yes": (el) => cardDo("answer", el.dataset.id, true), "card-no": (el) => cardDo("answer", el.dataset.id, false), "card-rm": (el) => cardDo("remove", el.dataset.id),
   trash: async (el) => {
     if (!confirm(`Delete "${el.dataset.p}"? It goes to the vault's .trash folder.`)) return;
     try { await api("/api/trash", { path: el.dataset.p }); } catch (e) { return toast(e.message); }
@@ -3660,12 +3677,11 @@ const ACTIONS = {
     if (!agent) return toast("No agent is ready: add one in Settings");
     try { const r = await api("/api/routine", { name: "morning", agent }); S = await api("/api/system"); location.hash = `#/t/${r.id}`; } catch (e) { toast(e.message); }
   },
-  "enroll-5": async (el) => {
-    const ps = JSON.parse(el.dataset.ps);
-    for (const path of ps) await api("/api/review", { path, remembered: false });
-    toast(`${ps.length} in the cycle: first review tomorrow`); D = await api("/api"); render();
+  // A note into review: the card "What is X?", answered by the note's summary.
+  enroll: async (el) => {
+    try { const r = await api("/api/cards/add", { path: el.dataset.p }); D.cards = r.cards; toast(`In review: “${esc(r.card.q)}” comes back tomorrow`); } catch (e) { toast(e.message); }
+    render();
   },
-  enroll: async (el) => { await api("/api/review", { path: el.dataset.p, remembered: false }); toast("In the cycle: first review tomorrow"); D = await api("/api"); render(); },
   routine: async (el) => {
     try {
       const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() });
@@ -3734,10 +3750,11 @@ const ACTIONS = {
   "orch-vault-note": () => openVaultNotes(),
   "note-ask": (el) => askAgent(el.dataset.p),
   // Ask the vault: an agent on the canvas answers from the notes, says which, and looks it up when they don't have it.
-  "vault-ask": () => {
-    const q = query.trim();
+  // The question comes back as a review card: the agent adds it to Review.md once it has answered.
+  "vault-ask": (el) => {
+    const q = (el?.dataset?.q ?? query).trim();
     if (!q) return $("#search")?.focus();
-    agentOnCanvas(`My question: ${q}\n\nAnswer it from this vault's notes first: search them (titles and text) and cite the ones you used as [[links]]. If the vault doesn't have it, say so, look it up, answer, and ask me whether to save what you found as a note (following AGENTS.md). Answer in the language of my question.`);
+    agentOnCanvas(`My question: ${q}\n\nAnswer it from this vault's notes first: search them (titles and text) and cite the ones you used as [[links]]. If the vault doesn't have it, say so, look it up, answer, and ask me whether to save what you found as a note (following AGENTS.md). Answer in the language of my question.\n\nOnce you have answered, add my question as a review card, so it comes back to me in a few days: one line at the end of ${D.cardsFile || "Review.md"} at the vault root (create the file if it's missing): \`- <my question, short> :: <your answer in one or two plain sentences> [[<the note it comes from, if any>]]\`. If that question is already there, replace its line.`);
   },
   // Save as a note: a link or a few lines (what you just learned) become a note, filed by an agent following AGENTS.md.
   "vault-save": async () => {
@@ -4128,10 +4145,10 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "/" && pg !== "agents") { e.preventDefault(); cmdkOpen(); }
   if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
   if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }
-  if (pg === "review" && queue[pos]) {
-    if (e.key === " " && !revealed) { e.preventDefault(); ACTIONS.show(); }
-    if (revealed && e.key === "1") answer(false);
-    if (revealed && e.key === "2") answer(true);
+  const card = pg === "review" && due()[0];
+  if (card) {
+    if (e.key === " " && rvShown !== card.id) { e.preventDefault(); rvShown = card.id; review(); }
+    if (rvShown === card.id && (e.key === "1" || e.key === "2")) cardDo("answer", card.id, e.key === "2");
   }
 });
 // Swipe on the carousel (pointer + touch).
