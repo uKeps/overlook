@@ -1967,8 +1967,7 @@ function agentsBody() {
       <div class="orch-canvas" id="orch-canvas">
         <div class="orch-plane" id="orch-plane"></div>
         <nav class="cv-island cv-tl" aria-label="Canvas menu">
-          <button type="button" class="cv-tl-btn" data-act="cv-menu" title="Menu: pages, search, layout" aria-label="Menu">${icon("menu", 18)}</button>
-          <a class="cv-tl-btn cv-home" href="#/" title="Back to the Home page">${icon("home", 16)}<span>Home</span></a>
+          <button type="button" class="cv-tl-btn" data-act="cv-menu" title="Menu: search, capture, layout" aria-label="Menu">${icon("menu", 18)}</button>
         </nav>
         <div class="cv-island orch-hud" id="orch-hud" role="toolbar" aria-label="Canvas tools"></div>
         <div class="cv-island orch-hud cv-br" id="orch-hud-br" role="toolbar" aria-label="View"></div>
@@ -3115,7 +3114,7 @@ async function settingsPage() {
         <div class="seg" role="radiogroup">${[["classic", "Classic"], ["minimal", "Minimal"]].map(([k, l]) =>
           `<button type="button" role="radio" aria-checked="${uiMode === k}" class="${uiMode === k ? "on" : ""}" data-act="set-ui" data-v="${k}">${l}</button>`).join("")}</div></div>
       <div class="img-set glass"><b>Calendar</b><small>Week strip under the top bar, or a pill that opens on hover.</small>${seg("set-cal", calMode)}</div>
-      <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill.</small>${seg("set-dock", dockMode)}</div>
+      <div class="img-set glass"><b>Dock</b><small>Navigation bar at the bottom, or a compact pill that opens on hover. The canvas follows it too.</small>${seg("set-dock", dockMode)}</div>
       <div class="img-set glass"><b>Card art</b><small>Your images, animated ascii scenes, or images when you have them.</small>
         <div class="seg" role="radiogroup">${[["auto", "Auto"], ["images", "Images"], ["ascii", "ASCII"]].map(([k, l]) =>
           `<button type="button" role="radio" aria-checked="${cardArt === k}" class="${cardArt === k ? "on" : ""}" data-act="set-art" data-v="${k}">${l}</button>`).join("")}</div></div>
@@ -3346,7 +3345,7 @@ function render() {
   document.body.classList.toggle("home", !pg);
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
   document.body.classList.toggle("agents", pg === "agents" || pg === "a" || pg === "t");
-  document.body.classList.toggle("canvas-page", pg === "agents"); // the canvas takes the whole screen: no header, no dock
+  document.body.classList.toggle("canvas-page", pg === "agents"); // the canvas takes the whole screen: no header; the dock stays
   if (pg !== "s") $("#svcbar").innerHTML = "";
   main.style.animation = "none"; main.offsetHeight; main.style.animation = "";
   topBar();

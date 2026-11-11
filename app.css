@@ -1381,17 +1381,14 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   border: 1px solid rgba(255, 255, 255, .09); border-radius: 14px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
 }
-/* top left: ☰ and a labelled Home button, one island (its width is --tl-w: the Fleet pill sits right after it) */
-.cv-tl { --tl-w: 130px; top: 10px; left: 10px; width: var(--tl-w); height: 40px; padding: 3px; display: flex; gap: 2px; border-radius: 999px; }
+/* top left: the ☰ menu (pages are in the dock, as on every page) */
+.cv-tl { top: 10px; left: 10px; width: 40px; height: 40px; padding: 3px; display: flex; border-radius: 999px; }
 .cv-tl-btn {
   height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 999px;
   color: var(--muted); font: 500 13px var(--body); transition: color .15s, background .15s;
 }
-.cv-tl-btn:first-child { flex: none; width: 34px; }
-.cv-home { flex: 1; gap: 9px; padding: 0 12px 0 10px; color: var(--ink); } /* room for the icon and the label to swell */
-.cv-home svg { color: var(--accent); }
+.cv-tl-btn:first-child { flex: none; width: 32px; }
 .cv-tl-btn:hover { color: var(--ink); background: rgba(255, 255, 255, .08); }
-@media (max-width: 760px) { .cv-tl { --tl-w: 82px; } .cv-home span { display: none; } .cv-home { padding: 0; } }
 .orch-hud {
   top: 10px; left: 50%; translate: -50% 0; max-width: calc(100% - 340px);
   display: inline-flex; align-items: center; gap: 2px; padding: 4px;
@@ -2092,15 +2089,19 @@ body.canvas-full .orch-work { gap: 0; }
 
 /* ---------- Canvas page: the canvas is the whole screen; the header, the week strip and the dock step aside ---------- */
 body.canvas-page { padding: 0; }
-body.canvas-page :is(.top, .cal, #dockwrap) { display: none !important; }
+body.canvas-page :is(.top, .cal) { display: none !important; }
 body.canvas-page main { max-width: none !important; margin: 0 !important; padding: 0 !important; }
 body.canvas-page .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
 body.canvas-page .orch-work { gap: 0; }
 body.canvas-page .orch-canvas { border-radius: 0; border: 0; }
-body.canvas-page .orch-canvas.tiled { padding: 60px 10px 10px; }
-/* the Fleet pill sits after the ☰ / Home island (10 + --tl-w + 8), as tall as the islands */
-body.canvas-page .orch-fleet-wrap.float { left: 148px; }
-@media (max-width: 760px) { body.canvas-page .orch-fleet-wrap.float { left: 100px; } }
+body.canvas-page .orch-canvas.tiled { padding: 60px 10px 100px; } /* the split's panes end above the dock */
+body.canvas-page.dock-float .orch-canvas.tiled { padding-bottom: 70px; }
+/* the Fleet pill sits after the ☰ button (10 + 40 + 8), as tall as the islands */
+body.canvas-page .orch-fleet-wrap.float { left: 58px; }
+/* a phone: the dock spans the bottom, so the view bar and the map sit above it */
+@media (max-width: 760px) { body.canvas-page .orch-hud.cv-br { bottom: 84px; } body.canvas-page .cv-map { bottom: 136px; } }
+/* a pinned dock (~600px wide) meets the view bar below ~1280px: the view bar and the map rise above it */
+@media (max-width: 1280px) { body.canvas-page:not(.dock-float) .orch-hud.cv-br { bottom: 100px; } body.canvas-page:not(.dock-float) .cv-map { bottom: 152px; } }
 body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill {
   height: 40px; padding: 0 16px; border-color: rgba(255, 255, 255, .09);
   background: color-mix(in srgb, var(--surface) 94%, #000); box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
