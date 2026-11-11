@@ -2059,6 +2059,181 @@ test("deploy services: Coolify, Dokploy, and abstract webhook/CLI targets", asyn
   expect((await post("/api/settings", { services: [] })).status).toBe(200);
 });
 
+test("canvas background presets: 5 presets, octave zoom LOD anti-moire, HUD picker, Settings control, and persistence", async () => {
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const appCss = readFileSync(`${REPO}/app.css`, "utf8");
+
+  // 1. All 5 presets (dots, sparse, grid, plain, ambient) exist in CANVAS_BGS (app.js) and .orch-canvas.free[data-bg="..."] (app.css)
+  const expectedPresets: [string, string, string, number][] = [
+    ["dots", "Dots", "Classic dot matrix", 22],
+    ["sparse", "Calm", "Wide soft dots", 44],
+    ["grid", "Grid", "Fine hairline grid", 32],
+    ["plain", "Solid", "Clean matte surface", 0],
+    ["ambient", "Ambient", "Translucent glass", 0],
+  ];
+  expect(appJs).toContain("const CANVAS_BGS = [");
+  for (const [id, label, desc, step] of expectedPresets) {
+    expect(appJs).toContain(`["${id}", "${label}", "${desc}", ${step}]`);
+    expect(appCss).toContain(`.orch-canvas.free[data-bg="${id}"]`);
+    expect(appCss).toContain(`.orch-bgmenu .bg-sw[data-sw="${id}"]`);
+  }
+  expect(appCss).toContain('html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"]');
+  expect(appCss).toContain("--bg-eff-alpha: calc(var(--bg-dot-alpha) * var(--bg-lod, 1));");
+
+  // 2. Invalid/corrupted background values fall back to "dots" via VALID_BGS / bgEntry
+  expect(appJs).toContain("const VALID_BGS = new Set(CANVAS_BGS.map(([k]) => k));");
+  expect(appJs).toContain("const bgEntry = (k) => CANVAS_BGS.find(([id]) => id === k) || CANVAS_BGS[0];");
+  expect(appJs).toContain('orchBg = VALID_BGS.has(v) ? v : "dots";');
+  expect(appJs).toContain('const CANVAS_KEY = "overlook.canvas", CANVAS_BG_KEY = "overlook.canvas-bg"');
+  expect(appJs).toContain("if (savedBg && VALID_BGS.has(savedBg)) orchBg = savedBg;");
+  expect(appJs).toContain("if (c.bg && VALID_BGS.has(c.bg)) orchBg = c.bg;");
+
+  const VALID_BGS = new Set(expectedPresets.map(([k]) => k));
+  const bgEntry = (k: string) => expectedPresets.find(([id]) => id === k) || expectedPresets[0];
+  for (const bad of ["", "invalid", "checkerboard", "../xss", "null", "undefined"]) {
+    const resolved = VALID_BGS.has(bad) ? bad : "dots";
+    expect(resolved).toBe("dots");
+    expect(bgEntry(bad)[0]).toBe("dots");
+    expect(bgEntry(bad)[3]).toBe(22);
+  }
+
+  // Verify cycling order across all 5 presets wraps back to "dots"
+  let curBg = "dots";
+  const visited: string[] = [];
+  for (let i = 0; i < expectedPresets.length; i++) {
+    const idx = expectedPresets.findIndex(([k]) => k === curBg);
+    curBg = expectedPresets[(idx + 1) % expectedPresets.length][0];
+    visited.push(curBg);
+  }
+  expect(visited).toEqual(["sparse", "grid", "plain", "ambient", "dots"]);
+
+  // 3. Octave step-doubling math & alpha LOD attenuation in applyCanvasTransform across zoom 0.2 to 2.5
+  expect(appJs).toContain("while (step * orchZoom < 16) step *= 2;");
+  expect(appJs).toContain("const lod = orchZoom < 0.85 ? Math.max(0.42, Math.min(1, (orchZoom - 0.1) / 0.75)) : 1;");
+
+  const makeMockCanvas = () => {
+    const props = new Map<string, string>();
+    return {
+      dataset: { bg: "" },
+      style: {
+        backgroundPosition: "",
+        backgroundSize: "",
+        setProperty: (k: string, v: string) => { props.set(k, v); },
+        removeProperty: (k: string) => { props.delete(k); },
+        getPropertyValue: (k: string) => props.get(k) || "",
+      },
+    };
+  };
+
+  const simulateTransform = (canvas: ReturnType<typeof makeMockCanvas>, bg: string, free: boolean, zoom: number, panX = 40, panY = 64) => {
+    const [bgId, , , baseStep] = bgEntry(bg);
+    canvas.dataset.bg = bgId;
+    if (free && baseStep > 0) {
+      let step = baseStep;
+      while (step * zoom < 16) step *= 2;
+      const px = Math.round(step * zoom * 100) / 100;
+      const lod = zoom < 0.85 ? Math.max(0.42, Math.min(1, (zoom - 0.1) / 0.75)) : 1;
+      const pos = `${panX}px ${panY}px`, sz = `${px}px ${px}px`;
+      canvas.style.setProperty("--bg-pos", pos);
+      canvas.style.setProperty("--bg-size", sz);
+      canvas.style.setProperty("--bg-lod", lod.toFixed(2));
+      canvas.style.backgroundPosition = pos;
+      canvas.style.backgroundSize = sz;
+      return { step, px, lod };
+    } else {
+      canvas.style.removeProperty("--bg-pos");
+      canvas.style.removeProperty("--bg-size");
+      canvas.style.removeProperty("--bg-lod");
+      canvas.style.backgroundPosition = "";
+      canvas.style.backgroundSize = "";
+      return { step: 0, px: 0, lod: 1 };
+    }
+  };
+
+  const zooms = [0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.65, 0.75, 0.84, 0.85, 1.0, 1.25, 1.5, 2.0, 2.5];
+  for (const [id, , , baseStep] of expectedPresets.filter(([, , , s]) => s > 0)) {
+    for (const z of zooms) {
+      const cv = makeMockCanvas();
+      const { step, px, lod } = simulateTransform(cv, id, true, z, 120, 80);
+      expect(cv.dataset.bg).toBe(id);
+      // Screen-space period must never drop below 16px (prevents moiré and dot crowding at low zoom)
+      expect(step * z).toBeGreaterThanOrEqual(16);
+      expect(px).toBeGreaterThanOrEqual(16);
+      expect(step % baseStep).toBe(0);
+      // Octave multiplier is a power of 2
+      const mult = step / baseStep;
+      expect(Math.log2(mult) % 1).toBe(0);
+
+      // Alpha LOD attenuation below 0.85 zoom
+      if (z < 0.85) {
+        expect(lod).toBeGreaterThanOrEqual(0.42);
+        expect(lod).toBeLessThan(1);
+      } else {
+        expect(lod).toBe(1);
+      }
+      expect(cv.style.getPropertyValue("--bg-pos")).toBe("120px 80px");
+      expect(cv.style.getPropertyValue("--bg-size")).toBe(`${px}px ${px}px`);
+      expect(cv.style.getPropertyValue("--bg-lod")).toBe(lod.toFixed(2));
+      expect(cv.style.backgroundPosition).toBe("120px 80px");
+      expect(cv.style.backgroundSize).toBe(`${px}px ${px}px`);
+    }
+  }
+
+  // Exact octave check at minimum zoom (0.2):
+  // dots (22): 22 -> 44 -> 88 (88 * 0.2 = 17.6px >= 16px)
+  // sparse (44): 44 -> 88 (88 * 0.2 = 17.6px >= 16px)
+  // grid (32): 32 -> 64 -> 128 (128 * 0.2 = 25.6px >= 16px)
+  const cvMin = makeMockCanvas();
+  expect(simulateTransform(cvMin, "dots", true, 0.2).px).toBe(17.6);
+  expect(simulateTransform(cvMin, "sparse", true, 0.2).px).toBe(17.6);
+  expect(simulateTransform(cvMin, "grid", true, 0.2).px).toBe(25.6);
+
+  // 4. Pattern-free presets (plain, ambient) and tiled mode (!free) clear --bg-pos, --bg-size, --bg-lod, backgroundPosition, and backgroundSize
+  for (const plainId of ["plain", "ambient"]) {
+    const cv = makeMockCanvas();
+    simulateTransform(cv, "dots", true, 0.5, 50, 60); // populate first
+    expect(cv.style.getPropertyValue("--bg-pos")).toBe("50px 60px");
+    simulateTransform(cv, plainId, true, 0.5, 50, 60);
+    expect(cv.dataset.bg).toBe(plainId);
+    expect(cv.style.getPropertyValue("--bg-pos")).toBe("");
+    expect(cv.style.getPropertyValue("--bg-size")).toBe("");
+    expect(cv.style.getPropertyValue("--bg-lod")).toBe("");
+    expect(cv.style.backgroundPosition).toBe("");
+    expect(cv.style.backgroundSize).toBe("");
+  }
+
+  // Tiled mode (!free) clears properties even for patterned presets
+  for (const [id] of expectedPresets) {
+    const cv = makeMockCanvas();
+    simulateTransform(cv, "dots", true, 1.0, 30, 40);
+    simulateTransform(cv, id, false, 1.0, 30, 40);
+    expect(cv.dataset.bg).toBe(id);
+    expect(cv.style.getPropertyValue("--bg-pos")).toBe("");
+    expect(cv.style.getPropertyValue("--bg-size")).toBe("");
+    expect(cv.style.getPropertyValue("--bg-lod")).toBe("");
+    expect(cv.style.backgroundPosition).toBe("");
+    expect(cv.style.backgroundSize).toBe("");
+  }
+
+  // 5. HUD button (data-act="orch-bg-menu"), #orch-bgmenu, Settings segmented control (data-act="set-canvas-bg"), and keyboard shortcuts (Ctrl+Alt+B / B) are wired
+  expect(appJs).toContain('b("orch-bg-menu", "canvasBg"');
+  expect(appJs).toContain('<div class="orch-newmenu orch-bgmenu" id="orch-bgmenu" hidden></div>');
+  expect(appJs).toContain('"orch-bg-menu": () => {');
+  expect(appJs).toContain('"orch-bg": (el) => setCanvasBg(el.dataset.bg || el.dataset.v),');
+  expect(appJs).toContain('"set-canvas-bg": (el) => { setCanvasBg(el.dataset.v); if (route().pg === "settings") settingsPage(); },');
+  expect(appJs).toContain('data-act="set-canvas-bg"');
+  expect(appJs).toContain('KeyB: () => { if (orchMode === "free") cycleCanvasBg(); },');
+  expect(appJs).toContain('if (e.key === "b" || e.key === "B") { e.preventDefault(); cycleCanvasBg(); return; }');
+
+  // 6. Fullscreen Escape isolation: Esc inside a focused terminal stays in the terminal; clicking empty canvas blurs focus so Esc exits canvas-full
+  expect(appJs).toContain("const inCanvasCardFocus = () => Boolean(");
+  expect(appJs).toContain("function blurCanvasFocus(");
+  expect(appJs).toContain('navigator.keyboard?.lock?.(["Escape"])');
+  expect(appJs).toContain("if (isBg) blurCanvasFocus(");
+  expect(appJs).toContain('if (e.key === "Escape" && route().pg === "agents" && !document.querySelector("dialog[open]") && !inCanvasCardFocus())');
+});
+
+
 
 
 
