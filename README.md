@@ -86,7 +86,8 @@ Each `agents.json` entry is one of two kinds:
 
 - **CLI**: `run` is the command, with `{prompt}` where the task goes (plus `{model}`, `{effort}`, `{session}`).
   It runs in the vault with that CLI's own permissions. Optional: `process` (to spot it running), `tui` (opens
-  it on the canvas), `open` (buttons that resume a session elsewhere), `canvas` (args that tell it about wires).
+  it on the canvas; `{log}` there names a log file the conversation id is read from, for CLIs like agy that
+  can't take a session id up front), `open` (buttons that resume a session elsewhere), `canvas` (args that tell it about wires).
 - **API**: `api` is `anthropic` or `openai` (any OpenAI-compatible endpoint: OpenRouter, Groq, Ollama), with
   `model`, an optional `url`, and `key`, the `.env` variable holding the key. It gets four tools limited to the
   vault's notes (`list_notes`, `search_notes`, `read_note`, `write_note`), and `AGENTS.md` as instructions.

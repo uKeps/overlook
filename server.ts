@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -659,13 +659,15 @@ async function ptySpec(q: URLSearchParams) {
     if (!a || !tuiOk(a)) return "unknown agent or no interactive mode";
     // The pane picks the session id up front (claude: --session-id), so once the PTY exits or Overlook restarts,
     // reopening the pane resumes that conversation instead of re-running the first prompt.
-    const prompt = q.get("prompt")?.trim() ?? "", sid = tuiResumes(a) ? q.get("session") ?? "" : "";
+    const prompt = q.get("prompt")?.trim() ?? "", sid = tuiResumes(a) || tuiLogs(a) ? q.get("session") ?? "" : "";
     if (sid && !/^[0-9a-f][0-9a-f-]{7,63}$/i.test(sid)) return "bad session id";
     if (sessionBusy(sid)) return "this session is running (task or another pane)";
     // Model and effort only from the agent's own lists (they land in argv).
     const ms = models(a), model = ms.find((m) => m.id === q.get("model"))?.id ?? "";
     const effort = (ms.find((m) => m.id === model)?.efforts ?? efforts(a)).includes(q.get("effort") ?? "") ? q.get("effort")! : "";
-    const argv = sid && !q.has("fresh") && sessionStarted(sid) ? agentArgv(a, sid) : tuiArgv(a, sid, q.has("fresh") ? prompt : "", model, effort);
+    // agy picks its own conversation id: the pane's id only names the log it is read from.
+    const resume = !sid || q.has("fresh") ? "" : tuiLogs(a) ? loggedConversation(sid) : sessionStarted(sid) ? sid : "";
+    const argv = resume ? agentArgv(a, resume) : tuiArgv(a, sid, q.has("fresh") ? prompt : "", model, effort);
     return typeof argv === "string" ? argv : { argv: inShell(withCanvas(a, argv)), cwd: dirOr(q.get("cwd") ?? undefined, ROOT), title: a.name, session: sid, env: AGENT_ENV };
   }
   const sh = shellPath(q.get("shell") ?? undefined);

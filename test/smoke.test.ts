@@ -1891,6 +1891,17 @@ test("canvas terminal: a real PTY over /ws/pty, only for Overlook's own pages", 
   expect(tuiArgv(agy, "", "hi")).toEqual([sh, "-i", "hi"]);
   expect(tuiArgv(agy, "", "")).toEqual([sh]); // no prompt: the flag goes too
   expect(tuiArgv(agy, "", "- fix the list")).toEqual([sh, "-i", " - fix the list"]); // a markdown list is not a flag
+  // agy picks its own conversation id: the pane's id names a log file, and the last conversation created there resumes.
+  const { tuiLogs, agentLog, loggedConversation } = await import("../tasks");
+  const logged = { id: "l", name: "L", run: ["sh"], open: { Terminal: ["{terminal}", "sh", "--conversation", "{session}"] }, tui: ["sh", "--log-file", "{log}", "-i", "{prompt}"] };
+  const pane = crypto.randomUUID(), conv = crypto.randomUUID();
+  expect([tuiLogs(logged), tuiLogs(agy)]).toEqual([true, false]);
+  expect(tuiArgv(logged, pane, "")).toEqual([sh, "--log-file", agentLog(pane)]);
+  expect(tuiArgv(logged, "", "hi")).toEqual([sh, "-i", "hi"]); // no pane id: no log flag
+  expect(loggedConversation(pane)).toBe("");
+  writeFileSync(agentLog(pane), `I1110 server.go:1233] Created conversation ${crypto.randomUUID()} (backend=X)\nI1110 server.go:1233] Created conversation ${conv} (backend=X)\n`);
+  expect(loggedConversation(pane)).toBe(conv);
+  rmSync(agentLog(pane));
   const picky = { id: "p", name: "P", run: ["sh"], tui: ["sh", "--model", "{model}", "--effort", "{effort}", "{prompt}"] };
   expect(tuiArgv(picky, "", "hi", "opus", "")).toEqual([sh, "--model", "opus", "hi"]); // an empty effort drops its flag
   expect(tuiOk({ id: "e", name: "E", run: ["echo"] })).toBe(false);
