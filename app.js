@@ -98,7 +98,7 @@ const duration = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `$
 // [[link]] in its answer (or, for a note with the old review fields, its path) and shows that note's summary as it is now.
 const due = () => (D.cards || []).filter((c) => !c.next || c.next <= D.today).sort((a, b) => (a.next || "").localeCompare(b.next || ""));
 const cardNote = (c) => (c.path ? D.notes.find((n) => n.path === c.path) : resolveNote(c.a.match(/\[\[([^\]|#]+)/)?.[1]?.trim()));
-let cyc = [];
+let cyc = [{}]; // a key no D.cards equals, so the first call builds the set even when the server sends no cards
 const inCycle = (n) => { if (cyc[0] !== D.cards) cyc = [D.cards, new Set((D.cards || []).map((c) => cardNote(c)?.path))]; return cyc[1].has(n.path); };
 const inbox = () => D.notes.filter((n) => n.folder === D.inbox);
 // Confidence (frontmatter confidence / confianca): how far to trust a note before deciding on it, and how old the check is.
