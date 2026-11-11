@@ -346,15 +346,19 @@ function toCanvas(make) {
   afterCanvas = make;
   location.hash = "#/agents";
 }
-// "Ask an agent": a new agent on the canvas, in the vault, that starts by reading the note and waits for questions.
-function askAgent(path) {
-  const n = D.notes.find((x) => x.path === path), agent = defaultAgent();
+// A new agent on the canvas, in the vault, that starts on `prompt` (a note to read, a task to do).
+function agentOnCanvas(prompt) {
+  const agent = defaultAgent();
   if (!agent) return toast("No agent with a terminal is set up yet: see Settings › Agents");
-  const prompt = `Read the note "${path}" in this vault${n ? ` ("${n.title}")` : ""}. In three short lines, tell me what it is about and what is still open in it, in the language the note is written in. Then wait for my questions.`;
   toCanvas(() => {
     const p = { kind: "terminal", id: `term_${Date.now()}`, cwd: "", run: newTuiRun(agent, prompt) };
     if (addPane(p)) { saveCanvas(); focusPane(paneKey(p)); }
   });
+}
+// "Ask an agent": it starts by reading the note and waits for questions.
+function askAgent(path) {
+  const n = D.notes.find((x) => x.path === path);
+  agentOnCanvas(`Read the note "${path}" in this vault${n ? ` ("${n.title}")` : ""}. In three short lines, tell me what it is about and what is still open in it, in the language the note is written in. Then wait for my questions.`);
 }
 const noteToCanvas = (path) => toCanvas(() => { if (addPane({ kind: "note", id: path })) { saveCanvas(); focusPane(`note:${path}`); } });
 
@@ -376,50 +380,7 @@ const cta = (s, cls, ic) => s.act ? `<button type="button" class="${cls}" data-a
 function home() {
   SG = suggestions();
   idx = Math.min(idx, SG.length - 1);
-  if (uiMode === "minimal") {
-    // The queue keeps what asks for something today; projects and old notes show under "where you left off".
-    SG = SG.filter((s) => s.cat !== "Project" && s.cat !== "Rediscover");
-    if (!SG.length) SG = [CAUGHT_UP];
-    idx = Math.min(idx, SG.length - 1);
-    const need = needsYou() + (D.focus?.length ? 0 : 1);
-    const recent = D.notes.filter((n) => n.type !== "daily").sort((a, b) => b.mtime - a.mtime).slice(0, 6);
-    // the side stage is for card art; without any it only repeated the first row, so the page goes full width
-    const stage = cardArt === "ascii" || !!D.pins?.length;
-    main.innerHTML = `<section class="min-home ${stage ? "" : "solo"}">
-        <header class="min-hello"><h1>${esc(dayName(D.today, { weekday: "long", day: "numeric", month: "long" }))}</h1>
-          <p id="hm-status"></p></header>
-        <form class="hm-capture" id="hm-capture">${icon("spark", 16)}
-          <input id="hm-cap" placeholder="Capture an idea, a link, a question… Enter saves it to today's note" autocomplete="off" aria-label="Capture to today's note">
-          <kbd>Enter</kbd></form>
-        <div class="min-queue">
-          <div id="hm-agents"></div>
-          <h3 class="hm-h">Next up</h3>
-          <div class="min-rows">${SG.map((s, i) => `<div class="min-row ${i === idx ? "on" : ""}" data-i="${i}">
-            <button type="button" class="min-sel" data-act="go" data-i="${i}">
-              <span class="min-txt"><b>${emLinks(s.raw || s.title)}</b><small>${esc(s.sub)}</small></span>
-              <span class="min-cat">${icon(s.ic, 13)} ${esc(s.cat)}</span>
-            </button>
-            ${cta(s, "min-go", 13)}
-          </div>`).join("")}</div>
-          <h3 class="hm-h">Pick up where you left off <a href="#/notes">All notes ${icon("r", 12)}</a></h3>
-          <div class="grid hm-notes">${recent.map(noteCard).join("")}</div>
-        </div>
-        ${stage ? '<aside class="min-stage glass" id="min-stage"></aside>' : ""}
-      </section>
-      <section class="tiles" id="tiles"></section>`;
-    $("#hm-status").dataset.need = need;
-    $("#hm-capture").onsubmit = async (e) => {
-      e.preventDefault();
-      const inp = $("#hm-cap"), text = inp.value.trim();
-      if (!text) return;
-      inp.value = "";
-      // redraw only if you're still on the Home (you may have moved on while it saved)
-      try { await api("/api/capture", { text }); toast("Captured in the daily note"); D = await api("/api"); if (!route().pg) home(); topBar(); }
-      catch (err) { inp.value = text; toast(err.message); }
-    };
-    place(); tiles(); homeAgents();
-    return;
-  }
+  if (uiMode === "minimal") return todoHome();
   const card = (s, i) => {
     const p = pinFor(i), ascii = asciiCards();
     return `<article class="card ${ascii ? "ascii" : ""}" data-i="${i}" ${ascii ? "" : `style="background-image:url('${art(i)}?amb')"`}>
@@ -485,25 +446,156 @@ function place() {
 }
 const move = (d) => { idx = (idx + d + SG.length) % SG.length; place(); };
 
-// Home: the agent sessions that are waiting for you or working, live (the 10 s refresh redraws it), one click from the
-// canvas. Terminals already on the canvas aren't repeated.
-function homeAgents() {
-  const box = $("#hm-agents"), st = $("#hm-status");
-  if (!box) return;
-  const live = fleetItems().filter((it) => it.group !== "done" && it.kind !== "terminal");
-  const wait = live.filter((it) => it.group === "waiting").length, need = Number(st?.dataset.need || 0) + wait;
-  if (st) st.textContent = `${need ? `${need} ${need === 1 ? "thing needs" : "things need"} you` : "Nothing needs you right now"}${live.length ? ` · ${live.length} ${live.length === 1 ? "agent" : "agents"} working` : ""}`;
-  box.innerHTML = live.length ? `<h3 class="hm-h">Agents <a href="#/agents">Open the canvas ${icon("r", 12)}</a></h3>
-    <div class="hm-agents">${live.slice(0, 6).map((it) => {
-      // a live process is named by its folder (they're all "Claude Code"); a session keeps its own title
-      const a = it.kind === "agent" && S.agents?.find((x) => x.key === it.id);
-      const name = a ? a.cwd.split("/").filter(Boolean).pop() || "~" : it.title, sub = a ? `${it.title} · ${duration(a.seconds)}` : it.needs || it.sub;
-      return `<button type="button" class="hm-agent ${it.group}" data-act="home-agent" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${esc(a ? `${it.title} in ${a.cwd}` : it.title)}: open it on the canvas">
-        <span class="fl-dot"></span><span class="hm-agent-txt"><b>${esc(name)}</b><small>${esc(sub)}</small></span>
-        <span class="hm-agent-go">${it.group === "waiting" ? "Answer" : "Open"} ${icon("r", 12)}</span></button>`;
-    }).join("")}</div>
-    ${live.length > 6 ? `<a class="hm-more" href="#/agents">${live.length - 6} more on the canvas</a>` : ""}` : "";
+// ---------------------------------------------------------------- Home (Minimal): the to-do list
+// Tasks live in Tasks.md in the vault (todos.ts). The page shows today's (late ones roll in), adds a task from one typed
+// line ("pagar o servidor dia 15 todo mês"), and edits one in place when clicked. Upcoming, someday and done fold into one
+// line; one more line shows only when something needs you (an agent waiting, notes to review, the inbox).
+let tdOpen = "", tdMore = false, tdTimer = 0, tdGone = null;
+const tdAll = () => D.todos || [];
+const tdDay = (d) => {
+  const n = daysBetween(D.today, d);
+  return n === 0 ? "Today" : n === 1 ? "Tomorrow" : n === -1 ? "Yesterday" : n > 1 && n < 7 ? dayName(d, { weekday: "long" }) : dayName(d, { month: "short", day: "numeric" });
+};
+const tdSort = (a, b) => b.prio - a.prio || (a.due || "9").localeCompare(b.due || "9") || (a.time || "99").localeCompare(b.time || "99");
+const REPEATS = [["", "Never"], ["every day", "Every day"], ["every weekday", "Weekdays"], ["every week", "Every week"], ["every month", "Every month"], ["every year", "Every year"]];
+const tdRow = (t, upcoming = false) => {
+  if (tdOpen === t.id) return tdEditor(t);
+  const late = !t.done && t.due && t.due < D.today;
+  return `<div class="td-task ${t.done ? "done" : ""} ${t.prio ? "prio" : ""}">
+    <button type="button" class="td-check" data-act="td-done" data-id="${esc(t.id)}" aria-label="${t.done ? "Mark as not done" : "Done"}"></button>
+    <button type="button" class="td-text" data-act="td-edit" data-id="${esc(t.id)}" title="Edit">${esc(t.text)}</button>
+    <span class="td-meta">${late ? `<span class="late">since ${esc(tdDay(t.due).toLowerCase())}</span>` : ""}${t.time ? `<span>${esc(t.time)}</span>` : ""}${t.repeat ? `<span class="rep" title="${esc(t.repeat)}">↻</span>` : ""}${t.note ? `<span title="Has a note">${icon("notes", 12)}</span>` : ""}</span>
+    ${t.done ? "" : `<span class="td-acts">
+      ${upcoming ? `<button type="button" data-act="td-move" data-id="${esc(t.id)}" data-d="0" title="Do it today">Today</button>` : `<button type="button" data-act="td-move" data-id="${esc(t.id)}" data-d="1" title="Move it to tomorrow">Tomorrow</button>`}
+      <button type="button" data-act="td-agent" data-id="${esc(t.id)}" title="Hand it to an agent on the canvas" aria-label="Hand it to an agent">${icon("spark", 13)}</button>
+      <button type="button" data-act="td-del" data-id="${esc(t.id)}" title="Delete" aria-label="Delete">${icon("trash", 13)}</button></span>`}
+  </div>`;
+};
+// A clicked task opens in place: its title, then date, repeat, time and importance as chips, a note, and the hand-offs.
+const tdEditor = (t) => `<div class="td-edit" data-id="${esc(t.id)}">
+    <div class="td-edit-top"><button type="button" class="td-check" data-act="td-done" data-id="${esc(t.id)}" aria-label="Done"></button>
+      <input class="td-title" value="${esc(t.text)}" aria-label="Task" maxlength="300"></div>
+    <div class="td-ctl">
+      <span class="td-chip ${t.due ? "on" : ""}"><button type="button" data-act="td-pick">${icon("target", 13)} ${t.due ? esc(tdDay(t.due)) : "No date"}</button><input type="date" data-f="due" value="${esc(t.due)}" tabindex="-1" aria-label="Date">${t.due ? `<button type="button" class="td-x" data-act="td-set" data-f="due" data-v="" aria-label="No date">×</button>` : ""}</span>
+      <label class="td-chip ${t.repeat ? "on" : ""}">↻ <select data-f="repeat" aria-label="Repeat">${[...REPEATS, ...(t.repeat && !REPEATS.some(([k]) => k === t.repeat) ? [[t.repeat, t.repeat]] : [])].map(([k, l]) => `<option value="${esc(k)}" ${k === t.repeat ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+      <span class="td-chip ${t.time ? "on" : ""}"><button type="button" data-act="td-pick">${icon("clock", 13)} ${t.time ? esc(t.time) : "No time"}</button><input type="time" data-f="time" value="${esc(t.time)}" tabindex="-1" aria-label="Time">${t.time ? `<button type="button" class="td-x" data-act="td-set" data-f="time" data-v="" aria-label="No time">×</button>` : ""}</span>
+      <button type="button" class="td-chip ${t.prio ? "on" : ""}" data-act="td-set" data-f="prio" data-v="${t.prio ? "" : "1"}">! Important</button>
+    </div>
+    <textarea class="td-note" rows="1" placeholder="Add a note…" aria-label="Note">${esc(t.note)}</textarea>
+    <div class="td-foot"><button type="button" data-act="td-agent" data-id="${esc(t.id)}">${icon("spark", 13)} Send to an agent</button><button type="button" class="del" data-act="td-del" data-id="${esc(t.id)}">Delete</button></div>
+  </div>`;
+function todoHome() {
+  main.innerHTML = `<section class="td-home">
+      <header class="td-hello"><h1>${esc(dayName(D.today, { weekday: "long", day: "numeric", month: "long" }))}</h1><p id="td-count"></p></header>
+      <form class="td-add" id="td-add"><span class="td-plus">${icon("plus", 17)}</span>
+        <input id="td-in" placeholder="Add a task… try &quot;amanhã 9h toda segunda&quot;" autocomplete="off" spellcheck="false" aria-label="Add a task"><kbd>Enter</kbd></form>
+      <div class="td-chips" id="td-chips"></div>
+      <div id="td-list"></div>
+      <div id="td-nudge"></div>
+    </section>`;
+  const inp = $("#td-in");
+  // While typing, what the line will become: the date, time, repeat and importance read from it.
+  inp.oninput = () => {
+    clearTimeout(tdTimer);
+    const text = inp.value.trim();
+    if (!text) { $("#td-chips").innerHTML = ""; return; }
+    tdTimer = setTimeout(async () => {
+      const p = await api("/api/todos/parse", { text }).catch(() => null);
+      if (!p || inp.value.trim() !== text) return;
+      $("#td-chips").innerHTML = [p.due && `<span class="chip">${icon("target", 12)} ${esc(tdDay(p.due))}${p.time ? ` · ${esc(p.time)}` : ""}</span>`,
+        !p.due && p.time && `<span class="chip">${esc(p.time)}</span>`, p.repeat && `<span class="chip b">↻ ${esc(p.repeat)}</span>`, p.prio && '<span class="chip">! important</span>'].filter(Boolean).join("");
+    }, 140);
+  };
+  $("#td-add").onsubmit = async (e) => {
+    e.preventDefault();
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = ""; $("#td-chips").innerHTML = "";
+    try {
+      const r = await api("/api/todos/add", { text });
+      D.todos = r.todos; tdRender(true);
+      if (r.todo.time && window.Notification?.permission === "default") Notification.requestPermission().catch(() => {});
+      if (!r.todo.due || r.todo.due > D.today) toast(r.todo.due ? `Added for ${tdDay(r.todo.due).toLowerCase()}` : "Added to someday");
+    } catch (err) { inp.value = text; toast(err.message); }
+  };
+  tdRender(true); tdNudge();
+  if (matchMedia("(pointer: fine)").matches) inp.focus();
 }
+// force: redraw even while a field in the list has the keyboard (after a save); the refreshes leave a typist alone.
+function tdRender(force = false) {
+  const box = $("#td-list");
+  if (!box || (!force && box.contains(document.activeElement) && document.activeElement.matches("input, textarea, select"))) return;
+  const open = tdAll().filter((t) => !t.done), now = open.filter((t) => t.due && t.due <= D.today).sort(tdSort);
+  const later = open.filter((t) => t.due > D.today).sort(tdSort), someday = open.filter((t) => !t.due);
+  const done = tdAll().filter((t) => t.done && t.doneOn === D.today);
+  $("#td-count").textContent = now.length ? `${now.length} for today` : open.length ? "Nothing left for today" : "Nothing to do. Add the first thing above.";
+  const days = [...new Set(later.map((t) => t.due))];
+  const fold = [later.length && `${later.length} upcoming`, someday.length && `${someday.length} someday`, done.length && `${done.length} done today`].filter(Boolean).join(" · ");
+  box.innerHTML = `<div class="td-list">${now.map((t) => tdRow(t)).join("")}</div>
+    ${fold ? `<button type="button" class="td-fold ${tdMore ? "on" : ""}" data-act="td-more">${fold} <span>${tdMore ? "▾" : "▸"}</span></button>` : ""}
+    ${tdMore ? `${days.map((d) => `<h4 class="td-group">${esc(tdDay(d))}</h4><div class="td-list">${later.filter((t) => t.due === d).map((t) => tdRow(t, true)).join("")}</div>`).join("")}
+      ${someday.length ? `<h4 class="td-group">Someday</h4><div class="td-list">${someday.map((t) => tdRow(t, true)).join("")}</div>` : ""}
+      ${done.length ? `<h4 class="td-group">Done today</h4><div class="td-list">${done.map((t) => tdRow(t)).join("")}</div>` : ""}` : ""}`;
+  const ed = box.querySelector(".td-edit");
+  if (!ed) return;
+  const id = ed.dataset.id, title = ed.querySelector(".td-title"), note = ed.querySelector(".td-note");
+  const grow = () => { note.style.height = "auto"; note.style.height = `${note.scrollHeight}px`; };
+  grow(); note.oninput = grow;
+  // Enter keeps the title; Esc puts it back (then closes, below)
+  title.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); title.blur(); } if (e.key === "Escape") title.value = tdAll().find((t) => t.id === id)?.text || title.value; };
+  title.onchange = () => title.value.trim() && tdSave(id, { text: title.value.trim() });
+  note.onchange = () => tdSave(id, { note: note.value });
+  ed.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); tdClose(); } };
+  ed.querySelectorAll("[data-f]").forEach((f) => { if (f.matches("input, select")) f.onchange = () => tdSave(id, { [f.dataset.f]: f.value }); });
+}
+// Closing saves what's still typed in the title or the note (their change event wouldn't fire once they're gone).
+function tdClose() {
+  const ed = $(".td-edit"), t = tdAll().find((x) => x.id === ed?.dataset.id);
+  tdOpen = "";
+  if (!ed || !t) return tdRender(true);
+  ed.querySelectorAll("input, textarea, select").forEach((f) => { f.onchange = null; });
+  const text = ed.querySelector(".td-title").value.trim(), note = ed.querySelector(".td-note").value;
+  const patch = { ...(text && text !== t.text ? { text } : {}), ...(note !== t.note ? { note } : {}) };
+  Object.keys(patch).length ? tdSave(t.id, patch) : tdRender(true);
+}
+// A click anywhere else closes it (capture: before that click's own action, which reads its element's data either way).
+document.addEventListener("click", (e) => { if (tdOpen && !e.target.closest(".td-edit")) tdClose(); }, true);
+async function tdSave(id, patch) {
+  try {
+    const r = await api("/api/todos/edit", { id, ...patch });
+    D.todos = r.todos;
+    if (patch.time && window.Notification?.permission === "default") Notification.requestPermission().catch(() => {});
+  } catch (e) { toast(e.message); D = await api("/api").catch(() => D); }
+  tdRender(true);
+}
+// One line when something needs you, the most pressing first; nothing at all otherwise.
+function tdNudge() {
+  const el = $("#td-nudge");
+  if (!el) return;
+  const wait = fleetItems().filter((it) => it.group === "waiting");
+  const xs = [
+    ...wait.map((it) => `<button type="button" data-act="home-agent" data-kind="${it.kind}" data-id="${esc(it.id)}">An agent is waiting for you: ${esc(it.title)} <b>Answer ${icon("r", 12)}</b></button>`),
+    due().length && `<a href="#/review">${due().length} ${due().length === 1 ? "note" : "notes"} to review <b>Review ${icon("r", 12)}</b></a>`,
+    inbox().length && `<a href="${noteHref(inbox()[0].path)}">${inbox().length} in the inbox <b>Open ${icon("r", 12)}</b></a>`,
+  ].filter(Boolean);
+  el.className = xs.length ? "td-nudge" : "";
+  el.innerHTML = xs.length ? `<i></i>${xs[0]}${xs.length > 1 ? `<small>+${xs.length - 1} more</small>` : ""}` : "";
+}
+// A task with a time pings you then: a toast here, and a notification when the browser allows (asked the first time
+// you give a task a time). Only within ten minutes of it, so opening the page late doesn't ring the whole morning.
+const tdPinged = new Set();
+setInterval(() => {
+  if (!D?.todos) return;
+  const now = new Date(), today = now.toLocaleDateString("sv"), mins = now.getHours() * 60 + now.getMinutes();
+  for (const t of D.todos) {
+    if (t.done || t.due !== today || !t.time || tdPinged.has(t.id + t.due)) continue;
+    const at = Number(t.time.slice(0, 2)) * 60 + Number(t.time.slice(3));
+    if (at > mins || mins - at > 10) continue;
+    tdPinged.add(t.id + t.due);
+    toast(`${t.time} · ${t.text}`);
+    if (window.Notification?.permission === "granted") try { new Notification(t.text, { body: `${t.time} · Overlook`, tag: `todo-${t.id}` }); } catch {}
+  }
+}, 30000);
 function tiles() {
   const el = $("#tiles");
   if (!el) return;
@@ -3571,6 +3663,30 @@ const ACTIONS = {
   "orch-vault-note": () => openVaultNotes(),
   "note-ask": (el) => askAgent(el.dataset.p),
   "note-canvas": (el) => noteToCanvas(el.dataset.p),
+  "td-done": (el) => { const t = tdAll().find((x) => x.id === el.dataset.id); if (!t) return; el.classList.add("ticking"); setTimeout(() => tdSave(t.id, { done: !t.done }), 180); },
+  "td-edit": (el) => { tdOpen = el.dataset.id; tdRender(true); $(".td-edit .td-title")?.focus(); },
+  "td-move": (el) => tdSave(el.dataset.id, { due: addDays(D.today, Number(el.dataset.d)) }),
+  "td-set": (el) => { const id = el.closest(".td-edit")?.dataset.id; if (id) tdSave(id, el.dataset.f === "prio" ? { prio: !!el.dataset.v } : { [el.dataset.f]: el.dataset.v, ...(el.dataset.f === "due" && !el.dataset.v ? { time: "" } : {}) }); },
+  "td-pick": (el) => { const i = el.parentElement.querySelector("input"); try { i.showPicker(); } catch { i.focus(); } },
+  "td-more": () => { tdMore = !tdMore; tdRender(true); },
+  "td-agent": (el) => { const t = tdAll().find((x) => x.id === el.dataset.id); if (t) agentOnCanvas(`A task from my to-do list: ${t.text}${t.note ? `\n\nNotes:\n${t.note}` : ""}\n\nWork on it in this vault; tell me first, in two lines, what you will do.`); },
+  "td-del": async (el) => {
+    const t = tdAll().find((x) => x.id === el.dataset.id);
+    if (!t) return;
+    tdOpen = "";
+    try { const r = await api("/api/todos/delete", { id: t.id }); D.todos = r.todos; tdGone = t; tdRender(true); toast(`Deleted "${esc(t.text)}" · <button type="button" class="toast-act" data-act="td-undo">Undo</button>`); }
+    catch (e) { toast(e.message); }
+  },
+  // Undo a delete: the task comes back with its date, repeat, time, importance and note (as a new line at the end).
+  "td-undo": async () => {
+    const t = tdGone;
+    if (!t) return;
+    tdGone = null;
+    try {
+      const r = await api("/api/todos/add", { text: t.text });
+      await tdSave(r.todo.id, { text: t.text, due: t.due, time: t.time, repeat: t.repeat, prio: t.prio, note: t.note });
+    } catch (e) { toast(e.message); }
+  },
   "home-agent": (el) => toCanvas(() => ACTIONS["orch-sel"]({ dataset: { kind: el.dataset.kind, id: el.dataset.id } })),
   "orch-map": () => { orchMapOpen = !orchMapOpen; saveCanvas(); drawMap(); paintHud($("#orch-hud"), orchMode === "free" && !orchMax); },
   "term-new-pane": () => newTermPane(),
@@ -3964,13 +4080,13 @@ async function system() { S = await api("/api/system"); }
 setInterval(async () => {
   await system(); topBar();
   const { pg } = route();
-  if (!pg) { tiles(); homeAgents(); }
+  if (!pg) { tiles(); tdNudge(); }
   else if (pg === "agents" && !cwdOpen && !document.activeElement?.closest?.(".orch-talk, .orch-sticky-wrap")) agentsBody();
   else if (pg === "services") services();
 }, 10000);
-setInterval(async () => { await vault(); topBar(); if (!route().pg) tiles(); }, 60000);
-// (the Home redraws only while its capture line is empty: a draft survives switching windows)
-addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg && !$("#hm-cap")?.value) home(); else if (pg === "notes") grid(); });
+setInterval(async () => { await vault(); topBar(); if (!route().pg) { tiles(); tdRender(); } }, 60000); // Tasks.md edited in Obsidian shows up
+// (the to-do list redraws unless you're typing in it: a draft survives switching windows)
+addEventListener("focus", async () => { await vault(); topBar(); const { pg } = route(); if (!pg) uiMode === "minimal" ? (tdRender(), tdNudge()) : home(); else if (pg === "notes") grid(); });
 setInterval(clock, 1000);
 clock();
 Promise.all([vault(), system()]).then(render);

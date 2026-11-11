@@ -25,7 +25,11 @@ vault (or set it in **Settings**) and restart. Run it from the repo folder: Bun 
 
 ## What's in it
 
-- **Home**: today's focus from the daily note, notes due for review, the inbox, links to notes that don't exist yet.
+- **Home**: in Minimal, a to-do list. Type a task in one line and its date, time, repeat and importance come out of
+  the words ("pay the server on the 15th every month", "revisar PR amanhã 9h toda segunda", "!"); late ones roll into
+  today, a repeating one comes back on its next date when done, and a click opens it to change any of that. One line
+  below says when something needs you (an agent waiting, notes to review, the inbox). Tasks with a time notify you.
+  Classic keeps the carousel: today's focus, reviews, the inbox, links to notes that don't exist yet.
 - **Calendar** strip: events from `Calendar.md` (`- 2026-11-03 14:00 · Exam`) and agent tasks scheduled to run
   once or on a repeat.
 - **Notes**, a reader with backlinks, a graph, full-text search (`/`) and quick capture (`C`) into the daily note.
@@ -43,14 +47,15 @@ The default layout, which the demo vault follows:
 | Path | Used for |
 | --- | --- |
 | `1 Inbox/` … `8 …/` | Notes: folders starting with a digit 1–8 and a space (`7 …`, drawings, is skipped) |
-| `*.md` at the root | Notes too, except `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `README.md` and `Calendar.md` |
+| `*.md` at the root | Notes too, except `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `README.md`, `Calendar.md` and `Tasks.md` |
+| `Tasks.md` | The to-do list, in the Obsidian Tasks format (`- [ ] what 🔁 every week 📅 2026-11-12`): edit it there too |
 | `2 Daily/YYYY-MM-DD.md` | Daily note: `## Focus` feeds the Home, captures land in `## Captured` |
 | `9 Agent/Log.md`, `Findings.md` | Optional agent log and gotchas |
 | `AGENTS.md` | Optional instructions for agents; with it, the Morning and Inbox routines show up |
 
 Frontmatter, all optional: `type` (concept, project, daily), `area`, `tags`, `review_on`, `interval`,
 `confidence`, `updated`. A `> [!abstract]` callout right after the title is the note's summary.
-`VAULT_LANG=pt` reads the Portuguese names instead (`2 Diário`, `## Foco de hoje`, `revisar_em`…).
+`VAULT_LANG=pt` reads the Portuguese names instead (`2 Diário`, `## Foco de hoje`, `Tarefas.md`, `revisar_em`…).
 
 Laid out another way? A `vault.json` next to `agents.json` renames what you need. Every key is optional:
 
@@ -126,7 +131,8 @@ WantedBy=default.target
 
 ## For agents
 
-`bun server.ts map` prints one line per note; `bun server.ts today` prints what the Home shows.
+`bun server.ts map` prints one line per note; `bun server.ts today` prints what the Home shows, today's tasks included.
+`bin/overlook todo "…"` adds a to-do from any terminal (`overlook todo` alone lists today's).
 
 ## Contributing
 

@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
+import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
@@ -27,7 +28,7 @@ let VAULT = basename(ROOT);
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
   en: {
-    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md",
+    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Daily", focus: "Focus", captured: "Captured", log: "9 Agent/Log.md", findings: "9 Agent/Findings.md", calendar: "Calendar.md", tasks: "Tasks.md",
     keys: { type: "type", review: "review_on", interval: "interval", confidence: "confidence", updated: "updated" }, types: {} as Record<string, string>,
     routines: { morning: "Follow the morning routine in the Routines section of AGENTS.md.", inbox: "Follow the inbox routine in the Routines section of AGENTS.md." },
     memoTitle: "Voice memo",
@@ -37,7 +38,7 @@ const LAYOUTS = {
     noteAgent: (topic: string) => `Create a note in the vault about: "${topic}". Follow AGENTS.md strictly: choose the right folder from AGENTS.md, use frontmatter (type, area, tags), callout [!abstract] In one sentence, concise body, footer with wikilinks, and log in 9 Agent/Log.md. Reply in one line.`,
   },
   pt: {
-    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md",
+    inbox: "1 Inbox", folders: null as string[] | null, daily: "2 Diário", focus: "Foco de hoje", captured: "Capturei", log: "9 Agente/Log.md", findings: "9 Agente/Achados.md", calendar: "Calendar.md", tasks: "Tarefas.md",
     keys: { type: "tipo", review: "revisar_em", interval: "intervalo", confidence: "confianca", updated: "atualizado" }, types: { projeto: "project", conceito: "concept", diario: "daily" } as Record<string, string>,
     routines: { morning: "Siga a rotina bom-dia da seção Rotinas do AGENTS.md.", inbox: "Siga a rotina inbox da seção Rotinas do AGENTS.md." },
     memoTitle: "Memo de voz",
@@ -53,7 +54,7 @@ let vaultLang: "en" | "pt" = process.env.VAULT_LANG === "pt" ? "pt" : "en";
 type Layout = (typeof LAYOUTS)["en"];
 function layout(): Layout {
   const base = LAYOUTS[vaultLang], own = (() => { try { return JSON.parse(readFileSync(`${import.meta.dir}/vault.json`, "utf8")) ?? {}; } catch { return {}; } })(), l: any = { ...base };
-  for (const k of ["inbox", "daily", "focus", "captured", "log", "findings", "calendar"] as const) if (typeof own[k] === "string" && own[k].trim()) l[k] = own[k].trim().replace(/^\/+|\/+$/g, "");
+  for (const k of ["inbox", "daily", "focus", "captured", "log", "findings", "calendar", "tasks"] as const) if (typeof own[k] === "string" && own[k].trim()) l[k] = own[k].trim().replace(/^\/+|\/+$/g, "");
   if (Array.isArray(own.folders) && own.folders.every((f: unknown) => typeof f === "string")) l.folders = own.folders;
   for (const k of ["keys", "types"] as const) if (own[k] && typeof own[k] === "object") l[k] = { ...base[k], ...own[k] };
   return l;
@@ -88,7 +89,7 @@ async function notes(withBody = false): Promise<Note[]> {
     paths.push(path);
   }
   for await (const path of new Bun.Glob("*.md").scan(ROOT))
-    if (!/^(AGENTS|CLAUDE|GEMINI|README)\.md$/i.test(path) && path !== L.calendar && !path.startsWith("_")) paths.push(path);
+    if (!/^(AGENTS|CLAUDE|GEMINI|README)\.md$/i.test(path) && path !== L.calendar && path !== L.tasks && !path.startsWith("_")) paths.push(path);
   // In parallel: on a vault under WSL's /mnt/c every file access is a round trip, and one by one they took ~0.8 s.
   const read = await Promise.all(paths.map(async (path) => {
     try {
@@ -154,6 +155,8 @@ async function section(name: string) {
   return sec.split("\n").filter((l) => /^\s*- /.test(l) && !/^\s*- \[[xX]\]/.test(l) && !/→\s*\[\[/.test(l)).map((l) => l.replace(/^\s*- (\[.\] )?/, ""));
 }
 
+// Tasks.md (Tarefas.md) at the vault root: the to-do list, see todos.ts.
+const TODOS = () => `${ROOT}/${L.tasks}`;
 // Calendar.md at the vault root: one line per item, `- YYYY-MM-DD HH:MM · what` (the time is optional). Plain Markdown,
 // so Obsidian shows it and agents can read it. Overlook keeps the lines sorted and leaves everything else alone.
 type CalItem = { date: string; time: string; title: string };
@@ -199,6 +202,7 @@ async function state() {
     log: (await bullets(L.log)).slice(-30).reverse(),
     findings: await bullets(L.findings),
     calendar: await calendar(),
+    todos: await readTodos(TODOS()),
     ...(({ pins, mode, cards }) => ({ pins, pinMode: mode, pinCards: cards }))(shownImages()),
   };
 }
@@ -807,6 +811,7 @@ if (cmd === "today") {
   list("inbox", e.notes.filter((n) => n.folder === L.inbox).map((n) => n.path));
   list("gaps", e.missing.map((v) => `${v.n}× ${v.target}`));
   list("projects", e.notes.filter((n) => n.type === "project").map((n) => `${n.path} · ${n.summary}`));
+  list("tasks", e.todos.filter((t) => !t.done && t.due && t.due <= e.today).map((t) => `${t.due < e.today ? `late since ${t.due} · ` : ""}${t.time ? `${t.time} ` : ""}${t.text}${t.repeat ? ` (${t.repeat})` : ""}`));
   list("log", e.log.slice(0, 5));
   process.exit(0);
 }
@@ -892,6 +897,14 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
+    // To-dos (Tasks.md): every change answers with the whole list, so the page just redraws it.
+    if (p === "/api/todos/parse") return json(parseTask(String(b.text ?? "").slice(0, 400), today()));
+    if (p === "/api/todos/add" || p === "/api/todos/edit" || p === "/api/todos/delete") {
+      const r = p.endsWith("/add") ? await addTodo(TODOS(), String(b.text ?? "").slice(0, 400), today())
+        : p.endsWith("/edit") ? await editTodo(TODOS(), String(b.id ?? ""), b, today())
+        : (await deleteTodo(TODOS(), String(b.id ?? ""))) || "that task is gone: reload";
+      return typeof r === "string" ? new Response(r, { status: 400 }) : json({ todo: r, todos: await readTodos(TODOS()) });
+    }
     if (p === "/api/calendar" || p === "/api/calendar/delete") {
       const e = calItem(b);
       if (typeof e === "string") return new Response(e, { status: 400 });
@@ -930,6 +943,7 @@ async function handle(req: Request, port: number) {
   }
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/search") return json(await search(url.searchParams.get("q") ?? ""));
+  if (p === "/api/todos") return json({ today: today(), todos: await readTodos(TODOS()) });
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/dirs") { const d = listDirs(ROOT, url.searchParams.get("path") ?? undefined, url.searchParams.get("hidden") === "1"); return d ? json(d) : new Response("invalid cwd", { status: 400 }); }

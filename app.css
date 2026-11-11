@@ -774,7 +774,6 @@ html[data-ui="minimal"] body.home { display: block; }
 html[data-ui="minimal"] .top,
 html[data-ui="minimal"] .cal,
 html[data-ui="minimal"] main { max-width: 1120px; }
-html[data-ui="minimal"] body.home main,
 html[data-ui="minimal"] body.cal-float main,
 html[data-ui="minimal"] .glass:not(.orch-pane) { background: var(--glass); border-color: var(--line); }
 html[data-ui="minimal"] .btn.peach:hover,
@@ -2216,39 +2215,6 @@ html[data-ui] .nc-wrap > .nc.glass:hover { border-color: color-mix(in srgb, var(
 .hm-h a { display: inline-flex; align-items: center; gap: 4px; font: 500 12px var(--body); color: var(--faint); transition: color .15s; }
 .hm-h a:hover { color: var(--accent); }
 
-/* Home: a capture line always there, the live agents, what needs you, where you left off */
-.hm-capture {
-  grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 16px; border-radius: 14px;
-  background: color-mix(in srgb, var(--surface) 70%, transparent); border: 1px solid var(--line); transition: border-color .15s, background .15s;
-}
-.hm-capture:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--surface) 90%, transparent); }
-.hm-capture > svg { flex: none; color: var(--accent); }
-.hm-capture input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font: 14.5px var(--body); color: var(--ink); }
-.hm-capture input::placeholder { color: var(--faint); }
-.hm-capture:focus-within kbd { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-#hm-agents .hm-h, #hm-agents:empty + .hm-h { margin-top: 0; }
-.hm-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-.hm-agent {
-  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px 12px; border-radius: 12px; text-align: left;
-  background: color-mix(in srgb, var(--surface) 55%, transparent); border: 1px solid var(--line); transition: background .15s, border-color .15s, transform .2s var(--ease);
-}
-.hm-agent:hover { background: color-mix(in srgb, var(--surface) 85%, transparent); border-color: color-mix(in srgb, var(--ink) 16%, transparent); transform: translateY(-1px); }
-.hm-agent .fl-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
-.hm-agent.waiting { border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.hm-agent.waiting .fl-dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
-.hm-agent-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.hm-agent-txt b { font: 500 13px var(--body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hm-agent-txt small { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hm-agent.waiting .hm-agent-txt small { color: color-mix(in srgb, var(--accent) 85%, var(--ink)); }
-.hm-agent-go { flex: none; display: inline-flex; align-items: center; gap: 3px; font: 500 11.5px var(--body); color: var(--faint); transition: color .15s; }
-.hm-agent:hover .hm-agent-go, .hm-agent.waiting .hm-agent-go { color: var(--accent); }
-.hm-more { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--faint); }
-.hm-more:hover { color: var(--accent); }
-.hm-notes { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.hm-notes .nc { min-height: 132px; padding: 15px; }
-.hm-notes .nc h4 { font-size: 14.5px; }
-.hm-notes .nc p { -webkit-line-clamp: 2; }
-
 /* Notes: a search you can't miss, then the overview (recent + collections) or the grid */
 .nt-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; margin-bottom: 18px; }
 .nt-title { display: flex; align-items: baseline; gap: 14px; }
@@ -2281,4 +2247,98 @@ html[data-ui] .nt-shelf.glass:hover { border-color: color-mix(in srgb, var(--c) 
 /* Reader: the hand-offs under "Open in Obsidian" */
 .rd-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .rd-acts .btn { justify-content: center; padding: 0 10px; }
-html[data-ui="minimal"] .min-home.solo { grid-template-columns: minmax(0, 1fr); } /* no art: no side stage */
+
+/* ---------- Home (Minimal): the to-do list ----------
+   One calm column: the day, one line to add, today's tasks. Upcoming, someday and done fold into one line; a task opens
+   in place when clicked. The page starts near the top (not centred), so nothing reads as cut off above the dock. */
+html[data-ui="minimal"] body.home main { margin-top: 0; background: none; } /* no panel around the list: it read as a cut-out box */
+html[data-ui="minimal"] body.home.cal-float main { background: none; }
+/* the underline is the focus here: no ring around the bare fields */
+:is(.td-add input, .td-title, .td-note, .td-chip select):focus-visible { outline: none; }
+.td-chip:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.td-home { width: min(620px, 100%); margin: 7vh auto 40px; display: flex; flex-direction: column; }
+.td-hello h1 { font: 600 30px/1.1 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.td-hello p { margin-top: 8px; font-size: 14px; color: var(--faint); }
+.td-add {
+  margin-top: 28px; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 4px;
+  border-bottom: 1px solid var(--line); transition: border-color .2s;
+}
+.td-add:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.td-plus { display: grid; color: var(--faint); transition: color .2s; }
+.td-add:focus-within .td-plus { color: var(--accent); }
+.td-add input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font: 15.5px var(--body); color: var(--ink); }
+.td-add input::placeholder { color: var(--faint); }
+.td-add kbd { opacity: 0; transition: opacity .2s; }
+.td-add:focus-within kbd { opacity: 1; }
+.td-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; padding: 0 2px; }
+.td-chips:not(:empty) { margin-top: 10px; }
+.td-chips .chip { display: inline-flex; align-items: center; gap: 5px; font: 500 11.5px var(--body); padding: 3px 9px; border-radius: 99px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); animation: ctx-in .15s ease-out; }
+.td-chips .chip.b { color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 12%, transparent); }
+#td-list { margin-top: 14px; }
+.td-list { display: flex; flex-direction: column; }
+.td-task { position: relative; display: flex; align-items: center; gap: 14px; min-height: 44px; padding: 0 8px; border-radius: 11px; transition: background .15s; }
+.td-task:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.td-check {
+  flex: none; width: 19px; height: 19px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--ink) 38%, transparent);
+  display: grid; place-items: center; transition: border-color .15s, background .15s, transform .15s var(--ease);
+}
+.td-check:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.td-task.prio .td-check { border-color: var(--accent); }
+.td-task.done .td-check, .td-check.ticking { border-color: var(--accent); background: var(--accent); transform: scale(.92); }
+.td-task.done .td-check::after, .td-check.ticking::after { content: ""; width: 5px; height: 9px; margin-top: -2px; border: solid var(--accent-ink); border-width: 0 2px 2px 0; rotate: 45deg; }
+.td-text { flex: 1; min-width: 0; text-align: left; font: 15px/1.4 var(--body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
+.td-task.done .td-text { color: var(--faint); text-decoration: line-through; }
+.td-meta { flex: none; display: flex; align-items: center; gap: 9px; font: 12px var(--body); color: var(--faint); transition: opacity .15s; }
+.td-meta .late { color: var(--bad); opacity: .8; }
+.td-meta .rep { color: var(--accent-2); }
+.td-acts { position: absolute; right: 6px; display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.td-task:is(:hover, :focus-within) .td-acts { opacity: 1; pointer-events: auto; }
+.td-task:is(:hover, :focus-within):has(.td-acts) .td-meta { opacity: 0; }
+.td-acts button { height: 28px; min-width: 28px; padding: 0 9px; display: grid; place-items: center; border-radius: 8px; font: 500 12px var(--body); color: var(--muted); background: color-mix(in srgb, var(--surface) 92%, transparent); transition: color .15s, background .15s; }
+.td-acts button:hover { color: var(--ink); background: var(--surface-2); }
+.td-acts button[data-act="td-del"]:hover { color: var(--bad); }
+@media (pointer: coarse) { .td-acts { position: static; opacity: 1; pointer-events: auto; } .td-task:has(.td-acts) .td-meta { display: none; } }
+.td-fold { align-self: flex-start; margin-top: 16px; padding: 6px 8px; border-radius: 8px; font: 500 13px var(--body); color: var(--faint); transition: color .15s, background .15s; }
+.td-fold:hover, .td-fold.on { color: var(--muted); }
+.td-fold:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.td-group { margin: 16px 8px 4px; font: 600 11px var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+/* a task opened in place */
+.td-edit {
+  margin: 4px -6px; padding: 12px 14px 10px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(0, 0, 0, .35); animation: ctx-in .15s ease-out;
+}
+.td-edit-top { display: flex; align-items: center; gap: 14px; }
+.td-title { flex: 1; min-width: 0; height: 32px; border: 0; background: none; outline: none; font: 15px var(--body); color: var(--ink); border-bottom: 1px solid var(--line); }
+.td-title:focus { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.td-ctl { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0 33px; }
+.td-chip {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 9px;
+  font: 500 12.5px var(--body); color: var(--muted); background: color-mix(in srgb, var(--ink) 5%, transparent); border: 1px solid transparent; cursor: pointer; transition: color .15s, background .15s, border-color .15s;
+}
+.td-chip:hover { color: var(--ink); }
+.td-chip.on { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.td-chip > button { display: inline-flex; align-items: center; gap: 6px; height: 100%; color: inherit; font: inherit; }
+.td-chip svg { color: var(--faint); }
+.td-chip.on svg { color: var(--accent); }
+/* the native pickers stay under their chip (showPicker opens them there); invisible but rendered */
+.td-chip input[type="date"], .td-chip input[type="time"] { position: absolute; left: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
+.td-chip select { appearance: none; border: 0; background: none; outline: none; color: inherit; font: inherit; cursor: pointer; padding-right: 2px; }
+.td-chip select option { background: var(--surface); color: var(--ink); }
+.td-x { width: 18px; height: 18px; margin-right: -4px; display: grid; place-items: center; border-radius: 50%; color: var(--faint); font-size: 14px; line-height: 1; }
+.td-x:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.td-note { display: block; width: calc(100% - 33px); margin: 10px 0 0 33px; min-height: 22px; padding: 2px 0; border: 0; background: none; outline: none; resize: none; overflow: hidden; font: 13.5px/1.5 var(--body); color: var(--muted); }
+.td-note::placeholder { color: var(--faint); }
+.td-foot { display: flex; justify-content: space-between; margin: 8px 0 0 33px; }
+.td-foot button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; margin-left: -8px; border-radius: 8px; font: 500 12.5px var(--body); color: var(--faint); transition: color .15s, background .15s; }
+.td-foot button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.td-foot button svg { color: var(--accent); }
+.td-foot .del { margin: 0 -8px 0 0; }
+.td-foot .del:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+/* the one line that says something needs you */
+.td-nudge { margin-top: 34px; display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); }
+.td-nudge > i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.td-nudge > :is(a, button) { min-width: 0; display: inline-flex; align-items: center; gap: 8px; text-align: left; color: inherit; transition: color .15s; }
+.td-nudge > :is(a, button):hover { color: var(--ink); }
+.td-nudge b { display: inline-flex; align-items: center; gap: 2px; font-weight: 500; color: var(--accent); white-space: nowrap; }
+.td-nudge small { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.toast .toast-act { margin-left: 6px; color: var(--accent); font-weight: 600; }
