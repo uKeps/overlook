@@ -147,7 +147,7 @@ function topBar() {
   const item = (id, name, ic, badge = 0) => `<a href="#/${id}" class="${pg === id || (id === "" && !pg) || (pg === "s" && id === `s/${arg}`) || (pg === "images" && id === "services") ? "on" : ""}" data-tip="${name}" aria-label="${name}">${icon(ic, 22)}${badge ? `<span class="badge">${badge}</span>` : ""}</a>`;
   $("#dock").innerHTML = item("", "Home", "home") + '<span class="sep"></span>' +
     item("notes", "Notes", "notes") + item("review", "Review", "review", due().length) + item("graph", "Graph", "graph") +
-    item("agents", "Agents", "agents", run) + item("services", "Services", "services", S.services.filter((s) => !s.ok).length) + item("settings", "Settings", "settings") +
+    item("agents", "Agents", "agents", run) + (S.services.length ? item("services", "Services", "services", S.services.filter((s) => !s.ok).length) : "") + item("settings", "Settings", "settings") +
     (S.services.some((s) => s.dock) ? '<span class="sep app"></span>' + S.services.filter((s) => s.dock).map((s) => item(`s/${s.id}`, s.name, s.icon || "services").replace("<a ", '<a data-app ')).join("") : "") +
     `<span class="sep"></span><button class="spark" data-act="capture" data-tip="Capture (C)" aria-label="Capture">${icon("spark", 22)}</button>` +
     `<button class="dock-fold" data-act="dock-mode" data-tip="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}" aria-label="${dockMode === "float" ? "Keep the dock open" : "Fold the dock away"}">${icon(dockMode === "float" ? "pin" : "fold", 18)}</button>`;
@@ -646,11 +646,12 @@ let filter = "", query = "";
 // Notes has two jobs before browsing: ask the vault (an agent answers from the notes, and looks it up when they don't have
 // it) and save what you learned (a link or a few lines become a note, written by an agent). Below, what's alive in the
 // vault: projects, notes linked but never written, one to rediscover, the collections. A collection opens the grid.
-// filter: "" = that overview, "*" = every note, "@project" = the projects, else one folder.
+// filter: "" = that overview, "*" = every note, "@project" = the projects, "@check" = the deduced ones, else one folder.
+const FILTERS = { "@project": ["Projects", (n) => n.type === "project"], "@check": ["To check", (n) => confKind(n) === "warn"] };
 function notes() {
   const count = {};
   for (const n of D.notes) count[n.folder] = (count[n.folder] || 0) + 1;
-  const chips = [["", "Overview", ""], ["*", "All", D.notes.length], ...(filter === "@project" ? [["@project", "Projects", D.notes.filter((n) => n.type === "project").length]] : []),
+  const chips = [["", "Overview", ""], ["*", "All", D.notes.length], ...(FILTERS[filter] ? [[filter, FILTERS[filter][0], D.notes.filter(FILTERS[filter][1]).length]] : []),
     ...Object.keys(count).sort().map((k) => [k, folderLabel(k), count[k]])];
   main.innerHTML = `<div class="nt-head"><h1>Notes</h1><p>${D.notes.length} notes in the vault</p></div>
     <div class="nt-ask">
@@ -678,7 +679,14 @@ function notesOverview() {
   const old = pool.length ? pool[hash(D.today) % pool.length] : null;
   const by = {};
   for (const n of D.notes) by[n.folder] = (by[n.folder] || 0) + 1;
-  const side = (gaps.length ? `<section><h4>Missing notes <span>linked, never written</span></h4>
+  // written by deduction and never confirmed, the ones other notes lean on most first
+  const inLinks = {};
+  for (const n of D.notes) for (const l of new Set(n.links)) inLinks[l] = (inLinks[l] || 0) + 1;
+  const check = D.notes.filter(FILTERS["@check"][1]).sort((a, b) => (inLinks[nameOf(b.path)] || 0) - (inLinks[nameOf(a.path)] || 0));
+  const side = (check.length ? `<section><h4>To check <a href="#/notes" data-act="filter" data-k="@check" title="Written by deduction, never confirmed">All ${check.length} ${icon("r", 11)}</a></h4>
+      ${check.slice(0, 4).map((n) => `<div class="nt-gap"><a href="${noteHref(n.path)}" title="${esc(plain(n.summary))}"><b>${esc(n.title)}</b><span>${inLinks[nameOf(n.path)] ? `linked ${inLinks[nameOf(n.path)]}×` : esc(n.confidence)}</span></a>
+        <button type="button" data-act="vault-check" data-p="${esc(n.path)}" title="An agent compares it with its source and fixes it">Check it</button></div>`).join("")}</section>` : "")
+    + (gaps.length ? `<section><h4>Missing notes <span>linked, never written</span></h4>
       ${gaps.map((g) => `<div class="nt-gap"><a href="#/w/${encodeURIComponent(g.target)}" title="See who links it"><b>${esc(g.target)}</b><span>linked ${g.n}×</span></a>
         <button type="button" data-act="vault-write" data-t="${esc(g.target)}" data-n="${g.n}" title="An agent writes it from the notes that link it">Write it</button></div>`).join("")}</section>` : "")
     + (old ? `<section class="nt-redo" style="--c: ${folderColor(old.folder)}"><h4>Rediscover</h4><a href="${noteHref(old.path)}"><b>${esc(old.title)}</b></a>
@@ -705,7 +713,7 @@ function grid() {
   if (!filter) return askMatches(q, terms);
   $("#nt-found").innerHTML = "";
   const weight = (n) => (!q ? 0 : fold(n.title).startsWith(terms[0] || q) ? 0 : fold(n.title).includes(terms[0] || q) ? 1 : 2);
-  const ns = D.notes.filter((n) => (filter === "*" || (filter === "@project" ? n.type === "project" : n.folder === filter)) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
+  const ns = D.notes.filter((n) => (filter === "*" || (FILTERS[filter] ? FILTERS[filter][1](n) : n.folder === filter)) && terms.every((t) => fold(n.title + " " + n.summary + " " + n.tags.join(" ")).includes(t)))
     .sort((a, b) => weight(a) - weight(b) || b.mtime - a.mtime);
   $("#note-grid").innerHTML = ns.map(noteCard).join("") || `<p class="empty">No title matches "${esc(query)}".</p>`;
   // Then the text of the notes, a beat after typing stops.
@@ -713,7 +721,7 @@ function grid() {
   if (!hitsBox) return;
   hitsBox.innerHTML = "";
   if (terms.join("").length < 3) return;
-  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => filter === "*" || filter === "@project" || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
+  const shown = new Set(ns.map((n) => n.path)), inFolder = (p) => filter === "*" || !!FILTERS[filter] || (filter === "." ? !p.includes("/") : p.startsWith(`${filter}/`));
   textTimer = setTimeout(async () => {
     const hits = (await api(`/api/search?q=${encodeURIComponent(terms.join(" "))}`).catch(() => [])).filter((h) => !shown.has(h.path) && inFolder(h.path));
     if (fold(query).trim() !== q || !$("#text-hits")) return;
@@ -3922,6 +3930,11 @@ const ACTIONS = {
       query = ""; if (route().pg === "notes") notes();
       toast(`An agent is writing the note · <a href="#/t/${esc(r.id)}">See it</a>`);
     } catch (e) { toast(e.message); }
+  },
+  // Check a deduced note: an agent compares it with its source, fixes it and marks it confirmed.
+  "vault-check": (el) => {
+    const n = D.notes.find((x) => x.path === el.dataset.p);
+    if (n) agentOnCanvas(`Check the note [[${nameOf(n.path)}]] (${n.path}): its confidence is "${n.confidence}", written by deduction and never confirmed. Compare what it says with its source (the code, the database, the documents it cites), fix what's wrong, and once it's confirmed update its confidence and date as AGENTS.md says. Tell me what changed. Answer in the language of the note.`);
   },
   // Write a missing note: an agent writes it from the notes that already link it.
   "vault-write": async (el) => {
