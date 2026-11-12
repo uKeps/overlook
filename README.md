@@ -27,23 +27,28 @@ vault (or set it in **Settings**) and restart. Run it from the repo folder: Bun 
 
 - **Home**: in Minimal, a to-do list. Type a task in one line and its date, time, repeat and importance come out of
   the words ("pay the server on the 15th every month", "revisar PR amanhã 9h toda segunda", "!"); late ones roll into
-  today, a repeating one comes back on its next date when done, and a click opens it to change any of that. One line
-  below says when something needs you (an agent waiting, notes to review, the inbox). Tasks with a time notify you.
+  today, a repeating one comes back on its next date when done, and a click opens it to change any of that. Beside
+  it, what needs you: an agent waiting for an answer, a card to review, the inbox. Tasks with a time notify you.
   Classic keeps the carousel: today's focus, reviews, the inbox, links to notes that don't exist yet.
 - **Calendar** strip: events from `Calendar.md` (`- 2026-11-03 14:00 · Exam`) and agent tasks scheduled to run
   once or on a repeat.
-- **Notes**, a reader with backlinks, a graph, full-text search (`/`) and quick capture (`C`) into the daily note.
+- **Notes**, a reader with backlinks, a graph and full-text search (`/`). Quick capture (`C`) puts a line in the daily
+  note, or gives a topic to an agent that researches it and writes the note.
 - **Graph**: a map of the notes in columns by type (database → table → worker → platform → system → process → team),
   read from `type` in the frontmatter. Click a note to see what it links to (1–3 steps); "What depends on it" lights
   what may break if it changes and can hand that list to an agent. Vaults without those types get the force graph.
 - **Review**: what you ask the vault comes back as a card in 1, 2, 4… days until you know it. Asking on Notes, the
   agent that answers adds the card to `Review.md`; "Save as a note" adds one for the new note. One card at a time
   waits on the Home; the page lists them all. Remove what is useless or out of date; known ones leave on their own.
-- **Agents**: give a task to any CLI or API agent and watch it run. On the canvas, every card is a window: real
-  terminals, agent TUIs (Claude Code, Antigravity), stickies and notes. Wire two terminal cards and the programs
-  in them can talk with `overlook peers`, `overlook send <card> "…"` and `overlook read <card>`. Ctrl+Alt+/
-  lists the shortcuts.
-- Themes (Tokyo Night, Dracula, Catppuccin, Rosé Pine, Gruvbox, Nord) and two interfaces, Classic and Minimal (`V`).
+- **Agents**: give a task to any CLI or API agent and watch it run. The canvas takes the whole screen, and every
+  card is a window: real terminals, agent TUIs (Claude Code, Antigravity), stickies and notes. Right-click opens a
+  card's or the canvas's menu, `Delete` closes the selected cards, and a minimap shows where you are. **Sessions**
+  (top right, or `A`) lists every agent session; its pill says how many are waiting for you. A terminal gets its
+  screen back when you reload the page. Wire two terminal cards and the programs in them can talk with
+  `overlook peers`, `overlook send <card> "…"` and `overlook read <card>`. Ctrl+Alt+/ lists the canvas's shortcuts.
+- **Keys**: `/` search, `C` capture, `V` Classic or Minimal, `F` full screen (no browser tabs), `←`/`→` the previous
+  or next page.
+- Themes (Tokyo Night, Dracula, Catppuccin, Rosé Pine, Gruvbox, Nord) and two interfaces, Classic and Minimal.
 
 ## Your vault
 
