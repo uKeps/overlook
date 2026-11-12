@@ -3810,19 +3810,11 @@ function setCaptureMode(mode) {
     b.classList.toggle("on", on);
     b.setAttribute("aria-selected", on ? "true" : "false");
   });
-  const p = $("#capture-agent-panel");
-  if (p) p.hidden = !isAgent;
-  const ta = $("#capture-text"), hint = $("#capture-hint"), btn = $("#capture-submit-btn");
-  if (isAgent) {
-    if (ta) ta.placeholder = "Topic or instructions for the agent… Enter dispatches.";
-    if (hint) hint.innerHTML = "Dispatches an agent to research and write a note in your vault.";
-    if (btn) btn.textContent = "Dispatch Agent";
-    initCaptureAgent();
-  } else {
-    if (ta) ta.placeholder = "An idea, a link, a question. Enter saves.";
-    if (hint) hint.innerHTML = `Goes to the daily note for <span id="capture-day">${esc(D?.today || "")}</span>. Your agent processes it later.`;
-    if (btn) btn.textContent = "Save";
-  }
+  $("#capture-agent-panel").hidden = !isAgent;
+  $("#capture-hint").hidden = isAgent;
+  $("#capture-text").placeholder = isAgent ? "What should the agent research and write up?" : "An idea, a link, a question";
+  $("#capture-submit-btn span").textContent = isAgent ? "Send to agent" : "Save";
+  if (isAgent) initCaptureAgent();
 }
 
 const ACTIONS = {
@@ -4226,7 +4218,6 @@ const ACTIONS = {
     $("#capture-text").focus();
   },
   "capture-tab": (el) => setCaptureMode(el.dataset.tab),
-  "capture-close": () => $("#capture").close(),
   "capture-save": async () => {
     const ta = $("#capture-text");
     const text = ta.value.trim();
