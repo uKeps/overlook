@@ -64,6 +64,16 @@
   <div class="ck-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
 </dialog>
 <dialog id="picker" class="glass" aria-label="Choose an image"></dialog>
+<dialog id="ask" class="glass" closedby="any" aria-labelledby="ask-msg" aria-describedby="ask-sub">
+  <form method="dialog">
+    <p id="ask-msg"></p>
+    <p id="ask-sub"></p>
+    <div class="ask-foot">
+      <button class="btn" value="">Cancel</button>
+      <button class="btn danger" value="ok" id="ask-ok"></button>
+    </div>
+  </form>
+</dialog>
 <div class="toast glass" id="toast" role="status"></div>
 
 <script type="module" src="/vendor/ascii/ascii.js"></script>

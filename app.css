@@ -439,6 +439,14 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); backdrop-filter: blur(4px); }
 .dialog-close:hover { background: var(--glass); color: var(--ink); }
 #capture textarea { width: 100%; border-radius: 12px; padding: 12px 14px; border: 1px solid var(--line); background: rgba(0, 0, 0, .25); color: var(--ink); font: 15px/1.5 var(--body); resize: vertical; outline: none; }
 #capture textarea:focus { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+#ask { width: min(320px, 92vw); padding: 18px 18px 12px; border-radius: 16px; }
+#ask-msg { margin: 0; font: 600 15px/1.35 var(--display); overflow-wrap: anywhere; }
+#ask-sub { margin: 4px 0 0; color: var(--faint); font-size: 13px; }
+.ask-foot { display: flex; justify-content: flex-end; gap: 4px; margin-top: 14px; }
+.ask-foot .btn { height: 30px; padding: 0 12px; color: var(--muted); }
+.ask-foot .btn:focus-visible { outline: none; background: var(--glass-2); }
+.ask-foot .danger { color: var(--bad); font-weight: 600; }
+.ask-foot .danger:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--bad) 14%, transparent); }
 .capture-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .capture-foot small { color: var(--faint); flex: 1; }
 .capture-tabs { flex: none; }
