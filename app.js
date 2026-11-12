@@ -2381,6 +2381,10 @@ function agentsBody() {
           </div>
           <input id="orch-fq" class="orch-fq" type="search" placeholder="Search sessions" autocomplete="off" aria-label="Search sessions">
           <div class="orch-list" id="orch-list"></div>
+          <details class="orch-ledger" id="orch-ledger">
+            <summary id="orch-ledger-sum"></summary>
+            <div class="orch-ledger-cols" id="orch-ledger-cols"></div>
+          </details>
         </aside>
       </div>
       <div class="orch-canvas" id="orch-canvas">
@@ -2430,6 +2434,16 @@ function agentsBody() {
     const xs = hits.filter((it) => it.group === g);
     return xs.length ? `<div class="fl-group">${l} <small>${xs.length}</small></div>${xs.map(row).join("")}` : "";
   }).join("") || `<p class="empty">${q ? "Nothing matches." : "No sessions yet. Start one from the bar above."}</p>`;
+  // The vault's agent log, folded at the bottom: 9 Agent isn't a notes folder, so this is where Overlook shows it.
+  $("#orch-ledger-sum").innerHTML = `<span>Vault log</span><small>${D.log.length} runs · ${D.findings.length} findings</small>`;
+  $("#orch-ledger-cols").innerHTML = `<div><h3>Log</h3><div class="list">${D.log.slice(0, 12).map((l) => {
+      const [when, who, ...rest] = l.split(" · ");
+      return `<div class="row"><span class="who">${esc(who)}</span><span class="txt">${withLinks(rest.join(" · "))}</span><span class="x">${esc(when.slice(5).replace("-", "/"))}</span></div>`;
+    }).join("") || '<p class="empty">No runs logged.</p>'}</div></div>
+    <div><h3>Findings</h3><div class="list">${D.findings.slice(0, 10).map((a) => {
+      const [d, ...t] = a.split(" · ");
+      return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`;
+    }).join("") || '<p class="empty">No findings yet.</p>'}</div></div>`;
   orchPaint();
 }
 function bindSplitResizer(plane) {
@@ -4290,7 +4304,14 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
-  if (pg === "agents" && (e.key === "a" || e.key === "A")) { e.preventDefault(); $("#orch-fleet-wrap")?.classList.toggle("open"); return; }
+  // A shows or hides Sessions; hiding also takes the focus out of it (a clicked row or the log keeps it open otherwise).
+  if (pg === "agents" && (e.key === "a" || e.key === "A")) {
+    e.preventDefault();
+    const w = $("#orch-fleet-wrap"), shown = !!w?.matches(".open, :focus-within");
+    w?.classList.toggle("open", !shown);
+    if (shown && w.contains(document.activeElement)) document.activeElement.blur();
+    return;
+  }
   if (pg === "agents" && orchMode === "free" && !orchMax) {
     if (e.key === "h") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "pan" } }); return; }
     if (e.key === "s") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "select" } }); return; }

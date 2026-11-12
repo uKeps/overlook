@@ -1176,6 +1176,21 @@ body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill.wait { border-color: co
 .orch-dismiss-btn:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
 @media (pointer: coarse) { .orch-item-actions { opacity: 1; } .orch-dismiss-btn { min-width: 40px; min-height: 40px; } }
 
+.orch-ledger { flex: none; border-top: 1px solid var(--line); }
+.orch-ledger summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; font: 500 12px var(--body); color: var(--faint);
+}
+.orch-ledger summary::-webkit-details-marker { display: none; }
+.orch-ledger summary small { font: 400 11px var(--body); color: var(--faint); }
+.orch-ledger summary:hover { color: var(--muted); }
+.orch-ledger-cols {
+  max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 0 12px 12px; border-top: 1px solid var(--line);
+}
+.orch-ledger-cols h3 { margin: 8px 0 4px; font-size: 10.5px; }
+.orch-ledger-cols .row { padding: 6px 8px; font-size: 12px; }
+
 /* Dual-Mode Canvas Surface: Tiled Split (with draggable divider) & Free 2D Maestri Canvas */
 .orch-canvas {
   position: relative; min-height: 0; height: 100%; overflow: hidden; border-radius: var(--r);
