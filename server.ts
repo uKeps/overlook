@@ -12,7 +12,7 @@ import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, 
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -1074,12 +1074,17 @@ Bun.serve({
       const t = spec === null ? getPty(id) : openPty(id, spec.argv, spec.cwd, cols, rows, spec.title, spec.session,
         { OVERLOOK_URL: `http://127.0.0.1:${PORT}`, PATH: `${import.meta.dir}/bin:${dirname(process.execPath)}:${process.env.PATH ?? ""}`, ...(spec.env ?? {}) }); // bun for bin/overlook's shebang
       if (!t) return ws.close(4000, "gone");
-      // The replay stays under the socket's 2 MiB backpressure limit even when every character is 3 UTF-8 bytes (TUI borders).
-      if (t.tail) ws.send(t.tail.length > 400_000 ? "\x1b[0m" + t.tail.slice(-400_000) : t.tail);
-      if (t.code !== undefined) return ws.close(4001, "exited"); // nothing left to drive: the pane offers to start it again
-      t.ends.add((ws.data.end = () => ws.close(4001, "exited")));
-      ws.data.sub = (d: string) => { try { ws.send(d); } catch {} };
-      t.subs.add(ws.data.sub);
+      // The screen first (replayOf); output that arrives meanwhile waits behind it, and an exit closes after both.
+      let held: string[] | null = [], ended = t.code !== undefined;
+      const close = () => ws.close(4001, "exited"); // nothing left to drive: the pane offers to start it again
+      ws.data.sub = (d: string) => { if (held) held.push(d); else try { ws.send(d); } catch {} };
+      ws.data.end = () => { if (held) ended = true; else close(); };
+      if (!ended) { t.subs.add(ws.data.sub); t.ends.add(ws.data.end); }
+      replayOf(t, (r) => {
+        try { if (r) ws.send(r); for (const d of held!) ws.send(d); } catch {}
+        held = null;
+        if (ended) close();
+      });
       if (getPty(id) === t && spec === null) resizePty(t, cols, rows);
     },
     message(ws: any, m: string | Buffer) {
