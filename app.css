@@ -1061,10 +1061,11 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-fleet-wrap .orch-fleet-pill {
   display: none;
 }
+/* the top-right corner, away from ☰: the list slides in from the right edge */
 .orch-fleet-wrap.float {
   position: absolute;
   top: 10px;
-  left: 10px;
+  right: 10px;
   bottom: 10px;
   z-index: 30;
   pointer-events: none;
@@ -1073,7 +1074,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   pointer-events: auto; white-space: nowrap;
   position: absolute;
   top: 0;
-  left: 0;
+  right: 0;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1089,6 +1090,8 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   transition: opacity .3s var(--float-ease), transform .45s var(--float-ease), filter .3s var(--float-ease);
 }
 .orch-fleet-wrap.float .orch-fleet-pill svg { color: var(--accent); }
+/* an agent waits for you: the pill says how many, in the accent */
+body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill.wait { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .orch-fleet-wrap.float .orch-fleet-pill small {
   font: 500 10.5px var(--mono);
   color: var(--accent);
@@ -1097,7 +1100,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-fleet-wrap.float .orch-fleet {
   position: absolute;
   top: 0;
-  left: 0;
+  right: 0;
   bottom: 0;
   width: 300px;
   pointer-events: auto;
@@ -1109,9 +1112,9 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   box-shadow: 0 20px 54px rgba(0, 0, 0, .58);
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-16px) scale(.95);
+  transform: translateX(16px) scale(.95);
   filter: blur(8px);
-  transform-origin: top left;
+  transform-origin: top right;
   transition: var(--float-out);
 }
 .orch-fleet-wrap.float:is(:hover, :focus-within, .open) .orch-fleet {
@@ -1136,7 +1139,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   min-height: 0;
   width: 100%;
 }
-/* Fleet: a quiet list. Header, one search, two views, rows grouped by what they need from you;
+/* Sessions (the Fleet): a quiet list. Header, one search, rows grouped by what they need from you;
    a row is a status dot, the title on the full width and one detail line; its one action shows on hover. */
 .orch-fleet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 40px; padding: 0 8px 0 14px; flex: none; }
 .orch-fleet-title { display: inline-flex; align-items: baseline; gap: 6px; font: 600 13px var(--body); color: var(--ink); }
@@ -1150,15 +1153,6 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   border: 1px solid var(--line); background: rgba(0, 0, 0, .22); font: 12.5px var(--body); color: var(--ink); outline: none;
 }
 .orch-fq:focus { border-color: color-mix(in srgb, var(--ink) 25%, transparent); }
-.orch-tabs { display: flex; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }
-.orch-tab {
-  height: 30px; padding: 0; border: 0; background: none; display: inline-flex; align-items: center; gap: 5px;
-  font: 500 12px var(--body); color: var(--faint); box-shadow: inset 0 -1px 0 transparent; transition: color .15s, box-shadow .15s;
-}
-.orch-tab small { font: 500 10.5px var(--body); color: var(--faint); }
-.orch-tab:hover { color: var(--muted); }
-.orch-tab.on { color: var(--ink); box-shadow: inset 0 -1px 0 var(--ink); }
-
 .orch-list { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 4px 6px 8px; scrollbar-width: thin; }
 .fl-group { padding: 12px 8px 4px; font: 600 10.5px var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
 .fl-group small { font-weight: 500; margin-left: 4px; }
@@ -1181,21 +1175,6 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-dismiss-btn { width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--faint); }
 .orch-dismiss-btn:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
 @media (pointer: coarse) { .orch-item-actions { opacity: 1; } .orch-dismiss-btn { min-width: 40px; min-height: 40px; } }
-
-.orch-ledger { flex: none; border-top: 1px solid var(--line); }
-.orch-ledger summary {
-  list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px; font: 500 12px var(--body); color: var(--faint);
-}
-.orch-ledger summary::-webkit-details-marker { display: none; }
-.orch-ledger summary small { font: 400 11px var(--body); color: var(--faint); }
-.orch-ledger summary:hover { color: var(--muted); }
-.orch-ledger-cols {
-  max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
-  padding: 0 12px 12px; border-top: 1px solid var(--line);
-}
-.orch-ledger-cols h3 { margin: 8px 0 4px; font-size: 10.5px; }
-.orch-ledger-cols .row { padding: 6px 8px; font-size: 12px; }
 
 /* Dual-Mode Canvas Surface: Tiled Split (with draggable divider) & Free 2D Maestri Canvas */
 .orch-canvas {
@@ -1343,7 +1322,6 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   outline: 2px dashed var(--accent); outline-offset: -4px;
 }
 
-.orch-note-item { cursor: grab; }
 .orch-note-view {
   padding: 14px 18px; font: 400 13.5px/1.65 var(--body); color: var(--ink);
   overflow-y: auto; height: 100%;
@@ -2074,8 +2052,6 @@ body.canvas-page .orch-work { gap: 0; }
 body.canvas-page .orch-canvas { border-radius: 0; border: 0; }
 body.canvas-page .orch-canvas.tiled { padding: 60px 10px 100px; } /* the split's panes end above the dock */
 body.canvas-page.dock-float .orch-canvas.tiled { padding-bottom: 70px; }
-/* the Fleet pill sits after the ☰ button (10 + 40 + 8), as tall as the islands */
-body.canvas-page .orch-fleet-wrap.float { left: 58px; }
 /* a phone: the dock spans the bottom, so the view bar and the map sit above it */
 @media (max-width: 760px) { body.canvas-page .orch-hud.cv-br { bottom: 84px; } body.canvas-page .cv-map { bottom: 136px; } }
 /* a pinned dock (~600px wide) meets the view bar below ~1280px: the view bar and the map rise above it */
