@@ -1174,7 +1174,7 @@ const CANVAS_BGS = [
 ];
 const VALID_BGS = new Set(CANVAS_BGS.map(([k]) => k));
 const bgEntry = (k) => CANVAS_BGS.find(([id]) => id === k) || CANVAS_BGS[0];
-let orchRole = "", orchCwd = "", orchFilter = "all", orchMode = "free", orchDir = "cols", orchRatio = 50, orchBg = "dots",
+let orchRole = "", orchCwd = "", orchMode = "free", orchDir = "cols", orchRatio = 50, orchBg = "dots",
   orchPanX = 24, orchPanY = CANVAS_TOP, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
   orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchMapOpen = true, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
 let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdData = null, cwdPaneKey = "";
@@ -2388,19 +2388,6 @@ function bindPaneDragResize(card, p) {
     });
   }
 }
-function paintNoteList() {
-  const box = $("#orch-notes");
-  if (!box) return;
-  const q = fold((orchNoteQ || "").trim());
-  const ns = D.notes.filter((n) => !q || fold(n.title + " " + (n.summary || "") + " " + n.tags.join(" ")).includes(q)).slice(0, 50);
-  box.innerHTML = ns.map((n) => `
-    <div class="orch-item orch-note-item" draggable="true" data-kind="note" data-id="${esc(n.path)}">
-      <button type="button" class="orch-item-main" data-act="orch-add-note" data-path="${esc(n.path)}" title="Open it on the canvas (or drag it there)">
-        <span class="orch-info"><b>${esc(n.title)}</b><small>${esc([n.folder || "vault", ...n.tags].join(" · "))}</small></span>
-      </button>
-    </div>
-  `).join("") || `<p class="empty">No notes match "${esc(orchNoteQ)}".</p>`;
-}
 function agentsBody() {
   const el = $("#agents-body");
   if (!el) return;
@@ -2423,16 +2410,15 @@ function agentsBody() {
   document.querySelectorAll("[data-act='orch-mode']").forEach((b) => b.classList.toggle("on", b.dataset.m === orchMode));
   if (!el.querySelector(".orch-canvas")) {
     el.innerHTML = `<div class="orch-fleet-wrap ${orchRailMode === "float" ? "float" : ""}" id="orch-fleet-wrap">
-        <button type="button" class="orch-fleet-pill glass" data-act="orch-rail-open" title="Open Fleet sidebar">${icon("cols", 13)} <span>Fleet <small id="orch-fleet-pill-cnt"></small></span></button>
+        <button type="button" class="orch-fleet-pill glass" data-act="orch-rail-open" title="Sessions (A)">${icon("cols", 13)} <span>Sessions <small id="orch-fleet-pill-cnt"></small></span></button>
         <aside class="orch-fleet glass ${orchRailMode === "float" ? "floating" : ""}">
           <div class="orch-fleet-head">
-            <div class="orch-fleet-title"><span>Fleet</span> <small id="orch-fleet-badge"></small></div>
+            <div class="orch-fleet-title"><span>Sessions</span> <small id="orch-fleet-badge"></small></div>
             <div class="orch-fleet-acts">
-              <button type="button" class="fl-icon ${orchRailMode === "float" ? "" : "on"}" data-act="orch-rail-mode" title="${orchRailMode === "float" ? "Keep the Fleet open beside the canvas" : "Let the Fleet float over the canvas"}">${icon("pin", 13)}</button>
+              <button type="button" class="fl-icon ${orchRailMode === "float" ? "" : "on"}" data-act="orch-rail-mode" title="${orchRailMode === "float" ? "Keep Sessions open beside the canvas" : "Let Sessions float over the canvas"}">${icon("pin", 13)}</button>
             </div>
           </div>
-          <input id="orch-fq" class="orch-fq" type="search" placeholder="Search" autocomplete="off" aria-label="Search sessions and notes">
-          <div class="orch-tabs" id="orch-tabs"></div>
+          <input id="orch-fq" class="orch-fq" type="search" placeholder="Search sessions" autocomplete="off" aria-label="Search sessions">
           <div class="orch-list" id="orch-list"></div>
           <details class="orch-ledger" id="orch-ledger">
             <summary id="orch-ledger-sum"></summary>
@@ -2459,40 +2445,35 @@ function agentsBody() {
   }
   const fleetBadge = $("#orch-fleet-badge"), fleetPillCnt = $("#orch-fleet-pill-cnt"), pill = el.querySelector(".orch-fleet-pill"), fleetEl = el.querySelector(".orch-fleet"), fleetWrap = $("#orch-fleet-wrap");
   if (fleetBadge) fleetBadge.textContent = counts.all;
-  if (fleetPillCnt) fleetPillCnt.textContent = counts.all;
+  const waiting = all.filter((x) => x.group === "waiting").length;
+  if (fleetPillCnt) fleetPillCnt.textContent = waiting ? `${waiting} waiting` : "";
+  pill?.classList.toggle("wait", waiting > 0);
   if (fleetWrap) fleetWrap.classList.toggle("float", orchRailMode === "float");
   if (fleetEl) fleetEl.classList.toggle("floating", orchRailMode === "float");
   const pinnedKeys = new Set(orchPanes.map(paneKey));
-  // Two views: the sessions (grouped by what they need from you) and the vault's notes; one search for both.
+  // The sessions, grouped by what they need from you, and one search over them.
   const fq = $("#orch-fq");
-  if (fq && !fq.oninput) { fq.value = orchNoteQ; fq.oninput = () => { orchNoteQ = fq.value; orchFilter === "notes" ? paintNoteList() : agentsBody(); }; }
-  const view = orchFilter === "notes" ? "notes" : "sessions";
-  $("#orch-tabs").innerHTML = [["sessions", "Sessions", counts.all], ["notes", "Notes", D.notes.length]].map(([k, l, n]) =>
-    `<button type="button" class="orch-tab ${view === k ? "on" : ""}" data-act="orch-tab" data-k="${k}">${l} <small>${n}</small></button>`).join("");
-  if (view === "notes") {
-    if (!$("#orch-notes")) $("#orch-list").innerHTML = `<div id="orch-notes"></div>`;
-    paintNoteList();
-  } else {
-    const q = fold(orchNoteQ.trim());
-    const tuiOn = (it) => it.tui && orchPanes.some((p) => p.kind === "terminal" && p.run && ((it.tui.task && p.run.task === it.tui.task) || (it.tui.key && p.run.key === it.tui.key)));
-    const row = (it) => {
-      const k = paneKey(it), on = pinnedKeys.has(k) || tuiOn(it);
-      const x = it.kind === "terminal" ? `data-act="term-close-session" data-id="${esc(it.id)}" title="Close this terminal"`
-        : `data-act="orch-dismiss" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${it.kind === "task" ? "Delete this task" : "Hide from the Fleet"}"`;
-      return `<div class="orch-item ${it.group} ${orchActive === k ? "on" : ""} ${on ? "oncanvas" : ""}" draggable="true" data-kind="${it.kind}" data-id="${esc(it.id)}">
-        <button type="button" class="orch-item-main" data-act="orch-sel" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${on ? "Show it on the canvas" : "Open it on the canvas"}">
-          <span class="fl-dot"></span>
-          <span class="orch-info"><b>${esc(it.title)}</b><small>${esc(it.needs || [on ? "on canvas" : "", it.sub].filter(Boolean).join(" · "))}</small></span>
-        </button>
-        <div class="orch-item-actions"><button type="button" class="orch-dismiss-btn" ${x} aria-label="Remove">${icon("x", 11)}</button></div>
-      </div>`;
-    };
-    const hits = all.filter((it) => !q || fold(`${it.title} ${it.sub} ${it.needs}`).includes(q));
-    $("#orch-list").innerHTML = [["waiting", "Needs you"], ["active", "Running"], ["done", "Recent"]].map(([g, l]) => {
-      const xs = hits.filter((it) => it.group === g);
-      return xs.length ? `<div class="fl-group">${l} <small>${xs.length}</small></div>${xs.map(row).join("")}` : "";
-    }).join("") || `<p class="empty">${q ? "Nothing matches." : "No sessions yet. Start one from the bar above."}</p>`;
-  }
+  if (fq && !fq.oninput) { fq.value = orchNoteQ; fq.oninput = () => { orchNoteQ = fq.value; agentsBody(); }; }
+  const q = fold(orchNoteQ.trim());
+  const tuiOn = (it) => it.tui && orchPanes.some((p) => p.kind === "terminal" && p.run && ((it.tui.task && p.run.task === it.tui.task) || (it.tui.key && p.run.key === it.tui.key)));
+  const row = (it) => {
+    const k = paneKey(it), on = pinnedKeys.has(k) || tuiOn(it);
+    const x = it.kind === "terminal" ? `data-act="term-close-session" data-id="${esc(it.id)}" title="Close this terminal"`
+      : `data-act="orch-dismiss" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${it.kind === "task" ? "Delete this task" : "Hide from Sessions"}"`;
+    return `<div class="orch-item ${it.group} ${orchActive === k ? "on" : ""} ${on ? "oncanvas" : ""}" draggable="true" data-kind="${it.kind}" data-id="${esc(it.id)}">
+      <button type="button" class="orch-item-main" data-act="orch-sel" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${on ? "Show it on the canvas" : "Open it on the canvas"}">
+        <span class="fl-dot"></span>
+        <span class="orch-info"><b>${esc(it.title)}</b><small>${esc(it.needs || [on ? "on canvas" : "", it.sub].filter(Boolean).join(" · "))}</small></span>
+      </button>
+      <div class="orch-item-actions"><button type="button" class="orch-dismiss-btn" ${x} aria-label="Remove">${icon("x", 11)}</button></div>
+    </div>`;
+  };
+  const hits = all.filter((it) => !q || fold(`${it.title} ${it.sub} ${it.needs}`).includes(q));
+  $("#orch-list").innerHTML = [["waiting", "Needs you"], ["active", "Running"], ["done", "Recent"]].map(([g, l]) => {
+    const xs = hits.filter((it) => it.group === g);
+    return xs.length ? `<div class="fl-group">${l} <small>${xs.length}</small></div>${xs.map(row).join("")}` : "";
+  }).join("") || `<p class="empty">${q ? "Nothing matches." : "No sessions yet. Start one from the bar above."}</p>`;
+  // The vault's agent log, folded at the bottom: 9 Agent isn't a notes folder, so this is where Overlook shows it.
   $("#orch-ledger-sum").innerHTML = `<span>Vault log</span><small>${D.log.length} runs · ${D.findings.length} findings</small>`;
   $("#orch-ledger-cols").innerHTML = `<div><h3>Log</h3><div class="list">${D.log.slice(0, 12).map((l) => {
       const [when, who, ...rest] = l.split(" · ");
@@ -2826,10 +2807,9 @@ const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
   : p.kind === "task" ? String(S.tasks?.find((t) => t.id === p.id)?.prompt || "Task").slice(0, 40)
   : S.background?.find((b) => b.key === p.id)?.title || "Session");
 const copyText = (t) => navigator.clipboard?.writeText(t).then(() => toast("Copied"), () => toast("The browser didn't allow copying"));
-function openVaultNotes() {
-  orchFilter = "notes"; agentsBody();
-  $("#orch-fleet-wrap")?.classList.add("open");
-  setTimeout(() => $("#orch-fq")?.focus(), 30);
+// "Open a vault note…": the search, where the chosen note goes onto the canvas (where you right-clicked, if you did).
+function openVaultNotes(at) {
+  cmdkOpen((path) => { if (addPane({ kind: "note", id: path }, at?.x, at?.y)) saveCanvas(); });
 }
 function addSticky(at) {
   const p = { kind: "sticky", id: String(++orchSeq), text: "" };
@@ -2901,7 +2881,7 @@ function canvasMenu(cx, cy) {
     { label: "New agent", ic: "agents", sub: agentItems(at) },
     { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => newTermPane(undefined, at) },
     { label: "New note", ic: "notes", run: () => addSticky(at) },
-    { label: "Open a vault note…", ic: "book", run: openVaultNotes },
+    { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
     "-",
     { label: "Paste card", ic: "paste", off: !canvasClip, run: () => placeSpec(canvasClip, at) },
@@ -2969,9 +2949,9 @@ function paneMenu(key, cx, cy) {
 function mainMenu(btn) {
   const go = (h) => () => { location.hash = h; };
   ctxAt(btn, [
-    { label: "Sessions and notes", ic: "cols", run: () => { orchFilter = "all"; agentsBody(); $("#orch-fleet-wrap")?.classList.add("open"); } },
+    { label: "Sessions", ic: "cols", kbd: "A", run: () => $("#orch-fleet-wrap")?.classList.add("open") },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
-    { label: "Search", ic: "search", kbd: "Ctrl+K", run: cmdkOpen },
+    { label: "Search", ic: "search", kbd: "Ctrl+K", run: () => cmdkOpen() },
     { label: "Capture", ic: "inbox", kbd: "C", run: () => ACTIONS.capture() },
     "-",
     { label: "Home", ic: "home", run: go("#/") },
@@ -2986,7 +2966,7 @@ function mainMenu(btn) {
       { label: "Canvas", ic: "grid", on: orchMode === "free", run: () => ACTIONS["orch-mode"]({ dataset: { m: "free" } }) },
       { label: "Split", ic: "split", on: orchMode === "tile", run: () => ACTIONS["orch-mode"]({ dataset: { m: "tile" } }) },
     ] },
-    { label: orchRailMode === "float" ? "Keep the Fleet open" : "Let the Fleet float", ic: "pin", run: () => ACTIONS["orch-rail-mode"]() },
+    { label: orchRailMode === "float" ? "Keep Sessions open" : "Let Sessions float", ic: "pin", run: () => ACTIONS["orch-rail-mode"]() },
     { label: document.body.classList.contains("canvas-full") ? "Leave full screen" : "Full screen", ic: "expand", kbd: "Ctrl+Alt+Z", run: () => canvasFull() },
     { label: "Keyboard shortcuts", run: () => toast(PANE_KEYS) },
   ]);
@@ -2999,7 +2979,7 @@ async function orchPaint(force) {
     orchSigs.clear();
     canvas.className = `orch-canvas ${orchMode === "free" ? `free tool-${orchTool}` : "tiled"}`; // keeps its size and dot grid
     plane.className = `orch-plane ${orchMode === "free" ? "free" : "single"}`;
-    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Right-click anywhere to open an agent, a terminal or a note.<br><small>Or use the tools above, or a session from the Fleet.</small></p></div>`;
+    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Right-click anywhere to open an agent, a terminal or a note.<br><small>Or use the tools above, or a session from Sessions (A).</small></p></div>`;
     applyCanvasTransform();
     paintHud(hud, orchMode === "free");
     drawLinks();
@@ -3275,7 +3255,7 @@ async function runPrompt() {
     const r = await api("/api/run", payload);
     t.value = "";
     S = await api("/api/system");
-    orchFilter = "all"; orchMax = "";
+    orchMax = "";
     if (r.ids?.length > 1) {
       orchPanes = r.ids.slice(0, 4).map((id, i) => ensurePaneRect({ kind: "task", id }, i));
       orchActive = `task:${r.ids[0]}`;
@@ -3729,10 +3709,13 @@ async function settingsPage() {
 // One field for notes (title, then text), pages and actions; after Apple Spotlight and the Combobox on 21st.dev.
 const GO = [["", "Home", "home"], ["notes", "Notes", "notes"], ["review", "Review", "review"], ["graph", "Graph", "graph"],
   ["agents", "Agents", "agents"], ["services", "Services", "services"], ["settings", "Settings", "settings"]];
-const ck = { items: [], sel: 0, timer: 0 };
-function cmdkOpen() {
+const ck = { items: [], sel: 0, timer: 0, pick: null };
+// pick(path): a chosen note goes there instead of opening, and only notes are listed (the canvas's note picker).
+function cmdkOpen(pick = null) {
   const d = $("#cmdk");
   if (d.open) return;
+  ck.pick = pick;
+  $("#cmdk-q").placeholder = pick ? "Find a note to put on the canvas" : "Search notes, pages and actions";
   $("#cmdk-q").value = ""; cmdkFill(""); d.showModal(); $("#cmdk-q").focus();
 }
 function cmdkFill(q) {
@@ -3741,17 +3724,17 @@ function cmdkFill(q) {
     ...(D.focus?.length || !D.routines ? [] : [{ ic: "target", title: "Start the day", sub: "Action", run: () => ACTIONS["start-day"]() }]),
     ...GO.map(([h, title, ic]) => ({ ic, title, sub: "Page", href: `#/${h}` }))];
   const whole = terms.join(" "), rank = (n) => { const t = fold(n.title); return t === whole ? 0 : t.startsWith(whole) ? 1 : t.includes(terms[0] || "") ? 2 : 3; };
-  const notes = terms.length ? D.notes.filter((n) => has(`${n.title} ${n.summary} ${n.tags.join(" ")}`))
-    .sort((a, b) => rank(a) - rank(b) || a.title.length - b.title.length).slice(0, 8)
-    .map((n) => ({ ic: n.type === "project" ? "bolt" : "notes", title: n.title, sub: folderLabel(n.folder), href: noteHref(n.path) })) : [];
-  ck.items = [...notes, ...acts.filter((a) => !terms.length || has(a.title))]; ck.sel = 0; cmdkPaint();
+  const notes = (terms.length ? D.notes.filter((n) => has(`${n.title} ${n.summary} ${n.tags.join(" ")}`))
+    .sort((a, b) => rank(a) - rank(b) || a.title.length - b.title.length) : ck.pick ? D.notes : []).slice(0, 8)
+    .map((n) => ({ ic: n.type === "project" ? "bolt" : "notes", title: n.title, sub: folderLabel(n.folder), href: noteHref(n.path), path: n.path }));
+  ck.items = [...notes, ...(ck.pick ? [] : acts.filter((a) => !terms.length || has(a.title)))]; ck.sel = 0; cmdkPaint();
   clearTimeout(ck.timer);
   if (terms.join("").length < 3) return;
   ck.timer = setTimeout(async () => {
     const hits = await api(`/api/search?q=${encodeURIComponent(terms.join(" "))}`).catch(() => []);
     if ($("#cmdk-q").value !== q || !$("#cmdk").open) return;
     const seen = new Set(ck.items.map((it) => it.href));
-    const more = hits.filter((h) => !seen.has(noteHref(h.path))).slice(0, 6).map((h) => ({ ic: "notes", title: h.title, sub: h.line, href: noteHref(h.path), text: true }));
+    const more = hits.filter((h) => !seen.has(noteHref(h.path))).slice(0, 6).map((h) => ({ ic: "notes", title: h.title, sub: h.line, href: noteHref(h.path), path: h.path, text: true }));
     if (more.length) { ck.items = [...ck.items, ...more]; cmdkPaint(); }
   }, 200);
 }
@@ -3764,7 +3747,7 @@ function cmdkGo(i) {
   const it = ck.items[i];
   if (!it) return;
   $("#cmdk").close();
-  if (it.href !== undefined) location.hash = it.href; else it.run();
+  if (ck.pick && it.path) ck.pick(it.path); else if (it.href !== undefined) location.hash = it.href; else it.run();
 }
 $("#cmdk-q").addEventListener("input", (e) => cmdkFill(e.target.value));
 $("#cmdk").addEventListener("keydown", (e) => {
@@ -3892,7 +3875,7 @@ const ACTIONS = {
       const r = await api("/api/routine", { name: el.dataset.k, ...runChoice() });
       S = await api("/api/system");
       if (route().pg === "agents") {
-        orchFilter = "all"; orchMax = "";
+        orchMax = "";
         orchPanes = [{ kind: "task", id: r.id }]; orchActive = `task:${r.id}`;
         agentsBody(); orchPaint(true); toast("Routine started");
       } else location.hash = `#/t/${r.id}`;
@@ -3940,7 +3923,7 @@ const ACTIONS = {
     const btn = document.querySelector('[data-act="orch-rail-mode"]');
     if (btn) {
       btn.classList.toggle("on", orchRailMode !== "float");
-      btn.title = orchRailMode === "float" ? "Keep the Fleet open beside the canvas" : "Let the Fleet float over the canvas";
+      btn.title = orchRailMode === "float" ? "Keep Sessions open beside the canvas" : "Let Sessions float over the canvas";
     }
   },
   "orch-deck-toggle": (el) => {
@@ -4148,15 +4131,7 @@ const ACTIONS = {
       toast("Link removed");
     }
   },
-  "orch-add-note": (el) => {
-    const path = el.dataset.path;
-    if (!path) return;
-    addPane({ kind: "note", id: path });
-    saveCanvas();
-    toast("Note added to canvas");
-  },
   "orch-add-sticky": () => addSticky(),
-  "orch-tab": (el) => { orchFilter = el.dataset.k; agentsBody(); },
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
@@ -4379,6 +4354,14 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
+  // A shows or hides Sessions; hiding also takes the focus out of it (a clicked row or the log keeps it open otherwise).
+  if (pg === "agents" && (e.key === "a" || e.key === "A")) {
+    e.preventDefault();
+    const w = $("#orch-fleet-wrap"), shown = !!w?.matches(".open, :focus-within");
+    w?.classList.toggle("open", !shown);
+    if (shown && w.contains(document.activeElement)) document.activeElement.blur();
+    return;
+  }
   if (pg === "agents" && orchMode === "free" && !orchMax) {
     if (e.key === "h") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "pan" } }); return; }
     if (e.key === "s") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "select" } }); return; }
