@@ -1187,8 +1187,8 @@ body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill.wait { border-color: co
   border: 1px solid rgba(255, 255, 255, .15);
   background-color: color-mix(in srgb, var(--bg) 72%, transparent);
   background-image: radial-gradient(color-mix(in srgb, var(--ink) var(--bg-eff-alpha), transparent) var(--bg-dot-r), transparent var(--bg-dot-r));
-  background-position: var(--bg-pos, 0 0);
-  background-size: var(--bg-size, 22px 22px);
+  background-position: 0 0;
+  background-size: 22px 22px;
   cursor: grab;
   transition: background-color .2s var(--ease);
 }
@@ -2368,14 +2368,15 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .gm-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; align-items: start; padding-bottom: 110px; }
 .gm { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0 22px; }
 .gm svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
-.gm path { fill: none; stroke: var(--ink); stroke-opacity: .09; stroke-width: 1; transition: stroke-opacity .15s; }
+/* No transitions on the map: a hover restyles every note and line at once, and fading them all cost ~50 ms a hover. */
+.gm path { fill: none; stroke: var(--ink); stroke-opacity: .09; stroke-width: 1; }
 .gm path.on { stroke: var(--accent); stroke-opacity: .55; stroke-width: 1.3; }
 .gm.hl path:not(.hot) { stroke-opacity: .03; }
 .gm path.hot { stroke: var(--accent); stroke-opacity: .8; stroke-width: 1.4; }
 .gm-lane { position: relative; z-index: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
 .gm-lane h4 { display: flex; align-items: baseline; gap: 6px; max-width: 100%; margin: 0 0 10px; font: 600 11px var(--body); letter-spacing: .05em; text-transform: uppercase; color: var(--faint); white-space: nowrap; overflow: hidden; }
 .gm-lane h4 small { font-weight: 500; letter-spacing: 0; }
-.gm-n { display: flex; align-items: center; gap: 7px; max-width: 100%; height: 25px; padding: 0 8px 0 5px; border-radius: 7px; font: 13px var(--body); color: var(--muted); text-align: left; transition: color .15s, background .15s, opacity .15s; }
+.gm-n { display: flex; align-items: center; gap: 7px; max-width: 100%; height: 25px; padding: 0 8px 0 5px; border-radius: 7px; font: 13px var(--body); color: var(--muted); text-align: left; }
 .gm-n i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c); opacity: .85; }
 .gm-n span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gm-n:hover, .gm-n.on { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }

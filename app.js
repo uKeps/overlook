@@ -1072,9 +1072,12 @@ function graphNet(el, keep, focus) {
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * panX, dpr * panY);
     const hover = hov || byId.get(focus) || null; // a focused note stays lit while the mouse is elsewhere
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
-    for (const [a, b] of edges) {
-      ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .55) : alpha(ink, .06);
-      ctx.lineWidth = 1 / zoom; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    // two strokes (faint, lit) instead of one per edge: ~2500 edges in a vault of 200 notes
+    ctx.lineWidth = 1 / zoom;
+    for (const on of [false, true]) {
+      ctx.beginPath();
+      for (const [a, b] of edges) if ((a === hover || b === hover) === on) { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+      ctx.strokeStyle = on ? alpha(accent, .55) : alpha(ink, .06); ctx.stroke();
     }
     for (const n of nodes) {
       // Grey at rest; hovering a note gives it and its neighbours their area's colour. A missing note is just a ring.
@@ -1105,7 +1108,7 @@ function graphNet(el, keep, focus) {
   const top = 16, base = 90, h = H - top - base; // the dock floats over the bottom
   if (nodes.length) { zoom = Math.min(1.5, W / (x1 - x0), h / (y1 - y0)); panX = (W - (x0 + x1) * zoom) / 2; panY = top + (h - (y0 + y1) * zoom) / 2; }
   let alive = true;
-  // Stops once it settles: only animates again with the mouse over it (saves CPU while the tab sits idle).
+  // Stops once it settles: only animates again while a note is dragged (saves CPU while the tab sits idle).
   let idle = false;
   const loop = () => { if (!alive) return; step(); draw(); if (heat > 0.06 || drag) requestAnimationFrame(loop); else idle = true; };
   const wake = () => { if (idle) { idle = false; requestAnimationFrame(loop); } };
@@ -1117,7 +1120,7 @@ function graphNet(el, keep, focus) {
   cv.onpointermove = (e) => {
     if (drag) { [drag.x, drag.y] = world(e); if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 3) moved = true; heat = Math.max(heat, 0.3); wake(); }
     else if (pan) { panX = e.clientX - pan[0]; panY = e.clientY - pan[1]; draw(); }
-    else { wake(); hov = find(e); cv.style.cursor = hov ? "pointer" : "grab"; }
+    else { const h = find(e); if (h !== hov) { hov = h; draw(); } cv.style.cursor = hov ? "pointer" : "grab"; } // redraw only when the note under the mouse changes
   };
   cv.onpointerdown = (e) => {
     cv.setPointerCapture(e.pointerId);
@@ -1232,6 +1235,9 @@ function syncWires(force) {
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
 const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
+// The wheel fires 60+ times a second: save once it stops, not on every step.
+let saveT = 0;
+const saveCanvasSoon = () => { clearTimeout(saveT); saveT = setTimeout(saveCanvas, 250); };
 function saveCanvas() {
   syncWires();
   try {
@@ -1690,15 +1696,12 @@ function applyCanvasTransform() {
       while (step * orchZoom < 16) step *= 2;
       const px = Math.round(step * orchZoom * 100) / 100;
       const lod = orchZoom < 0.85 ? Math.max(0.42, Math.min(1, (orchZoom - 0.1) / 0.75)) : 1;
-      const pos = `${orchPanX}px ${orchPanY}px`, sz = `${px}px ${px}px`;
-      canvas.style.setProperty("--bg-pos", pos);
-      canvas.style.setProperty("--bg-size", sz);
+      // background-position/size go straight on the canvas: as CSS variables they'd be inherited by every card, and each
+      // pan step then restyled the whole canvas (~10 ms a wheel event)
       canvas.style.setProperty("--bg-lod", lod.toFixed(2));
-      canvas.style.backgroundPosition = pos;
-      canvas.style.backgroundSize = sz;
+      canvas.style.backgroundPosition = `${orchPanX}px ${orchPanY}px`;
+      canvas.style.backgroundSize = `${px}px ${px}px`;
     } else {
-      canvas.style.removeProperty("--bg-pos");
-      canvas.style.removeProperty("--bg-size");
       canvas.style.removeProperty("--bg-lod");
       canvas.style.backgroundPosition = "";
       canvas.style.backgroundSize = "";
@@ -1831,7 +1834,7 @@ function bindMap(box) {
     const z = Math.min(2.5, Math.max(0.2, orchZoom * Math.exp(-e.deltaY * 0.002)));
     orchPanX = Math.round(cx - (cx - orchPanX) * (z / orchZoom)); orchPanY = Math.round(cy - (cy - orchPanY) * (z / orchZoom));
     orchZoom = Math.round(z * 1000) / 1000;
-    applyCanvasTransform(); saveCanvas();
+    applyCanvasTransform(); saveCanvasSoon();
   }, { passive: false });
 }
 // Links are drawn in canvas coordinates, from the right edge of the source to the left edge of the target.
@@ -2228,7 +2231,7 @@ function bindCanvasInteractions(canvas) {
     if (!zoom) {
       orchPanX = Math.round(orchPanX - (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX));
       orchPanY = Math.round(orchPanY - (e.shiftKey && !e.deltaX ? 0 : e.deltaY));
-      applyCanvasTransform(); drawLinks(); saveCanvas();
+      applyCanvasTransform(); saveCanvasSoon(); // the links move with the plane: no redraw
       return;
     }
     e.stopPropagation(); // a terminal under the pointer must not scroll as well
@@ -2238,7 +2241,7 @@ function bindCanvasInteractions(canvas) {
     orchPanY = Math.round(sy - (sy - orchPanY) * (k / orchZoom));
     orchZoom = Math.round(k * 1000) / 1000;
     applyCanvasTransform();
-    saveCanvas();
+    saveCanvasSoon();
   }, { passive: false, capture: true }); // capture: xterm's scroller stops the wheel before it bubbles
   // Fleet chats and vault notes are dragged in from the left rail (HTML drag and drop).
   canvas.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes(PANE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; canvas.classList.add("drop"); } });
