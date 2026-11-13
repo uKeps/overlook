@@ -1857,6 +1857,26 @@ test("an agent pane runs the agent inside a shell: the prompt is text, and the s
   expect(out).toContain("STILL_42"); // the agent exited and the shell took over
 });
 
+test("a reconnecting pane gets its screen back, even after a TUI's first frames left the raw output's tail", async () => {
+  // A TUI draws its frame once, then rewrites only the cells that change. 1.2 MB of such updates push the frame out of
+  // the raw tail (trimmed at 512 KB): replaying that tail would bring back the number without the label around it.
+  const url = `ws://127.0.0.1:${PORT}/ws/pty?id=t_replay&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=80&rows=10`;
+  const read = (ms: number, until?: string) => new Promise<string>((res) => {
+    const ws = new WebSocket(url, { headers: { origin: BASE } } as any);
+    let out = "";
+    const done = () => { ws.close(); res(out); };
+    ws.onmessage = (e) => { out += e.data; if (until && out.includes(until)) done(); };
+    ws.onopen = () => { if (until) ws.send("printf '\\e[2J\\e[2;1HFRAME_%s' LABEL; printf '\\e[2;20H42%.0s' {1..140000}; printf '\\e[6;1HDONE_%s\\n' $((6*7))\r"); };
+    setTimeout(done, ms);
+  });
+  expect(await read(30000, "DONE_42")).toContain("FRAME_LABEL");
+  const again = await read(1500);
+  expect(again).toContain("FRAME_LABEL");
+  expect(again).toContain("DONE_42");
+  expect(again.length).toBeLessThan(400_000); // the screen, not a megabyte of updates
+  await post("/api/pty/close", { id: "t_replay" });
+});
+
 test("canvas terminal: a real PTY over /ws/pty, only for Overlook's own pages", async () => {
   const url = `ws://127.0.0.1:${PORT}/ws/pty?id=t_pty&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=90&rows=20`;
   const upgrade = (u: string, origin: string) => fetch(u.replace("ws:", "http:"), { headers: { origin, upgrade: "websocket", connection: "Upgrade", "sec-websocket-key": btoa("the sample nonce"), /* RFC 6455's example nonce, built here so no key-like literal sits in the source */ "sec-websocket-version": "13" } });
