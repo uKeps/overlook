@@ -1187,8 +1187,8 @@ body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill.wait { border-color: co
   border: 1px solid rgba(255, 255, 255, .15);
   background-color: color-mix(in srgb, var(--bg) 72%, transparent);
   background-image: radial-gradient(color-mix(in srgb, var(--ink) var(--bg-eff-alpha), transparent) var(--bg-dot-r), transparent var(--bg-dot-r));
-  background-position: var(--bg-pos, 0 0);
-  background-size: var(--bg-size, 22px 22px);
+  background-position: 0 0;
+  background-size: 22px 22px;
   cursor: grab;
   transition: background-color .2s var(--ease);
 }
