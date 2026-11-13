@@ -1072,9 +1072,12 @@ function graphNet(el, keep, focus) {
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * panX, dpr * panY);
     const hover = hov || byId.get(focus) || null; // a focused note stays lit while the mouse is elsewhere
     const near = hover ? new Set(edges.filter(([a, b]) => a === hover || b === hover).flat()) : null;
-    for (const [a, b] of edges) {
-      ctx.strokeStyle = near && (a === hover || b === hover) ? alpha(accent, .55) : alpha(ink, .06);
-      ctx.lineWidth = 1 / zoom; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    // two strokes (faint, lit) instead of one per edge: ~2500 edges in a vault of 200 notes
+    ctx.lineWidth = 1 / zoom;
+    for (const on of [false, true]) {
+      ctx.beginPath();
+      for (const [a, b] of edges) if ((a === hover || b === hover) === on) { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+      ctx.strokeStyle = on ? alpha(accent, .55) : alpha(ink, .06); ctx.stroke();
     }
     for (const n of nodes) {
       // Grey at rest; hovering a note gives it and its neighbours their area's colour. A missing note is just a ring.
@@ -1105,7 +1108,7 @@ function graphNet(el, keep, focus) {
   const top = 16, base = 90, h = H - top - base; // the dock floats over the bottom
   if (nodes.length) { zoom = Math.min(1.5, W / (x1 - x0), h / (y1 - y0)); panX = (W - (x0 + x1) * zoom) / 2; panY = top + (h - (y0 + y1) * zoom) / 2; }
   let alive = true;
-  // Stops once it settles: only animates again with the mouse over it (saves CPU while the tab sits idle).
+  // Stops once it settles: only animates again while a note is dragged (saves CPU while the tab sits idle).
   let idle = false;
   const loop = () => { if (!alive) return; step(); draw(); if (heat > 0.06 || drag) requestAnimationFrame(loop); else idle = true; };
   const wake = () => { if (idle) { idle = false; requestAnimationFrame(loop); } };
@@ -1117,7 +1120,7 @@ function graphNet(el, keep, focus) {
   cv.onpointermove = (e) => {
     if (drag) { [drag.x, drag.y] = world(e); if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 3) moved = true; heat = Math.max(heat, 0.3); wake(); }
     else if (pan) { panX = e.clientX - pan[0]; panY = e.clientY - pan[1]; draw(); }
-    else { wake(); hov = find(e); cv.style.cursor = hov ? "pointer" : "grab"; }
+    else { const h = find(e); if (h !== hov) { hov = h; draw(); } cv.style.cursor = hov ? "pointer" : "grab"; } // redraw only when the note under the mouse changes
   };
   cv.onpointerdown = (e) => {
     cv.setPointerCapture(e.pointerId);
