@@ -1784,19 +1784,21 @@ test("adversarial verification: terminal & shell launcher, emulator detection, f
   expect(appJs).toContain("set-terminal");
 });
 
+// A bash pane on the canvas, and a wait for its output.
+const openPane = (id: string) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=${id}&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=120&rows=30`, { headers: { origin: BASE } } as any);
+  const st = { ws, out: "" };
+  ws.onmessage = (e) => { st.out += e.data; };
+  return new Promise<typeof st>((res) => { ws.onopen = () => res(st); });
+};
+const until = async (st: { out: string }, re: RegExp, ms = 15000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(100)) if (re.test(st.out)) return;
+  throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
+};
+
 test("agent hand-off: a terminal talks to the terminals wired to it, and only to those", async () => {
   // Two shells; A drives everything through the `overlook` command Overlook puts on its PATH.
-  const open = (id: string) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=${id}&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=120&rows=30`, { headers: { origin: BASE } } as any);
-    const st = { ws, out: "" };
-    ws.onmessage = (e) => { st.out += e.data; };
-    return new Promise<typeof st>((res) => { ws.onopen = () => res(st); });
-  };
-  const until = async (st: { out: string }, re: RegExp, ms = 15000) => {
-    for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(100)) if (re.test(st.out)) return;
-    throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
-  };
-  const a = await open("t_ha"), b = await open("t_hb");
+  const a = await openPane("t_ha"), b = await openPane("t_hb");
   // Wires come from Overlook's own page only: a program in a pane (no Origin) can't wire itself to anything.
   const wire = (body: object, origin = BASE) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify({ client: "test-canvas", ...body }) });
   expect((await wire({ wires: [["t_ha", "t_hb"]] }, "")).status).toBe(403);
@@ -1814,6 +1816,29 @@ test("agent hand-off: a terminal talks to the terminals wired to it, and only to
   await until(a, /no card wired to this one matches "Beta"/);
   a.ws.close(); b.ws.close();
   for (const id of ["t_ha", "t_hb"]) await post("/api/pty/close", { id });
+});
+
+test("maestro: a card opens cards wired to it, through the canvas that shows it", async () => {
+  const m = await openPane("t_ma");
+  const take = (body: object, origin = BASE) => fetch(`${BASE}/api/canvas/spawns`, { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify(body) });
+  const next = async (panes: string[], done: object[] = []) => {
+    for (const end = Date.now() + 8000; Date.now() < end; await Bun.sleep(100)) { const { spawns } = await (await take({ panes, done })).json(); done = []; if (spawns.length) return spawns; }
+    throw new Error(`nothing to take: ${m.out.slice(-600)}`);
+  };
+  expect((await take({ panes: ["t_ma"] }, "")).status).toBe(403); // only Overlook's own page takes them
+  m.ws.send("overlook spawn nope; overlook spawn shell --cwd /tmp; overlook note 'remember the milk'\r");
+  await until(m, /say which agent: .*shell/);
+  expect((await (await take({ panes: ["someone-else"] })).json()).spawns).toEqual([]); // a canvas without the caller gets nothing
+  const [sh] = await next(["t_ma"]);
+  expect(sh).toMatchObject({ parent: "t_ma", kind: "shell", cwd: "/tmp" });
+  // The canvas reports it opened the card: the caller hears back with its id; a refused note says why.
+  const [note] = await next(["t_ma"], [{ id: sh.id }]);
+  await until(m, new RegExp(`${sh.id}: opened and wired to this card`));
+  expect(note).toMatchObject({ parent: "t_ma", kind: "sticky", text: "remember the milk" });
+  await take({ panes: [], done: [{ id: note.id, why: "the canvas is full" }] });
+  await until(m, /overlook: the canvas is full/);
+  m.ws.close();
+  await post("/api/pty/close", { id: "t_ma" });
 });
 
 test("an agent pane runs the agent inside a shell: the prompt is text, and the shell stays when the agent exits", async () => {

@@ -12,7 +12,7 @@ import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, 
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -953,6 +953,9 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
+    if (p === "/api/pty/spawn") { const r = await ptySpawn(b.from, b.token, b, loadAgents(import.meta.dir).filter(tuiOk).map((a) => a.id)); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    // The canvas takes the cards its agents asked for; like wires, only Overlook's own page may.
+    if (p === "/api/canvas/spawns") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : json({ spawns: takeSpawns(b.panes, b.done) });
     // Review cards (Review.md): every change answers with the whole list too. A note's path makes a "What is X?" card.
     if (p === "/api/cards/add" || p === "/api/cards/answer" || p === "/api/cards/remove") {
       const id = String(b.id ?? ""), old = id.startsWith("n:") ? id.slice(2) : "";

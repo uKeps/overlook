@@ -1732,6 +1732,33 @@ function addPane(item, x, y) {
   agentsBody();
   return true;
 }
+// Cards an agent asked for (`overlook spawn` / `overlook note`, see takeSpawns in tasks.ts): each opens right of the card
+// that asked, below the others there, wired to it, without taking the focus; the server hears how it went on the next poll.
+let spawnDone = [];
+async function takeSpawns() {
+  const panes = orchPanes.filter((p) => p.kind === "terminal").map((p) => p.id);
+  if (!panes.length && !spawnDone.length) return;
+  const done = spawnDone; spawnDone = [];
+  const r = await api("/api/canvas/spawns", { panes, done }).catch(() => { spawnDone.push(...done); return null; });
+  if (!r?.spawns?.length) return;
+  const active = orchActive;
+  for (const s of r.spawns) {
+    const parent = orchPanes.find((p) => p.kind === "terminal" && p.id === s.parent);
+    const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
+      : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
+    if (parent && typeof parent.x === "number") {
+      ensurePaneRect(p);
+      p.x = parent.x + parent.w + 40; p.y = parent.y;
+      const hit = () => orchPanes.find((q) => typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
+      for (let n = 0, q; n < 40 && (q = hit()); n++) p.y = q.y + q.h + 40;
+    }
+    if (!parent || !addPane(p)) { spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
+    orchLinks.push({ a: paneKey(parent), b: paneKey(p) });
+    spawnDone.push({ id: s.id });
+  }
+  orchActive = active;
+  saveCanvas(); orchSigs.clear(); agentsBody();
+}
 // Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
 let hotWires = new Set();
 async function pollHandoffs() {
@@ -2005,7 +2032,7 @@ function agents() {
   };
   agentsBody();
   if (afterCanvas) { const make = afterCanvas; afterCanvas = null; make(); } // a hand-off from another page (toCanvas)
-  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); }, 2000);
+  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); takeSpawns(); }, 2000);
   ambient(art("agents"));
 }
 function renderMultiChips() {

@@ -685,7 +685,7 @@ export function screenText(t: Pty, max = 60) {
 // A wire between two terminal cards on the canvas lets the programs in them talk, both ways: `overlook send <card> "…"`
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
-export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task.";
+export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user.";
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
 const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; at: number }>(), sent = new Map<string, number[]>();
@@ -745,6 +745,54 @@ export function ptySend(from: unknown, token: unknown, to: unknown, text: unknow
   handoffs.push({ from: me.id, to: p.id, at: now });
   if (handoffs.length > 50) handoffs.shift();
   return true;
+}
+// Spawning (the maestro): an agent in a card opens new cards wired to its own (`overlook spawn` / `overlook note`). The
+// cards live in the browser, so a request waits here until the canvas showing the caller takes it (it polls every 2 s),
+// adds the card and the wire, and says how it went on its next poll; the caller hears back within MAX_WAIT or is told
+// it's queued. An opened agent reports to its maestro by message (push), so the maestro needn't poll its screen.
+type Spawn = { id: string; parent: string; kind: "agent" | "shell" | "sticky"; agent?: string; cwd?: string; prompt?: string; text?: string; at: number; taken?: boolean; done: (why: string | null) => void };
+const spawns: Spawn[] = [], kids = new Map<string, string>(); // opened card -> the card that opened it
+const MAX_KIDS = 6, SPAWN_WAIT = 8000;
+const kidsOf = (id: string) => [...kids].filter(([k, p]) => p === id && ptys.get(k)?.code === undefined).length + spawns.filter((s) => s.parent === id && s.kind !== "sticky").length;
+export async function ptySpawn(from: unknown, token: unknown, b: any, agents: string[]): Promise<{ id: string; queued?: boolean } | string> {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  // ponytail: one level only (kids live in memory, so after a restart an opened card could open more); depth if needed.
+  if (kids.has(me.id)) return "a card opened by another card can't open cards: ask the one that opened you";
+  const kind = b.note !== undefined ? "sticky" : b.agent === "shell" ? "shell" : "agent";
+  const text = String(b.note ?? "").trim().slice(0, 4000), prompt = String(b.prompt ?? "").trim().slice(0, 8000), cwd = String(b.cwd ?? "") || me.cwd;
+  if (kind === "sticky" && !text) return "empty note";
+  if (kind === "agent" && !agents.includes(b.agent)) return `say which agent: ${[...agents, "shell"].join(", ")}`;
+  if (kind !== "sticky") {
+    if (!isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) return `not a folder: ${cwd}`;
+    if (kidsOf(me.id) >= MAX_KIDS) return `you already have ${MAX_KIDS} cards running; wait for one to finish or ask the user to close one`;
+  }
+  const k = `${me.id}>spawn`, now = Date.now(), recent = (sent.get(k) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= 10) return "rate limit: 10 new cards a minute";
+  sent.set(k, [...recent, now]);
+  // The opened agent learns who gave it the task and how to answer, like a message does (see ptySend).
+  const task = kind === "agent" && prompt ? `[Task from "${nameOf(me)}" (card ${me.id}) on the Overlook canvas. When you finish, or if you get stuck, report in a few lines with: overlook send ${me.id} "..."]\n${prompt}` : "";
+  const s: Spawn = { id: `term_${now}_${Math.random().toString(36).slice(2, 6)}`, parent: me.id, kind, at: now, done: () => {},
+    ...(kind === "sticky" ? { text } : { cwd, ...(kind === "agent" ? { agent: b.agent, prompt: task } : {}) }) };
+  spawns.push(s);
+  const why = await new Promise<string | null>((res) => { s.done = res; setTimeout(() => res(null), SPAWN_WAIT); });
+  return why === null ? { id: s.id, queued: true } : why || { id: s.id };
+}
+// The canvas takes the requests for the cards it shows (panes: its terminal ids) and reports the ones it handled (done).
+export function takeSpawns(panes: unknown, done: unknown) {
+  if (Array.isArray(done)) for (const d of done) {
+    const i = spawns.findIndex((s) => s.taken && s.id === d?.id);
+    if (i < 0) continue;
+    const [s] = spawns.splice(i, 1), why = typeof d.why === "string" ? d.why.slice(0, 200) : "";
+    if (!why && s.kind !== "sticky") kids.set(s.id, s.parent);
+    s.done(why);
+  }
+  // Nobody showed the caller for 10 min, or a canvas took one and never answered: dropped.
+  const now = Date.now();
+  for (let i = spawns.length - 1; i >= 0; i--) if (now - spawns[i].at > (spawns[i].taken ? 60_000 : 600_000)) spawns.splice(i, 1)[0].done("the canvas never opened it");
+  const have = new Set(Array.isArray(panes) ? panes : []), mine = spawns.filter((s) => !s.taken && have.has(s.parent));
+  for (const s of mine) s.taken = true;
+  return mine.map(({ done: _, taken: __, at: ___, ...s }) => s);
 }
 // A TUI on the canvas learns how to reach its wired cards (agents with a `canvas` template, e.g. claude's system prompt).
 export const withCanvas = (a: Agent, argv: string[]) => [...argv, ...(a.canvas ?? []).map((x) => x.replaceAll("{canvas}", CANVAS_HINT))];

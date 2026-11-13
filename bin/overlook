@@ -4,11 +4,13 @@
 //   overlook peers                    the cards wired to this one
 //   overlook send <card> <message…>   type the message into that card as a prompt (or pipe it in on stdin)
 //   overlook read <card> [lines]      what that card's screen shows
+//   overlook spawn <agent> [--cwd dir] [task…]   open a new card wired to this one (an agent with that task, or `shell`)
+//   overlook note <text…>             put a note card on the canvas, wired to this one
 //   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
 // <card> is a card id or part of its name, as `overlook peers` prints them.
 const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
 const [cmd, card, ...rest] = process.argv.slice(2);
-const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook todo [task]";
+const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook spawn <agent> [--cwd dir] [task] | overlook note <text> | overlook todo [task]";
 // To-dos work from any terminal on this machine (the canvas's variables aren't needed).
 if (cmd === "todo") {
   const base = url || `http://127.0.0.1:${process.env.PORT || 3333}`, text = [card, ...rest].filter(Boolean).join(" ").trim();
@@ -42,4 +44,12 @@ if (cmd === "peers") {
 } else if (cmd === "read" && card) {
   const r = await call("/api/pty/read", { to: card, lines: Number(rest[0]) || 60 });
   console.log(`--- ${r.name} (${r.id})\n${r.text}`);
+} else if (cmd === "spawn") {
+  const at = rest.indexOf("--cwd"), dir = at >= 0 ? rest.splice(at, 2)[1] : "";
+  const { resolve } = await import("node:path");
+  const r = await call("/api/pty/spawn", { agent: card ?? "", cwd: resolve(dir || "."), prompt: rest.join(" ") });
+  console.log(r.queued ? `${r.id}: queued, it opens when the Overlook canvas is showing this card` : `${r.id}: opened and wired to this card`);
+} else if (cmd === "note" && card) {
+  const r = await call("/api/pty/spawn", { note: [card, ...rest].join(" ") });
+  console.log(r.queued ? "queued, it shows when the Overlook canvas is showing this card" : "note added");
 } else { console.error(usage); process.exit(2); }
