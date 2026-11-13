@@ -6,7 +6,9 @@ import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileS
 import { homedir, userInfo } from "node:os";
 import { readFileSync as readProc } from "node:fs";
 import xtermHeadless from "@xterm/headless";
+import xtermSerialize from "@xterm/addon-serialize";
 const { Terminal: Headless } = xtermHeadless;
+const { SerializeAddon } = xtermSerialize;
 
 // models/efforts list what the task form offers (first model, and `effort` or the first effort, are the defaults).
 // A model is an id or { id, label, efforts } when it has a display name or its own effort levels;
@@ -530,10 +532,10 @@ export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: str
 
 // ---------------------------------------------------------------- Embedded terminals: real PTYs (Bun.Terminal)
 // Each canvas terminal pane is a real pseudo-terminal, so shells, vim and agent TUIs (claude, agy) run as in Ghostty.
-// A PTY outlives its WebSocket (page reload, pane re-render) and replays the tail of its output on reconnect.
+// A PTY outlives its WebSocket (page reload, pane re-render) and redraws its screen on reconnect (replayOf).
 type Pty = {
   id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number;
-  token: string; screen?: InstanceType<typeof Headless>; size: string; resizing?: Timer;
+  token: string; screen?: InstanceType<typeof Headless>; ser?: InstanceType<typeof SerializeAddon>; size: string; resizing?: Timer;
 };
 const ptys = new Map<string, Pty>();
 const TAIL = 512_000;
@@ -542,7 +544,30 @@ const TAIL = 512_000;
 export const GHOSTTY_TERM = ["/usr/share/terminfo/x/xterm-ghostty", `${homedir()}/.terminfo/x/xterm-ghostty`].some(existsSync) ? "xterm-ghostty" : "xterm-256color";
 // (ghostty-web's WASM core was dropped: it corrupted rows on a column resize of a colourful screen, then faulted and
 // could loop forever, freezing the server. xterm.js reflows correctly and has no shared heap to poison.)
-const mirrorOf = (cols: number, rows: number) => new Headless({ cols, rows, scrollback: 1000, allowProposedApi: true });
+const mirrorOf = (cols: number, rows: number) => {
+  const screen = new Headless({ cols, rows, scrollback: 1000, allowProposedApi: true }), ser = new SerializeAddon();
+  screen.loadAddon(ser);
+  return { screen, ser };
+};
+// The replay stays under the socket's 2 MiB backpressure limit even when every character is 3 UTF-8 bytes (TUI borders).
+const REPLAY = 400_000;
+// What a reconnecting pane gets: the mirror's screen and scrollback, redrawn. Not the raw tail: a TUI draws its frame
+// once and then rewrites only the cells that change, so once the first frames are trimmed off the tail, replaying it
+// brings back the changing numbers without the frame around them. The raw tail only when there is no mirror.
+// done() runs once the mirror has parsed everything written before this call; later output is the caller's.
+export function replayOf(t: Pty, done: (s: string) => void) {
+  const raw = () => (t.tail.length > REPLAY ? "\x1b[0m" + t.tail.slice(-REPLAY) : t.tail);
+  const { screen, ser } = t;
+  if (!screen || !ser) return done(raw());
+  screen.write("", () => {
+    try {
+      for (const scrollback of [1000, 100, 0]) {
+        const s = ser.serialize({ scrollback });
+        if (s.length <= REPLAY || !scrollback) return done(s);
+      }
+    } catch { done(raw()); }
+  });
+}
 
 // A known shell (by id or path) or the user's default; a cwd that exists, or the fallback.
 export function shellPath(shell?: string) {
@@ -588,7 +613,7 @@ export function openPty(id: string, argv: string[], cwd: string, cols: number, r
   if (old && old.code === undefined) return old;
   old?.screen?.dispose();
   const dec = new TextDecoder();
-  const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set(), token: crypto.randomUUID(), screen: mirrorOf(cols, rows), size: `${cols}x${rows}` } as unknown as Pty;
+  const t = { id, title, cwd, session, tail: "", subs: new Set(), ends: new Set(), token: crypto.randomUUID(), ...mirrorOf(cols, rows), size: `${cols}x${rows}` } as unknown as Pty;
   const emit = (s: string) => {
     t.tail += s;
     // ponytail: every chunk is parsed twice (pane + mirror); fine for agent TUIs, build it lazily if a flood ever shows up.

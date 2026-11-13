@@ -453,6 +453,14 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); backdrop-filter: blur(4px); }
 #capture-submit-btn:is(:hover, :focus-visible) { outline: none; background: color-mix(in srgb, var(--accent) 14%, transparent); }
 #capture-submit-btn kbd { border: 0; padding: 0; color: color-mix(in srgb, var(--accent) 60%, transparent); }
 @media (max-width: 640px) { #capture-agent-panel { flex-basis: 100%; } } /* a phone: the pickers get the line, the action goes under them */
+#ask { width: min(320px, 92vw); padding: 18px 18px 12px; border-radius: 16px; }
+#ask-msg { margin: 0; font: 600 15px/1.35 var(--display); overflow-wrap: anywhere; }
+#ask-sub { margin: 4px 0 0; color: var(--faint); font-size: 13px; }
+.ask-foot { display: flex; justify-content: flex-end; gap: 4px; margin-top: 14px; }
+.ask-foot .btn { height: 30px; padding: 0 12px; color: var(--muted); }
+.ask-foot .btn:focus-visible { outline: none; background: var(--glass-2); }
+.ask-foot .danger { color: var(--bad); font-weight: 600; }
+.ask-foot .danger:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--bad) 14%, transparent); }
 
 /* Quota Exhaustion Alert & Model Switch */
 .quota-alert {
@@ -997,10 +1005,11 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-fleet-wrap .orch-fleet-pill {
   display: none;
 }
+/* the top-right corner, away from ☰: the list slides in from the right edge */
 .orch-fleet-wrap.float {
   position: absolute;
   top: 10px;
-  left: 10px;
+  right: 10px;
   bottom: 10px;
   z-index: 30;
   pointer-events: none;
@@ -1009,7 +1018,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   pointer-events: auto; white-space: nowrap;
   position: absolute;
   top: 0;
-  left: 0;
+  right: 0;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1025,6 +1034,8 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   transition: opacity .3s var(--float-ease), transform .45s var(--float-ease), filter .3s var(--float-ease);
 }
 .orch-fleet-wrap.float .orch-fleet-pill svg { color: var(--accent); }
+/* an agent waits for you: the pill says how many, in the accent */
+body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill.wait { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .orch-fleet-wrap.float .orch-fleet-pill small {
   font: 500 10.5px var(--mono);
   color: var(--accent);
@@ -1033,7 +1044,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-fleet-wrap.float .orch-fleet {
   position: absolute;
   top: 0;
-  left: 0;
+  right: 0;
   bottom: 0;
   width: 300px;
   pointer-events: auto;
@@ -1045,9 +1056,9 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   box-shadow: 0 20px 54px rgba(0, 0, 0, .58);
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-16px) scale(.95);
+  transform: translateX(16px) scale(.95);
   filter: blur(8px);
-  transform-origin: top left;
+  transform-origin: top right;
   transition: var(--float-out);
 }
 .orch-fleet-wrap.float:is(:hover, :focus-within, .open) .orch-fleet {
@@ -1072,7 +1083,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   min-height: 0;
   width: 100%;
 }
-/* Fleet: a quiet list. Header, one search, two views, rows grouped by what they need from you;
+/* Sessions (the Fleet): a quiet list. Header, one search, rows grouped by what they need from you;
    a row is a status dot, the title on the full width and one detail line; its one action shows on hover. */
 .orch-fleet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 40px; padding: 0 8px 0 14px; flex: none; }
 .orch-fleet-title { display: inline-flex; align-items: baseline; gap: 6px; font: 600 13px var(--body); color: var(--ink); }
@@ -1086,15 +1097,6 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   border: 1px solid var(--line); background: rgba(0, 0, 0, .22); font: 12.5px var(--body); color: var(--ink); outline: none;
 }
 .orch-fq:focus { border-color: color-mix(in srgb, var(--ink) 25%, transparent); }
-.orch-tabs { display: flex; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }
-.orch-tab {
-  height: 30px; padding: 0; border: 0; background: none; display: inline-flex; align-items: center; gap: 5px;
-  font: 500 12px var(--body); color: var(--faint); box-shadow: inset 0 -1px 0 transparent; transition: color .15s, box-shadow .15s;
-}
-.orch-tab small { font: 500 10.5px var(--body); color: var(--faint); }
-.orch-tab:hover { color: var(--muted); }
-.orch-tab.on { color: var(--ink); box-shadow: inset 0 -1px 0 var(--ink); }
-
 .orch-list { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 4px 6px 8px; scrollbar-width: thin; }
 .fl-group { padding: 12px 8px 4px; font: 600 10.5px var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
 .fl-group small { font-weight: 500; margin-left: 4px; }
@@ -1279,7 +1281,6 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   outline: 2px dashed var(--accent); outline-offset: -4px;
 }
 
-.orch-note-item { cursor: grab; }
 .orch-note-view {
   padding: 14px 18px; font: 400 13.5px/1.65 var(--body); color: var(--ink);
   overflow-y: auto; height: 100%;
@@ -1878,9 +1879,9 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 .orch-links path.ln.hot { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; animation: wire-flow .6s linear infinite; }
 @keyframes wire-flow { to { stroke-dashoffset: -11; } }
 
-/* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD and the Fleet stay on it */
+/* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD, the Fleet and the dock stay on it */
 body.canvas-full { padding: 0; }
-body.canvas-full :is(.top, .cal, #dockwrap) { display: none !important; }
+body.canvas-full :is(.top, .cal) { display: none !important; }
 body.canvas-full main { max-width: none; margin: 0; padding: 0; }
 body.canvas-full .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
 body.canvas-full .orch-canvas { border-radius: 0; border: 0; }
@@ -1955,8 +1956,6 @@ body.canvas-page .orch-work { gap: 0; }
 body.canvas-page .orch-canvas { border-radius: 0; border: 0; }
 body.canvas-page .orch-canvas.tiled { padding: 60px 10px 100px; } /* the split's panes end above the dock */
 body.canvas-page.dock-float .orch-canvas.tiled { padding-bottom: 70px; }
-/* the Fleet pill sits after the ☰ button (10 + 40 + 8), as tall as the islands */
-body.canvas-page .orch-fleet-wrap.float { left: 58px; }
 /* a phone: the dock spans the bottom, so the view bar and the map sit above it */
 @media (max-width: 760px) { body.canvas-page .orch-hud.cv-br { bottom: 84px; } body.canvas-page .cv-map { bottom: 136px; } }
 /* a pinned dock (~600px wide) meets the view bar below ~1280px: the view bar and the map rise above it */
@@ -2231,9 +2230,9 @@ html[data-ui="minimal"] .top .search-btn.btn.glass:hover { border-color: color-m
 html[data-ui="minimal"] .top .search-btn kbd { margin-left: auto; display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 6px; font-size: 11px; }
 html[data-ui="minimal"] .top .crumb { order: -2; }
 html[data-ui="minimal"] .clock span { font: 500 12.5px var(--body); color: var(--faint); }
-html[data-ui="minimal"] .top .cap-btn { height: 34px; padding: 0 10px; gap: 7px; border-radius: 9px; color: var(--muted); }
-html[data-ui="minimal"] .top .cap-btn svg { color: var(--accent); }
-html[data-ui="minimal"] .top .cap-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+html[data-ui="minimal"] .top :is(.cap-btn, .full-btn) { height: 34px; padding: 0 10px; gap: 7px; border-radius: 9px; color: var(--muted); }
+html[data-ui="minimal"] .top .cap-btn svg, .full-btn.on { color: var(--accent); }
+html[data-ui="minimal"] .top :is(.cap-btn, .full-btn):hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 html[data-ui="minimal"] .top .cap-btn kbd { border: 0; }
 @media (max-width: 640px) { html[data-ui="minimal"] .top .search-btn.btn.glass { position: static; transform: none; width: auto; margin: 0 0 0 auto; padding: 0 8px; border: 0; } html[data-ui="minimal"] .top .search-btn kbd { display: none; } html[data-ui="minimal"] .top .cap-btn span { display: none; } }
 /* the week strip: compact days on the left, the month on the right, no box (not even the theme's glass band) */
