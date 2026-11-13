@@ -29,34 +29,20 @@
 
 <div class="dockwrap" id="dockwrap"><button type="button" class="dock-pill" id="dock-pill" aria-label="Show the dock"></button><nav class="dock glass" id="dock" aria-label="Pages"></nav></div>
 
-<dialog id="capture" class="glass">
-  <div class="dialog-head">
-    <div class="seg capture-tabs" role="tablist" aria-label="Capture mode">
-      <button type="button" class="on" data-act="capture-tab" data-tab="daily" role="tab" aria-selected="true">Daily Note</button>
-      <button type="button" data-act="capture-tab" data-tab="agent" role="tab" aria-selected="false">Note with Agent</button>
-    </div>
-    <button type="button" class="dialog-close" data-act="capture-close" aria-label="Close">✕</button>
+<dialog id="capture" class="glass" aria-label="Capture">
+  <div class="seg capture-tabs" role="tablist" aria-label="Capture mode">
+    <button type="button" class="on" data-act="capture-tab" data-tab="daily" role="tab" aria-selected="true">Daily note</button>
+    <button type="button" data-act="capture-tab" data-tab="agent" role="tab" aria-selected="false">Agent note</button>
   </div>
-  <div class="capture-agent-panel" id="capture-agent-panel" hidden>
-    <div class="capture-fields-row capture-agent-row">
-      <div class="capture-field">
-        <label class="capture-field-label" for="capture-agent">Agent</label>
-        <select class="pick" id="capture-agent" aria-label="Agent"></select>
-      </div>
-      <div class="capture-field" id="capture-model-wrap">
-        <label class="capture-field-label" for="capture-model">Model</label>
-        <select class="pick" id="capture-model" aria-label="Model" hidden></select>
-      </div>
-    </div>
-    <div class="capture-effort-row" id="capture-effort-row">
-      <span class="capture-effort-label">Effort</span>
+  <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question" aria-label="Capture text"></textarea>
+  <div class="capture-foot">
+    <small id="capture-hint">To the daily note · <span id="capture-day"></span></small>
+    <div id="capture-agent-panel" hidden>
+      <select class="pick" id="capture-agent" aria-label="Agent"></select>
+      <select class="pick" id="capture-model" aria-label="Model" hidden></select>
       <div class="seg" id="capture-effort" role="radiogroup" aria-label="Effort" hidden></div>
     </div>
-  </div>
-  <textarea id="capture-text" rows="3" placeholder="An idea, a link, a question. Enter saves." aria-label="Capture text"></textarea>
-  <div class="capture-foot">
-    <small id="capture-hint">Goes to the daily note for <span id="capture-day"></span>. Your agent processes it later.</small>
-    <button type="button" class="btn peach" id="capture-submit-btn" data-act="capture-save">Save</button>
+    <button type="button" class="btn" id="capture-submit-btn" data-act="capture-save"><span>Save</span> <kbd>↵</kbd></button>
   </div>
 </dialog>
 <dialog id="cmdk" aria-label="Search notes, pages and actions">
