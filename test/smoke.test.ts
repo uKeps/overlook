@@ -1858,6 +1858,9 @@ test("wired notes reach the agent: overlook context, and --new only gives what c
   c.ws.send("clear; overlook context --new; overlook context | wc -l; echo DONE\r");
   await until(c, /DONE\r?\n/);
   expect(c.out).toContain("ship it on monday");
+  // A cleared or compacted conversation lost them: --all (its SessionStart hook) gives everything again, seen or not.
+  c.ws.send("overlook context --all | grep -c monday; echo ALLDONE\r");
+  await until(c, /[\r\n]1\r?\nALLDONE/);
   expect((await post("/api/pty/context", { from: "t_ctx", token: "nope" })).status).toBe(403);
   c.ws.close();
   await post("/api/pty/close", { id: "t_ctx" });

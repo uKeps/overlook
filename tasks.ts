@@ -686,8 +686,10 @@ export function screenText(t: Pty, max = 60) {
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
 export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Notes the user wires to your card are context for your work: `overlook context` prints them.";
-// claude also gets the wired notes on every prompt, through a hook (only new or changed ones; nothing when there are none).
-export const CANVAS_SETTINGS = JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "overlook context --new", timeout: 5 }] }] } });
+// claude also gets the wired notes through hooks: all of them when a conversation starts, resumes, is cleared or compacted
+// (its context lost them), then only new or changed ones with each prompt (nothing when none changed).
+const hook = (command: string) => [{ hooks: [{ type: "command", command, timeout: 5 }] }];
+export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("overlook context --all"), UserPromptSubmit: hook("overlook context --new") } });
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
 type Ctx = { key: string; name: string; text?: string; path?: string };

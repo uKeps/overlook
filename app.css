@@ -1252,7 +1252,7 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 
 /* Maestri-style Canvas Connection Wires & Port */
 .orch-links {
-  /* under the cards (they come after it): a wire runs between cards, never over one */
+  /* the click targets sit under the cards; the wires themselves are .over */
   position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0;
   overflow: visible;
 }
@@ -1264,7 +1264,8 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 .orch-links path.hit {
   fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer;
 }
-.orch-links path.hit:hover + path.ln { stroke: var(--bad, #e06c75); stroke-width: 2; }
+.orch-links.over { z-index: 7; } /* over every card, the active one (6) too */
+.orch-links .del path.ln { stroke: var(--bad, #e06c75); stroke-width: 2; }
 
 /* Wire port: a small dot on the card's right edge, only while the card is hovered or active */
 .orch-port {

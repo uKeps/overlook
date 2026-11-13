@@ -1876,16 +1876,23 @@ function drawLinks(tmp) {
   const plane = $("#orch-plane");
   if (!plane) return;
   drawMap(); // a card moved or resized
-  let svg = plane.querySelector("#orch-links");
-  if (!svg) {
-    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.id = "orch-links"; svg.classList.add("orch-links");
-    plane.prepend(svg);
-  }
+  // Two layers: the wires over the cards (a note dropped on a terminal still shows its wire), and their click targets
+  // under them (a click on a card never removes a wire that crosses it). Hovering a target marks its wire.
+  const layer = (id, top) => {
+    let el = plane.querySelector(`#${id}`);
+    if (!el) {
+      el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      el.id = id; el.classList.add("orch-links");
+      if (top) el.classList.add("over"); else el.onmouseover = el.onmouseout = (e) => svg.querySelector(`g[data-i="${e.target.dataset.i}"]`)?.classList.toggle("del", e.type === "mouseover");
+      top ? plane.append(el) : plane.prepend(el);
+    }
+    return el;
+  };
+  const svg = layer("orch-links", true), hits = layer("orch-wire-hits", false);
   const byKey = new Map(orchPanes.map((p) => [paneKey(p), p]));
   orchLinks = orchLinks.filter((l) => byKey.has(l.a) && byKey.has(l.b));
   const on = orchMode === "free" && !orchMax;
-  svg.style.display = on ? "" : "none";
+  svg.style.display = hits.style.display = on ? "" : "none";
   if (!on) return;
   const curve = (x1, y1, x2, y2) => {
     const dx = x2 - x1;
@@ -1900,19 +1907,37 @@ function drawLinks(tmp) {
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
   const route = (a, b) => {
     const gx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w)), gy = Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h));
-    const across = gx >= gy, fwd = across ? b.x + b.w / 2 >= a.x + a.w / 2 : b.y + b.h / 2 >= a.y + a.h / 2;
-    const mid = across ? (Math.max(a.y, b.y) + Math.min(a.y + a.h, b.y + b.h)) / 2 : (Math.max(a.x, b.x) + Math.min(a.x + a.w, b.x + b.w)) / 2;
-    const end = (p, out) => across
-      ? { x: out ? p.x + p.w : p.x, y: clamp(mid, p.y + 16, p.y + p.h - 16), nx: out ? 1 : -1, ny: 0 }
-      : { x: clamp(mid, p.x + 16, p.x + p.w - 16), y: out ? p.y + p.h : p.y, nx: 0, ny: out ? 1 : -1 };
-    const s = end(a, fwd), t = end(b, !fwd), k = clamp(Math.hypot(t.x - s.x, t.y - s.y) * .4, 24, 160);
-    const f = (n) => Math.round(n);
-    return { s, t, d: `M${f(s.x)},${f(s.y)} C${f(s.x + s.nx * k)},${f(s.y + s.ny * k)} ${f(t.x + t.nx * k)},${f(t.y + t.ny * k)} ${f(t.x)},${f(t.y)}` };
+    const midY = (Math.max(a.y, b.y) + Math.min(a.y + a.h, b.y + b.h)) / 2, midX = (Math.max(a.x, b.x) + Math.min(a.x + a.w, b.x + b.w)) / 2;
+    const at = (p, dir, x = midX, y = midY) => dir === "r" || dir === "l"
+      ? { x: dir === "r" ? p.x + p.w : p.x, y: clamp(y, p.y + 16, p.y + p.h - 16), nx: dir === "r" ? 1 : -1, ny: 0 }
+      : { x: clamp(x, p.x + 16, p.x + p.w - 16), y: dir === "d" ? p.y + p.h : p.y, nx: 0, ny: dir === "d" ? 1 : -1 };
+    let s, t;
+    if (gx < 0 && gy < 0) {
+      // One card over the other: both ends leave by the edge the two cards have closest, a little apart, and the cable
+      // loops outside them.
+      const e = { r: Math.abs(a.x + a.w - b.x - b.w), l: Math.abs(a.x - b.x), d: Math.abs(a.y + a.h - b.y - b.h), u: Math.abs(a.y - b.y) };
+      const dir = Object.keys(e).reduce((m, k) => (e[k] < e[m] ? k : m));
+      t = at(b, dir);
+      const side = dir === "r" || dir === "l", room = side ? a.y + a.h - 16 - t.y : a.x + a.w - 16 - t.x, off = room >= 80 ? 80 : -80;
+      s = side ? at(a, dir, 0, t.y + off) : at(a, dir, t.x + off);
+    } else {
+      // Apart: from the sides facing each other, across the wider gap (a note under a terminal links bottom to top).
+      const dir = gx >= gy ? (b.x + b.w / 2 >= a.x + a.w / 2 ? "r" : "l") : (b.y + b.h / 2 >= a.y + a.h / 2 ? "d" : "u");
+      s = at(a, dir); t = at(b, { r: "l", l: "r", d: "u", u: "d" }[dir]);
+    }
+    // A loose cable, like Maestri's: it leaves along each side, then sags across the line between the ends (down for a
+    // side-by-side pair, out to the right for a stacked one), more the longer it is.
+    const len = Math.hypot(t.x - s.x, t.y - s.y) || 1, k = clamp(len * .3, 40, 120);
+    let px = -(t.y - s.y) / len, py = (t.x - s.x) / len;
+    if (py < -.05 || (Math.abs(py) <= .05 && px < 0)) { px = -px; py = -py; }
+    const sag = clamp(len * .22, 14, 140), f = (n) => Math.round(n);
+    return { s, t, d: `M${f(s.x)},${f(s.y)} C${f(s.x + s.nx * k + px * sag)},${f(s.y + s.ny * k + py * sag)} ${f(t.x + t.nx * k + px * sag)},${f(t.y + t.ny * k + py * sag)} ${f(t.x)},${f(t.y)}` };
   };
-  svg.innerHTML = orchLinks.map((l, i) => {
-      const { s, t, d } = route(box(byKey.get(l.a)), box(byKey.get(l.b)));
-      const hot = hotWires.has([l.a, l.b].sort().join("|"));
-      return `<g class="${hot ? "hot" : ""}"><path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln" d="${d}"/>`
+  const wires = orchLinks.map((l) => route(box(byKey.get(l.a)), box(byKey.get(l.b))));
+  hits.innerHTML = wires.map(({ d }, i) => `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path>`).join("");
+  svg.innerHTML = wires.map(({ s, t, d }, i) => {
+      const hot = hotWires.has([orchLinks[i].a, orchLinks[i].b].sort().join("|"));
+      return `<g data-i="${i}" class="${hot ? "hot" : ""}"><path class="ln" d="${d}"/>`
         + `<circle class="port" cx="${Math.round(s.x)}" cy="${Math.round(s.y)}" r="3"/><circle class="port" cx="${Math.round(t.x)}" cy="${Math.round(t.y)}" r="3"/></g>`;
     }).join("")
     + (tmp ? `<path class="ln tmp" d="${curve(...tmp)}"/>` : "");
