@@ -1252,10 +1252,12 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 
 /* Maestri-style Canvas Connection Wires & Port */
 .orch-links {
-  position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;
+  /* under the cards (they come after it): a wire runs between cards, never over one */
+  position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0;
   overflow: visible;
 }
-.orch-links path.ln { fill: none; stroke: color-mix(in srgb, var(--accent) 75%, transparent); stroke-width: 1.5; }
+.orch-links path.ln { fill: none; stroke: color-mix(in srgb, var(--accent) 70%, transparent); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; vector-effect: non-scaling-stroke; } /* same width on screen at any zoom */
+.orch-links circle.port { fill: var(--accent); opacity: .8; }
 .orch-links path.ln.tmp {
   stroke-dasharray: 5 4; opacity: .85;
 }
@@ -1263,7 +1265,6 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer;
 }
 .orch-links path.hit:hover + path.ln { stroke: var(--bad, #e06c75); stroke-width: 2; }
-#orch-arrow { fill: color-mix(in srgb, var(--accent) 75%, transparent); }
 
 /* Wire port: a small dot on the card's right edge, only while the card is hovered or active */
 .orch-port {
@@ -1876,7 +1877,8 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 
 
 /* a wire an agent just used to hand off: it flows from sender to receiver for a few seconds */
-.orch-links path.ln.hot { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; animation: wire-flow .6s linear infinite; }
+/* (and a note an agent just read: it flows to the agent) */
+.orch-links .hot path.ln { stroke: var(--accent); stroke-width: 2.25; stroke-dasharray: 6 5; animation: wire-flow .6s linear infinite; }
 @keyframes wire-flow { to { stroke-dashoffset: -11; } }
 
 /* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD, the Fleet and the dock stay on it */

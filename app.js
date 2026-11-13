@@ -1228,10 +1228,17 @@ function syncWires(force) {
   const term = (k) => (k.startsWith("terminal:") ? k.slice(9) : "");
   const wires = orchLinks.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
   const names = Object.fromEntries(orchPanes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
-  const body = JSON.stringify({ wires, names });
+  // Sticky and vault notes wired to a terminal (either way round) are context for the agent in it (`overlook context`).
+  const ctx = {};
+  for (const l of orchLinks) for (const [t, o] of [[l.a, l.b], [l.b, l.a]]) {
+    const p = term(t) && orchPanes.find((x) => paneKey(x) === o);
+    if (p?.kind === "sticky") (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), text: p.text || "" });
+    if (p?.kind === "note") (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), path: p.id });
+  }
+  const body = JSON.stringify({ wires, names, ctx });
   if (body === wiresSent && !force) return;
   wiresSent = body; wiresAt = Date.now();
-  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names }).catch(() => { wiresSent = ""; });
+  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx }).catch(() => { wiresSent = ""; });
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
 const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
@@ -1766,7 +1773,7 @@ async function pollHandoffs() {
 
   if (Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
   const r = await api("/api/pty").catch(() => null);
-  const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [`terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
+  const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [h.from.includes(":") ? h.from : `terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
 // The map (bottom right, like Maestri's): the cards as coloured blocks, the screen as a frame, the rest dimmed. Its own
@@ -1886,15 +1893,27 @@ function drawLinks(tmp) {
     const sign = dx >= 0 ? 1 : -1;
     return `M${x1},${y1} C${x1 + cx * sign},${y1} ${x2 - cx * sign},${y2} ${x2},${y2}`;
   };
-  svg.innerHTML = `<defs><marker id="orch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0L10,5L0,10z"/></marker></defs>`
-    + orchLinks.map((l, i) => {
-      const a = byKey.get(l.a), b = byKey.get(l.b);
-      const fromLeft = a.x > b.x + b.w / 2;
-      const x1 = fromLeft ? a.x : a.x + a.w, y1 = a.y + a.h / 2;
-      const x2 = fromLeft ? b.x + b.w : b.x, y2 = b.y + b.h / 2;
-      const d = curve(x1, y1, x2, y2);
+  // A wire leaves each card from the side that faces the other one (across the wider gap: a note under a terminal links
+  // bottom to top), at the point of that side closest to the other card, and bends out along the side: it runs between
+  // the cards, not across them.
+  const box = (p) => ({ x: p.x, y: p.y, w: p.w, h: p.collapsed ? 34 : p.h });
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+  const route = (a, b) => {
+    const gx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w)), gy = Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h));
+    const across = gx >= gy, fwd = across ? b.x + b.w / 2 >= a.x + a.w / 2 : b.y + b.h / 2 >= a.y + a.h / 2;
+    const mid = across ? (Math.max(a.y, b.y) + Math.min(a.y + a.h, b.y + b.h)) / 2 : (Math.max(a.x, b.x) + Math.min(a.x + a.w, b.x + b.w)) / 2;
+    const end = (p, out) => across
+      ? { x: out ? p.x + p.w : p.x, y: clamp(mid, p.y + 16, p.y + p.h - 16), nx: out ? 1 : -1, ny: 0 }
+      : { x: clamp(mid, p.x + 16, p.x + p.w - 16), y: out ? p.y + p.h : p.y, nx: 0, ny: out ? 1 : -1 };
+    const s = end(a, fwd), t = end(b, !fwd), k = clamp(Math.hypot(t.x - s.x, t.y - s.y) * .4, 24, 160);
+    const f = (n) => Math.round(n);
+    return { s, t, d: `M${f(s.x)},${f(s.y)} C${f(s.x + s.nx * k)},${f(s.y + s.ny * k)} ${f(t.x + t.nx * k)},${f(t.y + t.ny * k)} ${f(t.x)},${f(t.y)}` };
+  };
+  svg.innerHTML = orchLinks.map((l, i) => {
+      const { s, t, d } = route(box(byKey.get(l.a)), box(byKey.get(l.b)));
       const hot = hotWires.has([l.a, l.b].sort().join("|"));
-      return `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln ${hot ? "hot" : ""}" d="${d}" marker-end="url(#orch-arrow)"/>`;
+      return `<g class="${hot ? "hot" : ""}"><path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln" d="${d}"/>`
+        + `<circle class="port" cx="${Math.round(s.x)}" cy="${Math.round(s.y)}" r="3"/><circle class="port" cx="${Math.round(t.x)}" cy="${Math.round(t.y)}" r="3"/></g>`;
     }).join("")
     + (tmp ? `<path class="ln tmp" d="${curve(...tmp)}"/>` : "");
 }
@@ -3137,7 +3156,7 @@ async function orchPaint(force) {
       if (!ta) {
         feed.innerHTML = `<div class="orch-sticky-wrap"><textarea class="orch-sticky-input" placeholder="Write a note… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
         ta = feed.querySelector(".orch-sticky-input");
-        ta.oninput = () => { p.text = ta.value; saveCanvas(); };
+        ta.oninput = () => { p.text = ta.value; saveCanvasSoon(); };
       } else if (document.activeElement !== ta) {
         ta.value = p.text || "";
       }

@@ -1841,6 +1841,28 @@ test("maestro: a card opens cards wired to it, through the canvas that shows it"
   await post("/api/pty/close", { id: "t_ma" });
 });
 
+test("wired notes reach the agent: overlook context, and --new only gives what changed", async () => {
+  const c = await openPane("t_ctx");
+  const wire = (ctx: object) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-ctx", wires: [], names: {}, ctx }) });
+  const sticky = { key: "sticky:1", name: "Note", text: "ship it on friday" };
+  await wire({ t_ctx: [sticky, { key: "note:a", name: "HTTP caching", path: "3 Concepts/HTTP caching.md" }, { key: "note:b", name: "x", path: "../package.json" }] });
+  c.ws.send("overlook context --new; echo ONE; overlook context --new; echo TWO\r");
+  await until(c, /TWO\r?\n/);
+  const out = c.out.slice(c.out.lastIndexOf("context --new; echo TWO"));
+  expect(out).toContain("ship it on friday");
+  expect(out).toContain("### Vault note: 3 Concepts/HTTP caching.md");
+  expect(out).not.toContain("\"dependencies\""); // the ../package.json path is not a vault note: never read
+  expect(out.slice(out.indexOf("ONE")).replace(/ONE[\s\S]*?\n/, "")).not.toContain("ship it"); // unchanged: nothing the second time
+  // An edited note comes again; the plain form always shows everything.
+  await wire({ t_ctx: [{ ...sticky, text: "ship it on monday" }] });
+  c.ws.send("clear; overlook context --new; overlook context | wc -l; echo DONE\r");
+  await until(c, /DONE\r?\n/);
+  expect(c.out).toContain("ship it on monday");
+  expect((await post("/api/pty/context", { from: "t_ctx", token: "nope" })).status).toBe(403);
+  c.ws.close();
+  await post("/api/pty/close", { id: "t_ctx" });
+});
+
 test("an agent pane runs the agent inside a shell: the prompt is text, and the shell stays when the agent exits", async () => {
   const init = await (await fetch(`${BASE}/api/settings`)).json();
   // A stand-in TUI that prints its prompt and exits, the way claude does on Ctrl+C or /exit.

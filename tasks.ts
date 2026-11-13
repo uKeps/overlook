@@ -19,7 +19,7 @@ const { SerializeAddon } = xtermSerialize;
 export type Agent = {
   id: string; name: string; process?: string; run?: string[]; api?: "anthropic" | "openai"; url?: string; key?: string;
   model?: string; models?: (string | Model)[]; effort?: string; efforts?: string[]; open?: Record<string, string[]>; tui?: string[];
-  canvas?: string[]; // extra args for a TUI on the canvas, {canvas} = how to reach the cards wired to it (CANVAS_HINT)
+  canvas?: string[]; // extra args for a TUI on the canvas, {canvas} = how to reach the cards wired to it (CANVAS_HINT), {canvas-settings} = the hook that hands it wired notes
 };
 type Model = { id: string; label?: string; efforts?: string[] };
 export type QuotaInfo = { exhausted: boolean; resetsIn?: string; message: string };
@@ -32,7 +32,7 @@ const DEFAULTS: Agent[] = [
     models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }, { id: "haiku", label: "Haiku" }],
     run: ["claude", "-p", "{prompt}", "--session-id", "{session}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "acceptEdits"],
     open: { Terminal: ["{terminal}", "claude", "--resume", "{session}"] }, tui: ["claude", "--model", "{model}", "--effort", "{effort}", "--session-id", "{session}", "{prompt}"],
-    canvas: ["--append-system-prompt", "{canvas}"] },
+    canvas: ["--append-system-prompt", "{canvas}", "--settings", "{canvas-settings}"] },
   { id: "agy", name: "Antigravity", process: "agy", efforts: EFFORTS, effort: "high",
     run: ["agy", "-p", "{prompt}", "--effort", "{effort}", "--mode", "accept-edits", "--output-format", "stream-json", "--print-timeout", "10m"],
     open: { Terminal: ["{terminal}", "agy", "--conversation", "{session}"], "Antigravity app": ["antigravity", "{cwd}"] }, tui: ["agy", "--log-file", "{log}", "-i", "{prompt}"] },
@@ -685,16 +685,22 @@ export function screenText(t: Pty, max = 60) {
 // A wire between two terminal cards on the canvas lets the programs in them talk, both ways: `overlook send <card> "…"`
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
-export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user.";
+export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Notes the user wires to your card are context for your work: `overlook context` prints them.";
+// claude also gets the wired notes on every prompt, through a hook (only new or changed ones; nothing when there are none).
+export const CANVAS_SETTINGS = JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "overlook context --new", timeout: 5 }] }] } });
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
-const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; at: number }>(), sent = new Map<string, number[]>();
+type Ctx = { key: string; name: string; text?: string; path?: string };
+const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; ctx: Map<string, Ctx[]>; at: number }>(), sent = new Map<string, number[]>();
 export const handoffs: { from: string; to: string; at: number }[] = [];
 const pair = (a: string, b: string) => [a, b].sort().join("|");
 const live = () => [...canvases.values()].filter((c) => Date.now() - c.at < 90_000);
-export function setWires(client: unknown, list: unknown, titles: unknown) {
+export function setWires(client: unknown, list: unknown, titles: unknown, ctx?: unknown) {
   if (typeof client !== "string" || !/^[\w-]{1,64}$/.test(client)) return false;
-  const c = { wires: new Set<string>(), names: new Map<string, string>(), at: Date.now() };
+  const c = { wires: new Set<string>(), names: new Map<string, string>(), ctx: new Map<string, Ctx[]>(), at: Date.now() };
+  if (ctx && typeof ctx === "object") for (const [id, items] of Object.entries(ctx)) if (Array.isArray(items))
+    c.ctx.set(id, items.filter((i) => typeof i?.key === "string").slice(0, 8).map((i) => ({ key: i.key.slice(0, 120), name: String(i.name ?? "").slice(0, 80),
+      ...(typeof i.path === "string" ? { path: i.path } : { text: String(i.text ?? "").slice(0, 8000) }) })));
   if (Array.isArray(list)) for (const w of list) if (Array.isArray(w) && typeof w[0] === "string" && typeof w[1] === "string") c.wires.add(pair(w[0], w[1]));
   if (titles && typeof titles === "object") for (const [k, v] of Object.entries(titles)) if (typeof v === "string") c.names.set(k, v.slice(0, 80));
   canvases.set(client, c);
@@ -746,6 +752,24 @@ export function ptySend(from: unknown, token: unknown, to: unknown, text: unknow
   if (handoffs.length > 50) handoffs.shift();
   return true;
 }
+// Notes wired to a pane (stickies, vault notes) are context for its agent: `overlook context` prints them, and claude's
+// hook runs `overlook context --new` on every prompt, which gives only what changed since it last got them (so an
+// unchanged note costs no tokens). The wire flows on the canvas when a note reaches the agent.
+const seenCtx = new Map<string, Map<string, number | bigint>>();
+export function ptyContextItems(from: unknown, token: unknown) {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  const all = live().flatMap((c) => c.ctx.get(me.id) ?? []);
+  return { id: me.id, items: all.filter((x, i) => all.findIndex((y) => y.key === x.key) === i) };
+}
+export function ptyContextGive(id: string, items: (Ctx & { text: string })[], fresh: boolean) {
+  const seen = seenCtx.get(id) ?? new Map<string, number | bigint>(), now = Date.now();
+  seenCtx.set(id, seen);
+  const out = fresh ? items.filter((i) => seen.get(i.key) !== Bun.hash(i.text)) : items;
+  for (const i of out) { seen.set(i.key, Bun.hash(i.text)); handoffs.push({ from: i.key, to: id, at: now }); }
+  handoffs.splice(0, Math.max(0, handoffs.length - 50));
+  return out.map(({ name, path, text }) => ({ name, path, text }));
+}
 // Spawning (the maestro): an agent in a card opens new cards wired to its own (`overlook spawn` / `overlook note`). The
 // cards live in the browser, so a request waits here until the canvas showing the caller takes it (it polls every 2 s),
 // adds the card and the wire, and says how it went on its next poll; the caller hears back within MAX_WAIT or is told
@@ -795,7 +819,7 @@ export function takeSpawns(panes: unknown, done: unknown) {
   return mine.map(({ done: _, taken: __, at: ___, ...s }) => s);
 }
 // A TUI on the canvas learns how to reach its wired cards (agents with a `canvas` template, e.g. claude's system prompt).
-export const withCanvas = (a: Agent, argv: string[]) => [...argv, ...(a.canvas ?? []).map((x) => x.replaceAll("{canvas}", CANVAS_HINT))];
+export const withCanvas = (a: Agent, argv: string[]) => [...argv, ...(a.canvas ?? []).map((x) => x.replaceAll("{canvas}", CANVAS_HINT).replaceAll("{canvas-settings}", CANVAS_SETTINGS))];
 
 export const openers = (a: Agent) => Object.entries(a.open ?? {}).map(([label, cmd]) => ({ label, session: cmd.some((x) => x.includes("{session}")) }));
 // Launches detached; the caller has already validated session and cwd.
