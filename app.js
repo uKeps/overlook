@@ -1180,7 +1180,11 @@ const bgEntry = (k) => CANVAS_BGS.find(([id]) => id === k) || CANVAS_BGS[0];
 let orchRole = "", orchCwd = "", orchMode = "free", orchDir = "cols", orchRatio = 50, orchBg = "dots",
   orchPanX = 24, orchPanY = CANVAS_TOP, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
   orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchMapOpen = true, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
-let cwdOpen = false, cwdBrowse = "~/dev", cwdHidden = false, cwdQuery = "", cwdData = null, cwdPaneKey = "";
+let cwdOpen = false, cwdBrowse = "~/dev", cwdQuery = "", cwdData = null, cwdPaneKey = "", cwdLaunch = null, cwdItems = [], cwdIdx = 0, cwdStart = "";
+// Folders picked in the folder popover, latest first: they head its Recent list.
+const RECENT_CWDS = "overlook.recent-cwds";
+const recentCwds = () => { try { return JSON.parse(localStorage.getItem(RECENT_CWDS) || "[]"); } catch { return []; } };
+orchCwd = recentCwds()[0] || ""; // Ctrl+Alt+N and the task bar start in the last folder you picked
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
 const CANVAS_KEY = "overlook.canvas", CANVAS_BG_KEY = "overlook.canvas-bg", PANE_MIME = "text/x-overlook-pane";
@@ -1542,9 +1546,11 @@ async function deleteSelectedPanes() {
 }
 
 
-async function loadCwdBrowser(path = cwdBrowse) {
+// `start`: the popover is opening here (an empty field, Recent shown while you stay in this folder).
+async function loadCwdBrowser(path = cwdBrowse, start = false) {
   cwdBrowse = path || "~/dev";
-  cwdData = await api(`/api/dirs?path=${encodeURIComponent(cwdBrowse)}&hidden=${cwdHidden ? "1" : "0"}`).catch(() => null);
+  cwdData = await api(`/api/dirs?path=${encodeURIComponent(cwdBrowse)}`).catch(() => null);
+  if (start) { cwdStart = cwdData?.short ?? ""; cwdQuery = ""; cwdIdx = 0; const inp = $("#cwd-q"); if (inp) inp.value = ""; }
   paintCwdPop();
 }
 let lastCwdBtn = null;
@@ -1555,8 +1561,8 @@ function placeCwdPop(btn = lastCwdBtn) {
   if (pop.parentElement !== document.body) document.body.appendChild(pop);
   const target = btn || $("#run-cwd-btn");
   if (!target) return;
-  const br = target.getBoundingClientRect();
-  const w = Math.min(540, window.innerWidth - 24);
+  const br = target.getBoundingClientRect?.() ?? { left: target.x, right: target.x, top: target.y, bottom: target.y, width: 0 };
+  const w = Math.min(440, window.innerWidth - 24);
   pop.style.width = `${w}px`;
   const h = pop.offsetHeight || 340;
   let left = br.left + (br.width / 2) - (w / 2);
@@ -1572,57 +1578,62 @@ function placeCwdPop(btn = lastCwdBtn) {
   pop.style.bottom = "auto";
   pop.style.zIndex = "999";
 }
+// One field, one list: recent folders (where you start), the folders here, the vault. ↑/↓ walk it, Enter picks,
+// Tab goes into a folder, Backspace on an empty field goes up, a path (~/…, /…) + Enter goes there.
 function paintCwdPop() {
   const pop = $("#cwd-pop");
   if (!pop) return;
   pop.hidden = !cwdOpen;
+  if (!cwdOpen) cwdLaunch = null;
   if (!cwdOpen || !cwdData) return;
   requestAnimationFrame(() => placeCwdPop(lastCwdBtn));
-  const q = fold(cwdQuery.trim());
-  const dirs = (cwdData.dirs || []).filter((d) => !q || fold(d.name).includes(q) || fold(d.short).includes(q));
-  const recent = new Set(["", ...(cwdData.roots || []).map((r) => r.short)]);
-  for (const a of S.agents || []) if (a.cwd) recent.add(a.cwd);
-  for (const b of S.background || []) if (b.cwd) recent.add(b.cwd);
-  for (const t of S.tasks || []) if (t.cwd) recent.add(shortCwd(t.cwd));
+  const q = fold(cwdQuery.trim()), hit = (...t) => !q || t.some((x) => fold(x).includes(q));
+  const base = (c) => c.split("/").filter(Boolean).pop() || c, dir = (c) => c.replace(/\/[^/]+\/?$/, "");
+  const atStart = cwdData.short === cwdStart;
+  const recent = atStart ? [...new Set([...recentCwds(), ...[...(S.agents || []), ...(S.background || []), ...(S.tasks || [])].map((x) => shortCwd(x.cwd))])].filter((c) => c && c !== "~" && c !== cwdData.short && hit(c)).slice(0, 5) : [];
+  cwdItems = [
+    ...(!atStart && !q ? [{ ic: "check", name: "This folder", sub: cwdData.short, path: cwdData.short }] : []),
+    ...recent.map((c) => ({ ic: "clock", name: base(c), sub: dir(c), path: c })),
+    ...(cwdData.dirs || []).filter((d) => !recent.includes(d.short) && hit(d.name)).map((d) => ({ ic: "folder", name: d.name, path: d.short, nav: d.path })),
+    ...(hit("vault", D.vault || "") ? [{ ic: "book", name: "Vault", sub: D.vault, path: "" }] : []),
+  ];
+  cwdIdx = Math.min(cwdIdx, Math.max(0, cwdItems.length - 1));
   if (!pop.querySelector("#cwd-q")) {
-    pop.innerHTML = `<div class="cwd-top">
-        ${icon("search", 15)}<input id="cwd-q" type="text" placeholder="Filter, or type a path (~/dev, /mnt) and press Enter" autocomplete="off" spellcheck="false" aria-label="Filter folders or type a path">
-        <button type="button" class="cwd-x" data-act="cwd-close" title="Close (Esc)" aria-label="Close">${icon("x", 14)}</button>
-      </div>
-      <div class="cwd-roots" id="cwd-roots"></div>
-      <div class="cwd-cur" id="cwd-cur"></div>
-      <div class="cwd-list" id="cwd-list"></div>`;
+    pop.innerHTML = `<input id="cwd-q" class="cwd-q" type="text" autocomplete="off" spellcheck="false" aria-label="Filter folders or type a path">
+      <div class="cwd-list" id="cwd-list" role="listbox"></div>
+      <div class="cwd-foot" id="cwd-foot"></div>`;
     const inp = pop.querySelector("#cwd-q");
-    inp.oninput = () => { cwdQuery = inp.value; paintCwdPop(); };
+    inp.oninput = () => { cwdQuery = inp.value; cwdIdx = 0; paintCwdPop(); };
     inp.onkeydown = (e) => {
+      const it = cwdItems[cwdIdx], v = inp.value.trim();
       if (e.key === "Escape") { e.preventDefault(); cwdOpen = false; paintCwdPop(); }
-      if (e.key === "Enter") {
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        const v = inp.value.trim();
-        if (v.startsWith("/") || v.startsWith("~")) { cwdQuery = ""; inp.value = ""; loadCwdBrowser(v); }
-        else if (dirs[0]) pickCwd(dirs[0].short);
-      }
+        cwdIdx = (cwdIdx + (e.key === "ArrowDown" ? 1 : -1) + cwdItems.length) % (cwdItems.length || 1);
+        paintCwdPop(); $("#cwd-list .on")?.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (v.startsWith("/") || v.startsWith("~")) cwdGo(v);
+        else if (it) pickCwd(it.path);
+      } else if (e.key === "Tab" && it?.nav) { e.preventDefault(); cwdGo(it.nav); }
+      else if (e.key === "Backspace" && !inp.value && cwdData.parent) { e.preventDefault(); cwdGo(cwdData.parent); }
     };
   }
-  // Places: the vault (picks it at once) and the roots to browse; the one you're browsing is lit.
-  $("#cwd-roots").innerHTML = `<button type="button" class="cwd-chip" data-act="cwd-pick" data-path="" title="Use the vault (${esc(D.vault)})">Vault</button>` +
-    (cwdData.roots || []).filter((r) => r.label !== "Vault").map((r) =>
-      `<button type="button" class="cwd-chip ${cwdData.short === r.short ? "on" : ""}" data-act="cwd-nav" data-path="${esc(r.path)}">${esc(r.label)}</button>`).join("");
-  $("#cwd-cur").innerHTML = `<div class="cwd-path">
-      ${cwdData.parent ? `<button type="button" class="cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Parent folder" aria-label="Parent folder">${icon("l", 15)}</button>` : ""}
-      <span title="${esc(cwdData.short)}">${esc(cwdData.short)}</span>
-    </div>
-    <button type="button" class="cwd-chip ${cwdHidden ? "on" : ""}" data-act="cwd-hidden" title="Show or hide dot-folders">Hidden</button>
-    <button type="button" class="btn peach cwd-use" data-act="cwd-pick" data-path="${esc(cwdData.short)}">Use this folder</button>`;
-  // A row opens the folder; "Use" (on hover) picks it without going in.
-  $("#cwd-list").innerHTML = dirs.map((d) => `<div class="cwd-row">
-      <button type="button" class="cwd-open" data-act="cwd-nav" data-path="${esc(d.path)}" title="Open ${esc(d.short)}">
-        ${icon("folder", 15)}<b>${esc(d.name)}</b>${d.git ? `<span class="cwd-git">git</span>` : ""}
-      </button>
-      <button type="button" class="cwd-sel" data-act="cwd-pick" data-path="${esc(d.short)}" title="Use ${esc(d.short)}">Use</button>
-    </div>`).join("") || `<p class="cwd-empty">No folders matching "${esc(cwdQuery)}" in ${esc(cwdData.short)}.</p>`;
+  pop.querySelector("#cwd-q").placeholder = cwdLaunch ? `Open ${cwdLaunch.name} in…` : "Choose a folder…";
+  $("#cwd-list").innerHTML = cwdItems.map((it, i) => `<div class="cwd-row ${i === cwdIdx ? "on" : ""}" role="option" aria-selected="${i === cwdIdx}">
+      <button type="button" class="cwd-open" data-act="cwd-pick" data-path="${esc(it.path)}" title="${esc(it.path || D.vault)}">${icon(it.ic, 15)}<b>${esc(it.name)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ""}</button>
+      ${it.nav ? `<button type="button" class="cwd-in" data-act="cwd-nav" data-path="${esc(it.nav)}" title="Go inside (Tab)" aria-label="Go inside ${esc(it.name)}">${icon("r", 14)}</button>` : ""}
+    </div>`).join("") || `<p class="cwd-empty">Nothing matches "${esc(cwdQuery)}". Type a path, like ~/projects, and press Enter.</p>`;
+  $("#cwd-foot").innerHTML = `${cwdData.parent ? `<button type="button" class="cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Up (Backspace)" aria-label="Parent folder">${icon("l", 13)}</button>` : ""}<span class="cwd-where">${esc(cwdData.short)}</span><span class="cwd-keys">↵ open · Tab inside · Esc</span>`;
+}
+function cwdGo(path) {
+  cwdQuery = ""; cwdIdx = 0;
+  const inp = $("#cwd-q"); if (inp) { inp.value = ""; inp.focus(); }
+  loadCwdBrowser(path);
 }
 function pickCwd(val) {
+  const launch = cwdLaunch;
+  if (val) try { localStorage.setItem(RECENT_CWDS, JSON.stringify([val, ...recentCwds().filter((c) => c !== val)].slice(0, 8))); } catch {}
   if (cwdPaneKey) {
     const p = orchPanes.find((x) => paneKey(x) === cwdPaneKey);
     if (p) { p.cwd = val; orchSigs.delete(cwdPaneKey); }
@@ -1635,6 +1646,15 @@ function pickCwd(val) {
   cwdOpen = false; cwdPaneKey = "";
   paintCwdPop();
   orchPaint(true);
+  if (launch) newAgentTerm(launch.agent, launch.at);
+}
+// A new agent from a menu asks where it works first (Shift+click, or Ctrl+Alt+N, skips this: the last folder).
+// `from`: the button the menu came from, or the screen point of a right-click.
+async function askAgentCwd(r, at, from) {
+  cwdPaneKey = ""; cwdLaunch = { agent: r.id, name: r.name, at }; lastCwdBtn = from; cwdOpen = true;
+  await loadCwdBrowser(orchCwd.replace(/\/[^/]+\/?$/, "") || "~/dev", true); // the folder around the last one: its siblings
+  placeCwdPop(from);
+  $("#cwd-q")?.focus();
 }
 
 function ensurePaneRect(p, idx = 0) {
@@ -2680,7 +2700,7 @@ function paintHud(hud, isFree) {
   const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
   const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
     + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note")
-    + b("orch-vault-note", "book", "Open a vault note") + b("cwd-open", "folder", `Folder for new cards: ${cwdLabel(orchCwd)}`)
+    + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
     + (isFree ? "" : sep + b("orch-mode", "grid", "Canvas: free windows, pan and zoom", 'data-m="free"')
@@ -2722,7 +2742,7 @@ function ctxBuild(items) {
     b.type = "button"; b.className = `ctx-item${it.danger ? " danger" : ""}`; b.disabled = !!it.off; b.setAttribute("role", "menuitem");
     b.innerHTML = `<span class="ctx-ic">${it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
     if (!it.sub) {
-      b.onclick = (e) => { e.stopPropagation(); ctxClose(); it.run?.(); };
+      b.onclick = (e) => { e.stopPropagation(); ctxClose(); it.run?.(e); };
       box.appendChild(b);
       continue;
     }
@@ -2801,7 +2821,7 @@ const canvasPt = (cx, cy) => {
   const r = $("#orch-canvas")?.getBoundingClientRect();
   return r && orchMode === "free" && !orchMax ? { x: (cx - r.left - orchPanX) / orchZoom, y: (cy - r.top - orchPanY) / orchZoom } : null;
 };
-const agentItems = (at) => [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => ({ label: r.name, ic: "agents", run: () => newAgentTerm(r.id, at) })),
+const agentItems = (at, from) => [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => ({ label: r.name, ic: "agents", run: (e) => (e?.shiftKey ? newAgentTerm(r.id, at) : askAgentCwd(r, at, from)) })),
   "-", { label: "Shell", ic: "terminal", run: () => newTermPane(undefined, at) }];
 const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));
 const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
@@ -2881,7 +2901,7 @@ function renamePane(p) {
 function canvasMenu(cx, cy) {
   const at = canvasPt(cx, cy), free = orchMode === "free" && !orchMax, any = orchPanes.length > 0;
   ctxMenu(cx, cy, [
-    { label: "New agent", ic: "agents", sub: agentItems(at) },
+    { label: "New agent", ic: "agents", sub: agentItems(at, { x: cx, y: cy }) },
     { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => newTermPane(undefined, at) },
     { label: "New note", ic: "notes", run: () => addSticky(at) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
@@ -3883,14 +3903,13 @@ const ACTIONS = {
     lastCwdBtn = el;
     cwdOpen = true;
     const cur = pane ? (orchPanes.find((p) => paneKey(p) === pane)?.cwd ?? orchCwd) : orchCwd;
-    await loadCwdBrowser(cur || "~/dev");
+    await loadCwdBrowser(cur || "~/dev", true);
     placeCwdPop(el);
     $("#cwd-q")?.focus();
   },
   "cwd-close": () => { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); },
-  "cwd-nav": async (el) => { await loadCwdBrowser(el.dataset.path ?? "~/dev"); },
+  "cwd-nav": (el) => cwdGo(el.dataset.path ?? "~/dev"),
   "cwd-pick": (el) => pickCwd(el.dataset.path ?? ""),
-  "cwd-hidden": async () => { cwdHidden = !cwdHidden; await loadCwdBrowser(cwdBrowse); },
   "orch-role": (el) => {
     orchRole = el.dataset.role;
     el.parentElement.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === el));
@@ -4048,7 +4067,7 @@ const ACTIONS = {
     agentsBody();
     if (orchMode === "free" && orchPanX === 24 && orchPanY === CANVAS_TOP && orchZoom === 1) fitCanvasView();
   },
-  "orch-new": (el) => (el?.dataset?.agent ? newAgentTerm(el.dataset.agent) : ctxAt(el, agentItems())),
+  "orch-new": (el) => (el?.dataset?.agent ? newAgentTerm(el.dataset.agent) : ctxAt(el, agentItems(undefined, el))),
   "orch-bg-menu": (el) => ctxAt(el, bgItems()),
   "orch-bg": (el) => setCanvasBg(el.dataset.bg || el.dataset.v),
   "set-canvas-bg": (el) => { setCanvasBg(el.dataset.v); if (route().pg === "settings") settingsPage(); },
