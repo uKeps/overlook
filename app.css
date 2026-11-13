@@ -2005,9 +2005,9 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 .orch-links path.ln.hot { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; animation: wire-flow .6s linear infinite; }
 @keyframes wire-flow { to { stroke-dashoffset: -11; } }
 
-/* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD and the Fleet stay on it */
+/* Full screen canvas (Ctrl+Alt+Z): only the canvas, edge to edge; the HUD, the Fleet and the dock stay on it */
 body.canvas-full { padding: 0; }
-body.canvas-full :is(.top, .cal, #dockwrap) { display: none !important; }
+body.canvas-full :is(.top, .cal) { display: none !important; }
 body.canvas-full main { max-width: none; margin: 0; padding: 0; }
 body.canvas-full .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
 body.canvas-full .orch-canvas { border-radius: 0; border: 0; }
@@ -2358,9 +2358,9 @@ html[data-ui="minimal"] .top .search-btn.btn.glass:hover { border-color: color-m
 html[data-ui="minimal"] .top .search-btn kbd { margin-left: auto; display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 6px; font-size: 11px; }
 html[data-ui="minimal"] .top .crumb { order: -2; }
 html[data-ui="minimal"] .clock span { font: 500 12.5px var(--body); color: var(--faint); }
-html[data-ui="minimal"] .top .cap-btn { height: 34px; padding: 0 10px; gap: 7px; border-radius: 9px; color: var(--muted); }
-html[data-ui="minimal"] .top .cap-btn svg { color: var(--accent); }
-html[data-ui="minimal"] .top .cap-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+html[data-ui="minimal"] .top :is(.cap-btn, .full-btn) { height: 34px; padding: 0 10px; gap: 7px; border-radius: 9px; color: var(--muted); }
+html[data-ui="minimal"] .top .cap-btn svg, .full-btn.on { color: var(--accent); }
+html[data-ui="minimal"] .top :is(.cap-btn, .full-btn):hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 html[data-ui="minimal"] .top .cap-btn kbd { border: 0; }
 @media (max-width: 640px) { html[data-ui="minimal"] .top .search-btn.btn.glass { position: static; transform: none; width: auto; margin: 0 0 0 auto; padding: 0 8px; border: 0; } html[data-ui="minimal"] .top .search-btn kbd { display: none; } html[data-ui="minimal"] .top .cap-btn span { display: none; } }
 /* the week strip: compact days on the left, the month on the right, no box (not even the theme's glass band) */

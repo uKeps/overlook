@@ -160,6 +160,15 @@ function topBar() {
     } catch {}
   }
 }
+// ←/→: the previous or next page in the dock's order (its apps included), wrapping; a note, task or agent page counts as its section.
+function dockStep(d) {
+  const links = [...document.querySelectorAll("#dock a[href]")], { pg } = route();
+  if (!links.length) return;
+  const section = { n: "notes", w: "notes", a: "agents", t: "agents", s: "services", images: "services" }[pg];
+  let i = links.findIndex((a) => a.classList.contains("on"));
+  if (i < 0) i = Math.max(0, links.findIndex((a) => a.getAttribute("href") === `#/${section}`));
+  location.hash = links[(i + d + links.length) % links.length].getAttribute("href");
+}
 
 // ---------------------------------------------------------------- Calendar: the week strip at the top, or a floating pill
 // Items come from Calendar.md (D.calendar) and schedule.json (S.schedule); reviews and daily notes add their own dots.
@@ -2023,6 +2032,20 @@ function blurCanvasFocus(keepSel = false) {
   orchActive = "";
   if (!keepSel && orchSelected.size) { orchSelected.clear(); updateSelectionUI(); }
 }
+// The whole app in the browser's full screen (no tabs or address bar) on any page: F or the header button.
+// It survives page changes; the canvas's and an embedded app's full screen leave it on when they close.
+// Esc stays with the page (dialogs, terminals); F, the button or holding Esc leave it.
+let appFull = false;
+function appFullToggle(on = !document.fullscreenElement) {
+  appFull = on;
+  if (on) document.documentElement.requestFullscreen?.().then(() => navigator.keyboard?.lock?.(["Escape"])?.catch?.(() => {})).catch(() => { appFull = false; });
+  else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+}
+document.addEventListener("fullscreenchange", () => {
+  const on = !!document.fullscreenElement, b = $("#full-btn");
+  if (!on) { appFull = false; navigator.keyboard?.unlock?.(); }
+  if (b) { b.classList.toggle("on", on); b.title = on ? "Leave full screen (F)" : "Full screen (F)"; }
+});
 function canvasFull(on = !document.body.classList.contains("canvas-full")) {
   document.body.classList.toggle("canvas-full", on);
   if (on) {
@@ -2030,7 +2053,7 @@ function canvasFull(on = !document.body.classList.contains("canvas-full")) {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen?.().then(() => navigator.keyboard?.lock?.(["Escape"])?.catch?.(() => {})).catch(() => {});
     }
-  } else {
+  } else if (!appFull) {
     navigator.keyboard?.unlock?.();
     if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   }
@@ -3522,7 +3545,7 @@ function services() {
 function svcFull(on = !document.body.classList.contains("svc-full")) {
   document.body.classList.toggle("svc-full", on);
   if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
-  if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  if (!on && document.fullscreenElement && !appFull) document.exitFullscreen?.().catch(() => {});
   const btn = $('[data-act="svc-full"]');
   if (btn) {
     btn.classList.toggle("on", on);
@@ -3792,7 +3815,8 @@ function render() {
   if (document.activeElement?.closest?.("#dockwrap, .crumb")) document.activeElement.blur(); // a floating dock folds after you pick a page; no ring left on the name
   graphStop?.(); graphStop = null; clearInterval(orchTimer);
   const { pg, arg } = route();
-  if (pg !== "agents" && document.body.classList.contains("canvas-full")) canvasFull(false); // full screen is the canvas's
+  // the canvas's layout stays on the canvas; leaving it from the dock keeps the browser in full screen
+  if (pg !== "agents" && document.body.classList.contains("canvas-full")) { appFull ||= !!document.fullscreenElement; canvasFull(false); }
   if (pg !== "s" && document.body.classList.contains("svc-full")) svcFull(false);
   $("#crumb").textContent = pg === "a" ? S.background?.find((x) => x.key === arg)?.title || AGENT_NAME[S.agents.find((x) => x.key === arg)?.name]?.[0] || "Agent" : pg === "s" ? S.services.find((s) => s.id === arg)?.name || "Service" : PAGES[pg][1];
   document.body.classList.toggle("home", !pg);
@@ -4099,6 +4123,7 @@ const ACTIONS = {
     orchPaint(true);
   },
   "canvas-full": () => canvasFull(),
+  "app-full": () => appFullToggle(),
   "orch-collapse": (el) => {
     const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
     if (!p) return;
@@ -4343,6 +4368,15 @@ document.addEventListener("keydown", (e) => {
       return;
     }
   }
+  // ←/→ walk the dock's pages, also from an empty text field (Home and Notes focus theirs on open; there the arrows move
+  // nothing), never from the canvas's fields or a terminal. The Classic Home's carousel keeps them for its cards.
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !document.querySelector("dialog[open]")
+    && (!e.target.closest("input, textarea, select, [contenteditable]") || (e.target.matches("textarea, input:is(:not([type]), [type=text], [type=search])") && !e.target.value && !e.target.closest(".orch-shell")))) {
+    e.preventDefault();
+    const d = e.key === "ArrowLeft" ? -1 : 1;
+    if (!route().pg && $("#car")) move(d); else dockStep(d);
+    return;
+  }
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
   if (pg === "agents" && orchMode === "free" && !orchMax) {
@@ -4353,9 +4387,8 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }
   if (e.key === "v" || e.key === "V") { e.preventDefault(); ACTIONS["ui-toggle"](); }
+  if (e.key === "f" || e.key === "F") { e.preventDefault(); appFullToggle(); }
   if (e.key === "/" && pg !== "agents") { e.preventDefault(); cmdkOpen(); }
-  if (!pg && (e.key === "ArrowLeft" || (uiMode === "minimal" && e.key === "ArrowUp"))) { e.preventDefault(); move(-1); }
-  if (!pg && (e.key === "ArrowRight" || (uiMode === "minimal" && e.key === "ArrowDown"))) { e.preventDefault(); move(1); }
   if (pg === "graph" && route().arg) {
     if (e.key === "1" || e.key === "2" || e.key === "3") { gDepth = +e.key; gImpact = false; graph(route().arg); }
     if (e.key === "Escape") location.hash = "#/graph";
