@@ -1430,6 +1430,13 @@ async function mountTerminalPane(card, p) {
       st.term.onTitleChange((t) => { if (!t) return; st.title = t; syncWires(); });
       // Ctrl+Shift+C / V copy and paste (Ctrl+C stays the shell's interrupt); Ctrl/Alt + wheel zooms the canvas.
       st.term.attachCustomKeyEventHandler((e) => {
+        // Delete closes the card on the free canvas (after the confirm), even while typing in it: the shell loses forward-delete.
+        if (e.type === "keydown" && e.key === "Delete" && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && orchMode === "free" && !orchMax) {
+          const k = paneKey(p);
+          if (!orchSelected.has(k)) { orchSelected.clear(); orchSelected.add(k); updateSelectionUI(); }
+          deleteSelectedPanes();
+          return false;
+        }
         if (e.type !== "keydown" || !e.ctrlKey || !e.shiftKey || e.altKey) return true;
         if (e.code === "KeyC") { const sel = st.term.getSelection(); if (sel) navigator.clipboard?.writeText(sel).catch(() => {}); return false; }
         if (e.code === "KeyV") { navigator.clipboard?.readText().then((t) => t && st.term.paste(t)).catch(() => {}); return false; }
@@ -1489,12 +1496,19 @@ function updateSelectionUI() {
   if (delBtn) delBtn.hidden = orchSelected.size < 2;
 }
 // Closing a terminal pane stops what runs in it (a shell, a claude session mid-turn): ask first.
-function closeLiveOk(keys) {
+async function closeLiveOk(keys) {
   const n = keys.map((k) => orchPanes.find((p) => paneKey(p) === k)).filter((p) => p?.kind === "terminal").length; // its PTY may run with the socket down
-  return !n || confirm(n === 1 ? "Close this terminal? What runs in it will be stopped." : `Close ${n} terminals? What runs in them will be stopped.`);
+  return !n || askOk(n === 1 ? "Close this terminal?" : `Close ${n} terminals?`, `What runs in ${n === 1 ? "it" : "them"} will be stopped.`, n === 1 ? "Close terminal" : `Close ${n} terminals`);
 }
-function deleteSelectedPanes() {
-  if (!orchSelected.size || !closeLiveOk([...orchSelected])) return;
+// The app's own confirm: the browser's confirm() is unstyled and drops full screen. Enter confirms, Esc cancels.
+function askOk(msg, sub, ok) {
+  const d = $("#ask");
+  $("#ask-msg").textContent = msg; $("#ask-sub").textContent = sub; $("#ask-ok").textContent = ok;
+  d.returnValue = ""; d.showModal(); $("#ask-ok").focus();
+  return new Promise((res) => d.addEventListener("close", () => res(d.returnValue === "ok"), { once: true }));
+}
+async function deleteSelectedPanes() {
+  if (!orchSelected.size || !(await closeLiveOk([...orchSelected]))) return;
   const count = orchSelected.size;
   for (const k of orchSelected) {
     const pane = orchPanes.find((p) => paneKey(p) === k);
@@ -2221,6 +2235,8 @@ function bindPaneDragResize(card, p) {
     const startMove = (e) => {
       if (orchMode !== "free" || orchMax || e.button !== 0 || e.target.closest("button, a, select, input")) return;
       e.preventDefault();
+      // preventDefault keeps focus where it was: a terminal typed into before would still take Delete, not the canvas.
+      if (document.activeElement?.closest?.(".orch-pane")) document.activeElement.blur();
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
       const curKey = paneKey(p);
       if (e.shiftKey || e.metaKey || e.ctrlKey) {
@@ -3832,7 +3848,7 @@ const ACTIONS = {
   "card-show": (el) => { rvShown = el.dataset.id; rvRedraw(); },
   "card-yes": (el) => cardDo("answer", el.dataset.id, true), "card-no": (el) => cardDo("answer", el.dataset.id, false), "card-rm": (el) => cardDo("remove", el.dataset.id),
   trash: async (el) => {
-    if (!confirm(`Delete "${el.dataset.p}"? It goes to the vault's .trash folder.`)) return;
+    if (!(await askOk(`Delete "${el.dataset.p}"?`, "It goes to the vault's .trash folder.", "Delete note"))) return;
     try { await api("/api/trash", { path: el.dataset.p }); } catch (e) { return toast(e.message); }
     D = await api("/api"); toast("Moved to .trash"); location.hash = "#/notes";
   },
@@ -4130,9 +4146,9 @@ const ACTIONS = {
     orchSigs.clear();
     agentsBody();
   },
-  "orch-unpin": (el) => {
+  "orch-unpin": async (el) => {
     const k = el.dataset.key;
-    if (!closeLiveOk([k])) return;
+    if (!(await closeLiveOk([k]))) return;
     orchMax = "";
     const pane = orchPanes.find((p) => paneKey(p) === k);
     if (pane && pane.kind === "terminal") termClose(pane.id);
@@ -4148,7 +4164,7 @@ const ACTIONS = {
   "orch-dismiss": async (el) => {
     const kind = el.dataset.kind, id = el.dataset.id;
     if (!kind || !id) return;
-    if (kind === "task" && !confirm("Delete this task and its history from Overlook?")) return;
+    if (kind === "task" && !(await askOk("Delete this task?", "Its history leaves Overlook too.", "Delete task"))) return;
     const targetKey = `${kind}:${id}`;
     orchSelected.delete(targetKey);
     updateSelectionUI();
@@ -4320,7 +4336,7 @@ document.addEventListener("keydown", (e) => {
       return;
     }
   }
-  if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax) {
+  if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax && !document.querySelector("dialog[open]")) {
     if (!e.target.closest("input, textarea, select, [contenteditable]")) {
       e.preventDefault();
       deleteSelectedPanes();
