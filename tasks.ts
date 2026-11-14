@@ -708,7 +708,8 @@ export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. C
 const hook = (command: string) => [{ hooks: [{ type: "command", command, timeout: 5 }] }];
 // Its status line goes through `overlook statusline`, which keeps the account's limits for the usage panel and then runs
 // the user's own status line.
-export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("overlook context --all"), UserPromptSubmit: hook("overlook context --new") }, statusLine: { type: "command", command: "overlook statusline" } });
+// refreshInterval: Claude Code redraws its status line only on activity; every 60 s too, so idle agents keep the usage panel current.
+export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("overlook context --all"), UserPromptSubmit: hook("overlook context --new") }, statusLine: { type: "command", command: "overlook statusline", refreshInterval: 60 } });
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
 type Ctx = { key: string; name: string; text?: string; path?: string; term?: string; browser?: string; url?: string };
