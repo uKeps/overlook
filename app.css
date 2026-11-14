@@ -2412,7 +2412,17 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .gm-chain a { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 8px; color: var(--ink); background: color-mix(in srgb, var(--c) 14%, transparent); }
 .gm-chain span { color: var(--faint); }
 
-/* Drawing card: Excalidraw fills it; the inner box is counter-scaled against the canvas zoom (fitDrawings). */
-.orch-draw { position: relative; height: 100%; overflow: hidden; }
-.orch-draw-in { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-origin: 0 0; }
-.orch-feed:has(> .orch-draw) { padding: 0; }
+
+/* The sketch layer: Excalidraw over the whole canvas, its own UI hidden (our .orch-sketchbar replaces it). Off, every
+   click goes through to the cards; on, it takes the pointer. */
+.orch-sketch { position: absolute; inset: 0; z-index: 5; }
+.orch-sketch[hidden] { display: none; }
+.orch-sketch:not(.on), .orch-sketch:not(.on) * { pointer-events: none !important; }
+.orch-sketch .excalidraw { --color-surface-lowest: transparent; background: transparent; }
+.orch-sketch .layer-ui__wrapper, .orch-sketch .App-bottom-bar, .orch-sketch .welcome-screen-center,
+.orch-sketch .FixedSideContainer, .orch-sketch .App-menu_top, .orch-sketch footer { display: none !important; }
+.orch-sketch.on { cursor: crosshair; }
+.orch-sketchbar { top: 64px; left: 50%; translate: -50% 0; display: flex; align-items: center; gap: 2px; padding: 5px; }
+.orch-sketchbar[hidden] { display: none; }
+.orch-sketchbar .sketch-c i { display: block; width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .25); }
+.orch-sketchbar .sketch-c.on i { outline: 2px solid var(--accent); outline-offset: 2px; }

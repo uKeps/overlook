@@ -41,6 +41,8 @@ const I = {
   max: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  rect: '<rect x="4" y="5" width="16" height="14" rx="2"/>', circle: '<circle cx="12" cy="12" r="8"/>',
+  arrowR: '<path d="M5 19 19 5M10 5h9v9"/>', eraser: '<path d="m7 21-4-4a2 2 0 0 1 0-3L14 3a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3L11 21z"/><path d="M7 21h14M9 9l6 6"/>',
   trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
@@ -1238,14 +1240,13 @@ function syncWires(force) {
   for (const l of orchLinks) for (const [t, o] of [[l.a, l.b], [l.b, l.a]]) {
     const p = term(t) && orchPanes.find((x) => paneKey(x) === o), add = (item) => (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), ...item });
     if (p?.kind === "sticky") add({ text: p.text || "" });
-    if (p?.kind === "drawing") add({ text: drawingText(p) });
     if (p?.kind === "note") add({ path: p.id });
     if (p?.kind === "terminal") add({ term: p.id });
   }
-  const body = JSON.stringify({ wires, names, ctx });
+  const sketch = sketchText(sketchEls), body = JSON.stringify({ wires, names, ctx, sketch });
   if (body === wiresSent && !force) return;
   wiresSent = body; wiresAt = Date.now();
-  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx }).catch(() => { wiresSent = ""; });
+  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx, sketch }).catch(() => { wiresSent = ""; });
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
 const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
@@ -1724,51 +1725,16 @@ async function stickyShow(view, ta, text = "") {
   if (document.activeElement !== ta) { view.innerHTML = mdCache.get(text); view.querySelectorAll("a[href^='http']").forEach((a) => { a.target = "_blank"; a.rel = "noopener"; }); }
 }
 
-// Drawing cards: the real Excalidraw, bundled by the server on first use; the scene lives in the card (canvas storage).
+// The real Excalidraw, bundled by the server on first use (/vendor/excalidraw.js).
 let excalidrawLib = null;
-const drawApis = new Map();
 const loadExcalidraw = () => (excalidrawLib ??= (async () => {
   window.EXCALIDRAW_ASSET_PATH = `${location.origin}/vendor/excalidraw/`;
   document.head.insertAdjacentHTML("beforeend", `<link rel="stylesheet" href="/vendor/excalidraw/index.css">`);
   return import("/vendor/excalidraw.js");
 })().catch((e) => { excalidrawLib = null; throw e; }));
-async function mountDrawing(el, p) {
-  const lib = await loadExcalidraw().catch(() => null);
-  if (!lib) { el.textContent = "Couldn't load Excalidraw (is the server up?)"; return; }
-  let t = 0, last = "";
-  const keep = (els) => {
-    const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
-    if (sig === last) return;
-    last = sig; p.elements = live; saveCanvasSoon(); syncWires();
-  };
-  // ponytail: the React root is never unmounted when the card closes; a leak per closed drawing until the page reloads.
-  lib.mount(el, {
-    theme: "dark",
-    initialData: { elements: p.elements || [], appState: { theme: "dark" }, scrollToContent: true },
-    UIOptions: { canvasActions: { loadScene: false, saveToActiveFile: false } },
-    excalidrawAPI: (a) => drawApis.set(p.id, a),
-    onChange: (els) => { clearTimeout(t); t = setTimeout(() => keep(els), 400); },
-  });
-  new ResizeObserver(() => fitDrawings()).observe(el.parentElement);
-  el.parentElement.addEventListener("pointerenter", () => drawApis.get(p.id)?.refresh());
-  fitDrawings();
-}
-// The canvas zooms with a CSS scale, which Excalidraw can't see: its pointer maths would land off the pointer. Its box is
-// counter-scaled so it always runs at 1:1 on screen; the card just shows more or less of the drawing.
-let drawRefreshT = 0;
-function fitDrawings() {
-  const boxes = document.querySelectorAll(".orch-draw");
-  if (!boxes.length) return;
-  for (const box of boxes) {
-    const el = box.firstElementChild, k = box.offsetWidth ? box.getBoundingClientRect().width / box.offsetWidth : 1;
-    if (el) Object.assign(el.style, { width: `${box.offsetWidth * k}px`, height: `${box.offsetHeight * k}px`, transform: `scale(${1 / k})` });
-  }
-  clearTimeout(drawRefreshT);
-  drawRefreshT = setTimeout(() => drawApis.forEach((a) => a.refresh?.()), 150); // offsets moved with the pan/zoom
-}
-// What a drawing says, for an agent wired to it: its texts, and which labelled shapes the arrows join.
-function drawingText(p) {
-  const els = p.elements || [], byId = new Map(els.map((x) => [x.id, x]));
+// What the sketch says, for an agent (overlook sketch): its texts, and which labelled shapes the arrows join.
+function sketchText(els) {
+  const byId = new Map(els.map((x) => [x.id, x]));
   const label = (x) => x && (x.type === "text" ? x.text : els.find((y) => y.type === "text" && y.containerId === x.id)?.text || x.type);
   const lines = els.filter((x) => x.type === "text" && !x.containerId).map((x) => `- ${x.text.replace(/\n/g, " ")}`);
   for (const x of els) if (x.type === "rectangle" || x.type === "ellipse" || x.type === "diamond") { const t = label(x); if (t !== x.type) lines.push(`- [${x.type}] ${t.replace(/\n/g, " ")}`); }
@@ -1778,10 +1744,103 @@ function drawingText(p) {
   return lines.join("\n");
 }
 
+// The sketch layer (Maestri's "draw your reasoning"): one Excalidraw over the whole canvas, moving with its pan and
+// zoom. Off, it only shows the drawing and lets every click through; on (the pencil, or D), it takes the pointer, with a
+// small toolbar of ours instead of Excalidraw's own UI. The scene has its own storage key.
+const SKETCH_KEY = "overlook.sketch", SKETCH_COLORS = ["#e9ecef", "#f4b88f", "#74c0fc", "#ff8787", "#8ce99a"];
+let sketchEls = (() => { try { return JSON.parse(localStorage.getItem(SKETCH_KEY) || "[]"); } catch { return []; } })();
+let sketchApi = null, sketchOn = false, sketchColor = SKETCH_COLORS[0], sketchToolNow = "freedraw";
+const sketchView = () => ({ scrollX: orchPanX / orchZoom, scrollY: orchPanY / orchZoom, zoom: { value: orchZoom } });
+const sameView = (a, b) => Math.abs(a.scrollX - b.scrollX) < 0.05 && Math.abs(a.scrollY - b.scrollY) < 0.05 && Math.abs(a.zoom.value - b.zoom.value) < 1e-4;
+function syncSketchView() {
+  if (!sketchApi) return;
+  const v = sketchView();
+  if (!sameView(sketchApi.getAppState(), v)) sketchApi.updateScene({ appState: v });
+}
+// The canvas DOM is rebuilt on every visit: a fresh layer each time, Excalidraw only once there's something to show.
+function addSketchLayer(canvas) {
+  sketchApi = null;
+  canvas.querySelector("#orch-plane").insertAdjacentHTML("afterend", `<div class="orch-sketch ${sketchOn ? "on" : ""}" id="orch-sketch"></div><div class="cv-island orch-sketchbar" id="orch-sketchbar" role="toolbar" aria-label="Drawing tools" ${sketchOn ? "" : "hidden"}></div>`);
+  if (sketchOn) paintSketchBar();
+  if (sketchOn || sketchEls.length) mountSketch();
+}
+async function mountSketch() {
+  const el = $("#orch-sketch");
+  if (!el || el.dataset.mounted) return;
+  el.dataset.mounted = "1";
+  const lib = await loadExcalidraw().catch(() => null);
+  if (!lib) { el.dataset.mounted = ""; toast("Couldn't load the drawing tools"); return; }
+  let t = 0, last = sketchEls.map((x) => `${x.id}:${x.version}`).join();
+  lib.mount(el, {
+    theme: "dark",
+    initialData: { elements: sketchEls, appState: { theme: "dark", viewBackgroundColor: "transparent", currentItemStrokeColor: sketchColor, ...sketchView() } },
+    excalidrawAPI: (a) => { sketchApi = a; },
+    onChange: (els, st) => {
+      if (st.activeTool?.type !== sketchToolNow && sketchOn) paintSketchBar(st.activeTool?.type);
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
+        if (sig === last) return;
+        last = sig; sketchEls = live;
+        try { localStorage.setItem(SKETCH_KEY, JSON.stringify(live)); } catch {}
+        syncWires();
+      }, 400);
+    },
+    // Panning or zooming inside the drawing moves the canvas with it.
+    onScrollChange: (scrollX, scrollY, zoom) => {
+      if (!sketchOn || sameView({ scrollX, scrollY, zoom }, sketchView())) return;
+      orchZoom = zoom.value; orchPanX = scrollX * zoom.value; orchPanY = scrollY * zoom.value;
+      applyCanvasTransform(); saveCanvasSoon();
+    },
+  });
+  new ResizeObserver(() => sketchApi?.refresh()).observe(el);
+}
+async function setSketch(on) {
+  if (orchMode !== "free" || orchMax) { if (on) toast("Drawing works on the free canvas"); return; }
+  sketchOn = on;
+  $("#orch-sketch")?.classList.toggle("on", on);
+  const bar = $("#orch-sketchbar");
+  if (bar) bar.hidden = !on;
+  paintHud($("#orch-hud"), true);
+  if (!on) { sketchApi?.updateScene({ appState: { selectedElementIds: {}, editingTextElement: null } }); sketchApi?.setActiveTool({ type: "selection" }); return; }
+  paintSketchBar();
+  await mountSketch();
+  for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
+  sketchApi?.setActiveTool({ type: "freedraw" }); // turning it on means "I want to draw": the pen
+  paintSketchBar("freedraw");
+  sketchApi?.refresh();
+}
+const SKETCH_TOOLS = [["selection", "select", "Select and move (V)"], ["freedraw", "edit", "Pen (P)"], ["rectangle", "rect", "Box (R)"], ["ellipse", "circle", "Ellipse (O)"],
+  ["arrow", "arrowR", "Arrow (A): drag from one shape to another and it sticks"], ["text", "type", "Text (T)"], ["eraser", "eraser", "Eraser (E)"]];
+function paintSketchBar(tool) {
+  if (tool) sketchToolNow = tool;
+  const bar = $("#orch-sketchbar");
+  if (!bar) return;
+  bar.innerHTML = SKETCH_TOOLS.map(([t, ic, tip]) => `<button type="button" class="hud-btn ${t === sketchToolNow ? "on" : ""}" data-act="sketch-tool" data-tool="${t}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 16)}</button>`).join("")
+    + '<span class="orch-hud-sep"></span>'
+    + SKETCH_COLORS.map((c) => `<button type="button" class="hud-btn sketch-c ${c === sketchColor ? "on" : ""}" data-act="sketch-color" data-c="${c}" title="Color" aria-label="Color ${c}"><i style="background:${c}"></i></button>`).join("")
+    + `<span class="orch-hud-sep"></span><button type="button" class="hud-btn" data-act="orch-sketch" title="Done (Esc)" aria-label="Stop drawing">${icon("x", 16)}</button>`;
+}
+// An agent's `overlook draw`: Mermaid becomes shapes, placed right of the agent's card.
+async function sketchFromMermaid(src, parent) {
+  if (!$("#orch-sketch")) return "the canvas isn't showing";
+  await mountSketch();
+  for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
+  const lib = await loadExcalidraw().catch(() => null);
+  if (!sketchApi || !lib) return "the drawing tools didn't load";
+  let els;
+  try { els = await lib.fromMermaid(src); } catch (e) { return `Mermaid: ${String(e?.message || e).slice(0, 160)}`; }
+  const x0 = (parent?.x ?? 0) + (parent?.w ?? 0) + 60, y0 = parent?.y ?? 0;
+  const minX = Math.min(...els.map((e) => e.x)), minY = Math.min(...els.map((e) => e.y));
+  for (const e of els) { e.x += x0 - minX; e.y += y0 - minY; }
+  sketchApi.updateScene({ elements: [...sketchApi.getSceneElements(), ...els] });
+  return "";
+}
+
 function ensurePaneRect(p, idx = 0) {
   // A terminal opens at about a Ghostty window's size (~95 columns: a fastfetch greeting fits on one line).
-  p.w ??= (p.kind === "drawing" ? 720 : p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
-  p.h ??= (p.kind === "drawing" ? 480 : p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
+  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
+  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
   if (typeof p.x !== "number") {
     // A new card opens where you're looking (the middle of the visible canvas), stepped down-right off any card there.
     const r = orchMode === "free" ? $("#orch-canvas")?.getBoundingClientRect() : null;
@@ -1827,7 +1886,8 @@ function applyCanvasTransform() {
   const free = orchMode === "free" && !orchMax;
   if (plane) plane.style.transform = free && orchPanes.length ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
   plane?.style.setProperty("--z", orchZoom);
-  fitDrawings();
+  const sk = $("#orch-sketch");
+  if (sk) { sk.hidden = !free; syncSketchView(); }
   // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
   // low zoom levels (>16px on-screen period) free of moiré shimmer or dot crowding.
   if (canvas) {
@@ -1891,6 +1951,10 @@ async function takeSpawns() {
       const note = orchPanes.find((p) => p.kind === "sticky" && paneKey(p) === s.target);
       if (note) note.text = s.text;
       spawnDone.push({ id: s.id, ...(note ? {} : { why: "that note is no longer on the canvas" }) });
+      continue;
+    }
+    if (s.kind === "draw") {
+      sketchFromMermaid(s.text, parent).then((why) => spawnDone.push({ id: s.id, ...(why ? { why } : {}) }));
       continue;
     }
     const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
@@ -2152,7 +2216,6 @@ async function linkedContext(key, budget) {
   if (budget < 300 || (!srcs.length && !orchLinks.some((l) => l.a === key || l.b === key))) return "";
   const parts = await Promise.all(srcs.map(async (p) => {
     if (p.kind === "sticky") return p.text?.trim() ? `### Sticky note\n${p.text.trim()}` : "";
-    if (p.kind === "drawing") return drawingText(p) ? `### Drawing\n${drawingText(p)}` : "";
     if (p.kind === "note") {
       const txt = p.ctx || htmlText((await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null))?.html || "");
       return txt ? `### Vault note: ${p.id}\n${txt}` : "";
@@ -2365,7 +2428,7 @@ window.addEventListener("keydown", (e) => {
 // Space held = pan; bound once (the canvas element is rebuilt on every visit to #/agents).
 let isSpacePressed = false;
 window.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && !e.target.closest("input, textarea, select, [contenteditable], .orch-draw") && !isSpacePressed) {
+  if (e.code === "Space" && !e.target.closest("input, textarea, select, [contenteditable], .orch-sketch") && !isSpacePressed) {
     isSpacePressed = true;
     if (orchMode === "free" && !orchMax) $("#orch-canvas")?.classList.add("space-pan");
   }
@@ -2488,7 +2551,7 @@ function bindCanvasInteractions(canvas) {
   // Right-click: a card's menu, or the canvas's (free canvas: opened on release, as right-drag pans). Text fields keep the
   // browser's own menu (spelling, paste).
   canvas.addEventListener("contextmenu", (e) => {
-    if (e.target.closest("textarea:not(.xterm-helper-textarea), input, .orch-draw-in")) return; // Excalidraw has its own menu
+    if (e.target.closest("textarea:not(.xterm-helper-textarea), input, .orch-sketch")) return; // Excalidraw has its own menu
     e.preventDefault();
     const card = e.target.closest(".orch-pane");
     if (card) paneMenu(card.dataset.key, e.clientX, e.clientY);
@@ -2674,7 +2737,7 @@ function agentsBody() {
   const all = fleetItems();
   const counts = { all: all.length };
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "drawing" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   // Agents run in terminals (like Maestri): a task or session card turns into its own TUI as soon as nothing else
   // drives it; only a session running elsewhere (another terminal, a waiting background job) stays a read-only card.
   for (const p of [...orchPanes]) if (p.kind === "task" || p.kind === "agent") {
@@ -2717,6 +2780,7 @@ function agentsBody() {
         </div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
+    addSketchLayer($("#orch-canvas"));
     magnify($(".cv-tl"), 0, true); magnify($("#orch-hud"), 10); magnify($("#orch-hud-br"), -10);
     bindMap($("#orch-map"));
     hoverMenu($('.cv-tl [data-act="cv-menu"]'), mainMenu);
@@ -2954,7 +3018,7 @@ function paintHud(hud, isFree) {
   const sep = '<span class="orch-hud-sep"></span>', isFull = document.body.classList.contains("canvas-full");
   const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
   const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
-    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note") + b("orch-add-drawing", "edit", "New drawing")
+    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
     + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
@@ -3081,7 +3145,6 @@ const agentItems = (at, from) => [...(S.runners || []).filter((r) => r.ready && 
 const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));
 const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
   : p.kind === "sticky" ? (p.text || "").trim().split("\n")[0].slice(0, 40) || "Note"
-  : p.kind === "drawing" ? "Drawing"
   : p.kind === "note" ? D.notes.find((n) => n.path === p.id)?.title || p.id
   : p.kind === "task" ? String(S.tasks?.find((t) => t.id === p.id)?.prompt || "Task").slice(0, 40)
   : S.background?.find((b) => b.key === p.id)?.title || "Session");
@@ -3095,9 +3158,6 @@ function addSticky(at) {
   if (!addPane(p, at?.x, at?.y)) return;
   saveCanvas();
   setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-sticky-input`)?.focus(), 80);
-}
-function addDrawing(at) {
-  if (addPane({ kind: "drawing", id: String(++orchSeq), elements: [] }, at?.x, at?.y)) saveCanvas();
 }
 // Copy card / Duplicate: what it takes to make the card again. A terminal starts fresh in the same folder, an agent
 // starts a new session of the same agent; notes, tasks and sessions are one card each, so they have none.
@@ -3163,7 +3223,7 @@ function canvasMenu(cx, cy) {
     { label: "New agent", ic: "agents", sub: agentItems(at, { x: cx, y: cy }) },
     { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => newTermPane(undefined, at) },
     { label: "New note", ic: "notes", run: () => addSticky(at) },
-    { label: "New drawing", ic: "edit", run: () => addDrawing(at) },
+    { label: "Draw on the canvas", ic: "edit", run: () => setSketch(true) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
     "-",
@@ -3299,7 +3359,7 @@ async function orchPaint(force) {
       // The card can be rekeyed in place (new tile -> task), so handlers read its key at event time.
       card.addEventListener("pointerdown", (e) => {
         const key = card.dataset.key;
-        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot, .orch-draw")) return;
+        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot")) return;
         // Selection (for Delete / multi-move) only exists on the free canvas.
         if (orchMode !== "free" || orchMax) orchSelected.clear();
         else if (e.shiftKey || e.metaKey || e.ctrlKey) {
@@ -3361,7 +3421,7 @@ async function orchPaint(force) {
     // Between terminals a wire is a hand-off (overlook send), so a terminal's message line only shows when a note or a
     // sticky is wired into it, to bring their text along.
     const ctxIn = orchLinks.filter((l) => l.b === key && !l.a.startsWith("terminal:")).length;
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || p.kind === "drawing" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;
@@ -3376,20 +3436,6 @@ async function orchPaint(force) {
       const feed = card.querySelector(".orch-feed");
       feed.innerHTML = `<div class="orch-note-view prose">${n.html}</div>`;
       if (form) form.style.display = "none";
-      return;
-    }
-    if (p.kind === "drawing") {
-      const sig = `drawing|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
-      if (!force && orchSigs.get(key) === sig) return;
-      orchSigs.set(key, sig);
-      card.querySelector(".orch-head").innerHTML = winHead(key, "Drawing", "", paneBtns);
-      card.querySelector(".orch-needs").innerHTML = "";
-      if (form) form.style.display = "none";
-      const feed = card.querySelector(".orch-feed");
-      if (!feed.querySelector(".orch-draw")) {
-        feed.innerHTML = `<div class="orch-draw"><div class="orch-draw-in"></div></div>`;
-        mountDrawing(feed.querySelector(".orch-draw-in"), p);
-      }
       return;
     }
     if (p.kind === "sticky") {
@@ -4426,7 +4472,9 @@ const ACTIONS = {
     }
   },
   "orch-add-sticky": () => addSticky(),
-  "orch-add-drawing": () => addDrawing(),
+  "orch-sketch": () => setSketch(!sketchOn),
+  "sketch-tool": (el) => { sketchApi?.setActiveTool({ type: el.dataset.tool }); paintSketchBar(el.dataset.tool); },
+  "sketch-color": (el) => { sketchColor = el.dataset.c; sketchApi?.updateScene({ appState: { currentItemStrokeColor: sketchColor } }); paintSketchBar(); },
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
@@ -4631,7 +4679,7 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax && !document.querySelector("dialog[open]")) {
-    if (!e.target.closest("input, textarea, select, [contenteditable], .orch-draw")) {
+    if (!sketchOn && !e.target.closest("input, textarea, select, [contenteditable]")) {
       e.preventDefault();
       deleteSelectedPanes();
       return;
@@ -4648,6 +4696,8 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
+  if (sketchOn) { if (e.key === "Escape" && pg === "agents") { e.preventDefault(); setSketch(false); } return; } // letters are Excalidraw's tools
+  if (pg === "agents" && (e.key === "d" || e.key === "D") && orchMode === "free" && !orchMax) { e.preventDefault(); setSketch(true); return; }
   // A shows or hides Sessions; hiding also takes the focus out of it (a clicked row or the log keeps it open otherwise).
   if (pg === "agents" && (e.key === "a" || e.key === "A")) {
     e.preventDefault();
