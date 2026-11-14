@@ -1272,18 +1272,59 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   overflow-y: auto; height: 100%;
 }
 .orch-note-view h1, .orch-note-view h2, .orch-note-view h3 { margin: 12px 0 6px; }
-.orch-sticky-wrap { height: 100%; display: flex; flex-direction: column; padding: 8px 10px 10px; }
-.orch-sticky-input {
-  flex: 1; width: 100%; resize: none; border: 0; outline: none;
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
-  border-radius: 8px; padding: 10px 12px; font: 400 13px/1.55 var(--body);
-  color: var(--ink);
+/* ---------- The note card (sticky): a calm sheet of tinted paper, its title as the bar ----------
+   --note is its tint (the theme's palette), --fs its text size; color and size live on the pane (data-tone, data-size). */
+.orch-pane[data-kind="sticky"] {
+  --note: var(--accent); --fs: 13.5px;
+  --win-bg: color-mix(in srgb, var(--note) 10%, color-mix(in srgb, var(--surface) 90%, #000));
+  border-color: color-mix(in srgb, var(--note) 20%, rgba(255, 255, 255, .06)); border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .45), 0 12px 32px rgba(0, 0, 0, .38);
+  transition: border-color .18s var(--ease), box-shadow .18s var(--ease), background-color .18s var(--ease);
 }
-.orch-sticky-input:focus { background: color-mix(in srgb, var(--accent) 9%, transparent); }
-.orch-sticky-view { flex: 1; overflow-y: auto; padding: 10px 12px; font: 400 13px/1.55 var(--body); cursor: text; }
-.orch-sticky-view > * + * { margin-top: 8px; }
-.orch-sticky-view h1, .orch-sticky-view h2, .orch-sticky-view h3 { font: 700 15px var(--display); margin-top: 12px; }
-.orch-sticky-view ul, .orch-sticky-view ol { padding-left: 18px; }
+.orch-pane[data-kind="sticky"].active { border-color: color-mix(in srgb, var(--note) 45%, transparent); }
+.orch-plane.free .orch-pane[data-kind="sticky"].selected { border-color: color-mix(in srgb, var(--note) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--note) 30%, transparent), 0 16px 40px rgba(0, 0, 0, .45); }
+.orch-pane[data-tone="yellow"] { --note: var(--p5); }
+.orch-pane[data-tone="green"] { --note: var(--p4); }
+.orch-pane[data-tone="blue"] { --note: var(--p2); }
+.orch-pane[data-tone="violet"] { --note: var(--p3); }
+.orch-pane[data-tone="rose"] { --note: var(--p6); }
+.orch-pane[data-size="s"] { --fs: 12.5px; }
+.orch-pane[data-size="l"] { --fs: 16px; }
+/* the bar: no window chrome, just the title (left) and, on hover, the note's tools */
+.orch-pane[data-kind="sticky"] > .orch-head { height: 36px; padding: 0 8px 0 16px; background: transparent; border-bottom: 0; border-radius: 12px 12px 0 0; }
+.orch-pane[data-kind="sticky"] .win-lights { display: none; }
+.orch-pane[data-kind="sticky"] .win-title { position: static; flex: 1; min-width: 0; text-align: left; font: 600 calc(var(--fs) + 1px) var(--display); color: color-mix(in srgb, var(--note) 30%, var(--ink)); letter-spacing: -.005em; }
+.orch-pane[data-kind="sticky"] .win-title b { font-weight: inherit; }
+.orch-pane[data-kind="sticky"] .win-title b:empty::before { content: "Untitled"; font-weight: 500; color: var(--faint); opacity: 0; transition: opacity .15s var(--ease); }
+.orch-pane[data-kind="sticky"]:is(:hover, .active) .win-title b:empty::before { opacity: .55; }
+.orch-pane[data-kind="sticky"] .win-title.editing { flex: 1; }
+.orch-pane[data-kind="sticky"] .win-rename { width: 100%; font: inherit; color: inherit; }
+.orch-pane[data-kind="sticky"] .orch-acts { flex: none; margin-left: 6px; transform: translateY(-2px); transition: opacity .16s var(--ease), transform .16s var(--ease); }
+.orch-pane[data-kind="sticky"]:is(:hover, .active, :focus-within) .orch-acts { opacity: 1; transform: none; }
+.note-tones { display: flex; align-items: center; gap: 5px; padding: 0 6px 0 2px; }
+.note-tone {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--note); opacity: .7;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); transition: opacity .15s var(--ease), transform .15s var(--ease), box-shadow .15s var(--ease);
+}
+.note-tone:hover { opacity: 1; transform: scale(1.15); }
+.note-tone.on { opacity: 1; box-shadow: 0 0 0 1.5px var(--win-bg), 0 0 0 3px color-mix(in srgb, var(--note) 70%, transparent); }
+.orch-acts .note-size { font: 600 11px var(--display); letter-spacing: .01em; }
+@container pane (max-width: 330px) { .note-tones { gap: 3px; padding: 0 3px 0 0; } .note-tone { width: 10px; height: 10px; } }
+.orch-pane[data-kind="sticky"] .orch-feed { padding: 0; gap: 0; }
+.orch-sticky-wrap { height: 100%; display: flex; flex-direction: column; }
+.orch-sticky-view, .orch-sticky-input { flex: 1; min-height: 0; padding: 2px 16px 16px; font: 400 var(--fs)/1.62 var(--body); color: color-mix(in srgb, var(--ink) 90%, transparent); }
+.orch-sticky-view { overflow-y: auto; cursor: text; scrollbar-width: thin; }
+.orch-sticky-view > * + * { margin-top: .6em; }
+.orch-sticky-view :is(h1, h2, h3) { font: 600 1.08em/1.3 var(--display); color: var(--ink); margin-top: 1em; }
+.orch-sticky-view > :first-child { margin-top: 0; }
+.orch-sticky-view :is(ul, ol) { padding-left: 1.2em; }
+.orch-sticky-view li + li { margin-top: .2em; }
+.orch-sticky-view a { color: color-mix(in srgb, var(--note) 75%, var(--ink)); border-bottom-color: color-mix(in srgb, var(--note) 35%, transparent); }
+.orch-sticky-view code { font-size: .9em; padding: 1px 5px; border-radius: 5px; background: rgba(255, 255, 255, .06); }
+.orch-sticky-view blockquote { padding-left: .8em; border-left: 2px solid color-mix(in srgb, var(--note) 45%, transparent); color: var(--muted); }
+.orch-sticky-input { width: 100%; resize: none; border: 0; outline: none; background: transparent; }
+.orch-sticky-input:focus { background: transparent; border: 0 !important; box-shadow: none; }
+.orch-sticky-input::placeholder { color: var(--faint); }
 .orch-sticky-view[hidden], .orch-sticky-input[hidden] { display: none; }
 
 /* ---------- The canvas chrome: small islands floating over it (Maestri-style) ----------
@@ -1859,11 +1900,6 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 .orch-talk .btn { display: none; }
 .orch-talk .orch-hint { display: none; }
 
-/* sticky note: the window body is the paper, no box inside the box */
-.orch-sticky-wrap { padding: 0; }
-.orch-sticky-input { background: transparent; border-radius: 0; padding: 12px 14px; font: 400 13px/1.6 var(--body); }
-.orch-sticky-input:focus { background: transparent; }
-.orch-pane[data-kind="sticky"] { --win-bg: color-mix(in srgb, var(--accent) 7%, color-mix(in srgb, var(--surface) 88%, #000)); }
 
 
 /* a wire an agent just used to hand off: it flows from sender to receiver for a few seconds */
@@ -2461,6 +2497,7 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .orch-sketchbar { top: 64px; left: 50%; translate: -50% 0; display: flex; align-items: center; gap: 2px; padding: 5px; }
 .orch-sketchbar[hidden] { display: none; }
 .orch-sketchbar .sketch-c i, .ctx-dot { display: block; width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, .25); filter: invert(93%) hue-rotate(180deg); }
+.ctx-dot.tint { width: 12px; height: 12px; filter: none; } /* a theme color as it is, not an Excalidraw one */
 .orch-sketchbar .sketch-c.on i { outline: 2px solid var(--accent); outline-offset: 2px; }
 .orch-ink { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 6; pointer-events: none; filter: invert(93%) hue-rotate(180deg); }
 .orch-ink polyline { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
