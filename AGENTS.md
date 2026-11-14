@@ -2,9 +2,9 @@
 
 ## Shipping work
 
-- **Features and agent work** go through a PR: a branch from `main`, a conventional-commit title, then
-  `gh pr merge <n> --auto --squash`, so it merges by itself once CI (`check`, `conventional-commit`) passes.
-- **Small fixes** (a few lines) that pass `bun test` locally can be committed straight to `main`.
+- **Everything goes through a PR**: `main` only takes PRs whose CI (`check`, `conventional-commit`) passed (a GitHub
+  ruleset; a direct push is rejected). A branch from `main`, a conventional-commit title, then
+  `gh pr merge <n> --auto --squash`, so it merges by itself once CI passes. Keep PRs small and frequent.
 - `~/dev/overlook` is where `overlook.service` runs: it stays on `main`. Work in a worktree
   (`git worktree add ../overlook-<name> -b <branch> origin/main`), never by switching that checkout to another branch.
 
