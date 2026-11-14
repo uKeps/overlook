@@ -1909,9 +1909,8 @@ function drawLinks(tmp) {
     const sign = dx >= 0 ? 1 : -1;
     return `M${x1},${y1} C${x1 + cx * sign},${y1} ${x2 - cx * sign},${y2} ${x2},${y2}`;
   };
-  // A wire leaves each card from the side that faces the other one (across the wider gap: a note under a terminal links
-  // bottom to top), at the point of that side closest to the other card, and bends out along the side: it runs between
-  // the cards, not across them.
+  // A wire hangs from each card at the side that faces the other one (across the wider gap: a note under a terminal
+  // links bottom to top), at the point of that side closest to the other card.
   const box = (p) => ({ x: p.x, y: p.y, w: p.w, h: p.collapsed ? 34 : p.h });
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
   const route = (a, b) => {
@@ -1929,34 +1928,91 @@ function drawLinks(tmp) {
       t = at(b, dir);
       const side = dir === "r" || dir === "l", room = side ? a.y + a.h - 16 - t.y : a.x + a.w - 16 - t.x, off = room >= 80 ? 80 : -80;
       s = side ? at(a, dir, 0, t.y + off) : at(a, dir, t.x + off);
+    } else if (gx >= gy) {
+      // Side by side: from the sides facing each other; the rope sags between them.
+      const dir = b.x + b.w / 2 >= a.x + a.w / 2 ? "r" : "l";
+      s = at(a, dir); t = at(b, dir === "r" ? "l" : "r");
     } else {
-      // Apart: from the sides facing each other, across the wider gap (a note under a terminal links bottom to top).
-      const dir = gx >= gy ? (b.x + b.w / 2 >= a.x + a.w / 2 ? "r" : "l") : (b.y + b.h / 2 >= a.y + a.h / 2 ? "d" : "u");
-      s = at(a, dir); t = at(b, { r: "l", l: "r", d: "u", u: "d" }[dir]);
+      // One above the other: a rope from the bottom to the top would just hang straight, so both ends hang from the
+      // same side (the one whose edges line up best), near the gap, and the rope loops loose beside the cards.
+      const dir = Math.abs(a.x + a.w - b.x - b.w) <= Math.abs(a.x - b.x) ? "r" : "l", down = b.y > a.y;
+      s = at(a, dir, 0, down ? a.y + a.h - 24 : a.y + 24); t = at(b, dir, 0, down ? b.y + 24 : b.y + b.h - 24);
     }
-    // A loose cable, like Maestri's: it leaves along each side, then sags across the line between the ends (down for a
-    // side-by-side pair, out to the right for a stacked one), more the longer it is.
-    const len = Math.hypot(t.x - s.x, t.y - s.y) || 1, k = clamp(len * .3, 40, 120);
-    let px = -(t.y - s.y) / len, py = (t.x - s.x) / len;
-    if (py < -.05 || (Math.abs(py) <= .05 && px < 0)) { px = -px; py = -py; }
-    const sag = clamp(len * .22, 14, 140);
-    return { len, pts: [s, { x: s.x + s.nx * k + px * sag, y: s.y + s.ny * k + py * sag }, { x: t.x + t.nx * k + px * sag, y: t.y + t.ny * k + py * sag }, t] };
+    return { s, t };
   };
-  const bez = (p) => { const f = (n) => Math.round(n * 10) / 10; return `M${f(p[0].x)},${f(p[0].y)} C${p.slice(1).map((q) => `${f(q.x)},${f(q.y)}`).join(" ")}`; };
-  // Excalidraw's hand-drawn line (what rough.js does for a curve): the same curve twice, each pass nudged a little, the
-  // nudges seeded by the wire so it doesn't wobble on every repaint.
-  const sketch = (pts, len, key) => {
-    let seed = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 2147483647, 7) || 1;
-    const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1, j = clamp(len / 35, 3, 8);
-    return [0, 1].map(() => bez(pts.map((q, n) => { const m = n === 0 || n === 3 ? 2 : j; return { x: q.x + r() * m, y: q.y + r() * m }; })));
+  const smooth = (p) => {
+    const f = (n) => Math.round(n * 10) / 10, mid = (u, v) => `${f((u.x + v.x) / 2)},${f((u.y + v.y) / 2)}`;
+    return `M${f(p[0].x)},${f(p[0].y)} ` + p.slice(1, -1).map((q, i) => `Q${f(q.x)},${f(q.y)} ${mid(q, p[i + 2])}`).join(" ") + ` L${f(p.at(-1).x)},${f(p.at(-1).y)}`;
   };
-  const wires = orchLinks.map((l) => route(box(byKey.get(l.a)), box(byKey.get(l.b))));
-  hits.innerHTML = wires.map(({ pts }, i) => `<path class="hit" d="${bez(pts)}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path>`).join("");
-  svg.innerHTML = wires.map(({ pts, len }, i) => {
-      const k = [orchLinks[i].a, orchLinks[i].b].sort().join("|"), hot = hotWires.has(k);
-      return `<g data-i="${i}" class="${hot ? "hot" : ""}">${sketch(pts, len, k).map((d) => `<path class="ln" d="${d}"/>`).join("")}</g>`;
-    }).join("")
-    + (tmp ? `<path class="ln tmp" d="${curve(...tmp)}"/>` : "");
+  // The DOM only changes when the set of wires does; the ropes then move their paths' d.
+  const keys = orchLinks.map((l) => `${l.a}>${l.b}`), sig = keys.join(",");
+  if (svg.dataset.sig !== sig) {
+    svg.dataset.sig = sig;
+    hits.innerHTML = keys.map((_, i) => `<path class="hit" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path>`).join("");
+    svg.innerHTML = keys.map((_, i) => `<g data-i="${i}"><path class="ln"/></g>`).join("");
+    for (const k of ropes.keys()) if (!keys.includes(k)) ropes.delete(k);
+  }
+  orchLinks.forEach((l, i) => {
+    const r = rope(keys[i], route(box(byKey.get(l.a)), box(byKey.get(l.b))));
+    r.ln = svg.children[i]?.firstChild; r.hit = hits.children[i];
+    svg.children[i]?.classList.toggle("hot", hotWires.has([l.a, l.b].sort().join("|")));
+  });
+  ropePaint = () => { for (const r of ropes.values()) { const d = smooth(r.pts); r.ln?.setAttribute("d", d); r.hit?.setAttribute("d", d); } };
+  let tp = svg.querySelector("path.tmp");
+  if (tmp) { tp ||= svg.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "path")); tp.setAttribute("class", "ln tmp"); tp.setAttribute("d", curve(...tmp)); } else tp?.remove();
+  ropeKick();
+}
+// Wires are ropes (Verlet: points that remember where they were, pulled down by gravity, held at a fixed distance
+// from each other): they hang loose between the cards, drop when wired, and swing when a card moves. The simulation
+// runs only while something moves, and settles at once with reduced motion.
+const ropes = new Map(); // wire ("a>b") -> { pts: [{ x, y, px, py }], seg, s, t, ln, hit }
+const ROPE_N = 16, GRAVITY = .45, DAMPING = .965, SLACK = 1.12;
+let ropeRaf = 0, ropeStill = 0, ropePaint = () => {};
+function rope(key, { s, t }) {
+  let r = ropes.get(key);
+  if (!r) {
+    // It starts bowed out the way its ends face (a rope hung on two left edges falls to the left, not into the cards).
+    const len = Math.hypot(t.x - s.x, t.y - s.y), ox = (s.nx + t.nx) / 2 * len * .3, oy = (s.ny + t.ny) / 2 * len * .3;
+    r = { pts: Array.from({ length: ROPE_N + 1 }, (_, i) => {
+      const u = i / ROPE_N, bow = Math.sin(Math.PI * u), x = s.x + (t.x - s.x) * u + ox * bow, y = s.y + (t.y - s.y) * u + oy * bow;
+      return { x, y, px: x, py: y };
+    }) };
+    ropes.set(key, r);
+  }
+  // As long as the ends are apart, plus slack: the further the cards, the more it hangs.
+  r.seg = (Math.hypot(t.x - s.x, t.y - s.y) * SLACK + 30) / ROPE_N; r.s = s; r.t = t;
+  return r;
+}
+function ropeStep(r) {
+  const p = r.pts, n = p.length - 1;
+  let moved = 0;
+  for (let i = 1; i < n; i++) {
+    const q = p[i], vx = (q.x - q.px) * DAMPING, vy = (q.y - q.py) * DAMPING;
+    q.px = q.x; q.py = q.y; q.x += vx; q.y += vy + GRAVITY;
+    moved = Math.max(moved, Math.abs(vx) + Math.abs(vy));
+  }
+  p[0].x = r.s.x; p[0].y = r.s.y; p[n].x = r.t.x; p[n].y = r.t.y; // the ends ride on their cards
+  for (let k = 0; k < 24; k++) for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[i + 1], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, f = (d - r.seg) / d;
+    const wa = i === 0 ? 0 : 1, wb = i + 1 === n ? 0 : 1, w = wa + wb;
+    if (!w) continue;
+    a.x += dx * f * wa / w; a.y += dy * f * wa / w; b.x -= dx * f * wb / w; b.y -= dy * f * wb / w;
+  }
+  return moved;
+}
+function ropeTick() {
+  ropeRaf = 0;
+  if (!$("#orch-links")?.isConnected) return; // left the canvas
+  let moved = 0;
+  for (const r of ropes.values()) moved = Math.max(moved, ropeStep(r));
+  ropePaint();
+  ropeStill = moved < .02 ? ropeStill + 1 : 0;
+  if (ropeStill < 30) ropeRaf = requestAnimationFrame(ropeTick);
+}
+function ropeKick() {
+  ropeStill = 0;
+  if (calm.matches) { for (let i = 0; i < 400; i++) for (const r of ropes.values()) ropeStep(r); ropePaint(); return; }
+  if (!ropeRaf) ropeRaf = requestAnimationFrame(ropeTick);
 }
 const htmlText = (h) => { const d = document.createElement("div"); d.innerHTML = h; return d.textContent.trim(); };
 // What the cards linked into `key` say, shaped as a preamble for the next message (fits within `budget` chars).
