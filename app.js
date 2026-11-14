@@ -42,7 +42,8 @@ const I = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   rect: '<rect x="4" y="5" width="16" height="14" rx="2"/>', circle: '<circle cx="12" cy="12" r="8"/>',
-  arrowR: '<path d="M5 19 19 5M10 5h9v9"/>', eraser: '<path d="m7 21-4-4a2 2 0 0 1 0-3L14 3a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3L11 21z"/><path d="M7 21h14M9 9l6 6"/>',
+  arrowR: '<path d="M5 19 19 5M10 5h9v9"/>', front: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/>',
+  back: '<rect x="4" y="4" width="12" height="12" rx="2"/><path d="M20 8v11a1 1 0 0 1-1 1H8"/>', eraser: '<path d="m7 21-4-4a2 2 0 0 1 0-3L14 3a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3L11 21z"/><path d="M7 21h14M9 9l6 6"/>',
   trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
@@ -1747,9 +1748,12 @@ function sketchText(els) {
 // The sketch layer (Maestri's "draw your reasoning"): one Excalidraw over the whole canvas, moving with its pan and
 // zoom. Off, it only shows the drawing and lets every click through; on (the pencil, or D), it takes the pointer, with a
 // small toolbar of ours instead of Excalidraw's own UI. The scene has its own storage key.
-const SKETCH_KEY = "overlook.sketch", SKETCH_COLORS = ["#e9ecef", "#f4b88f", "#74c0fc", "#ff8787", "#8ce99a"];
+// Colors are Excalidraw's own palette: its dark theme inverts the canvas (swatches get the same filter, so they match).
+const SKETCH_KEY = "overlook.sketch";
+const SKETCH_COLORS = [["#1e1e1e", "White"], ["#e03131", "Red"], ["#9c36b5", "Violet"], ["#1971c2", "Blue"], ["#2f9e44", "Green"]];
+const SKETCH_FILLS = [["#ffc9c9", "Red"], ["#ffec99", "Yellow"], ["#a5d8ff", "Blue"], ["#b2f2bb", "Green"]];
 let sketchEls = (() => { try { return JSON.parse(localStorage.getItem(SKETCH_KEY) || "[]"); } catch { return []; } })();
-let sketchApi = null, sketchOn = false, sketchColor = SKETCH_COLORS[0], sketchToolNow = "freedraw";
+let sketchApi = null, sketchOn = false, sketchColor = SKETCH_COLORS[0][0], sketchToolNow = "freedraw";
 const sketchView = () => ({ scrollX: orchPanX / orchZoom, scrollY: orchPanY / orchZoom, zoom: { value: orchZoom } });
 const sameView = (a, b) => Math.abs(a.scrollX - b.scrollX) < 0.05 && Math.abs(a.scrollY - b.scrollY) < 0.05 && Math.abs(a.zoom.value - b.zoom.value) < 1e-4;
 function syncSketchView() {
@@ -1776,7 +1780,8 @@ async function mountSketch() {
     initialData: { elements: sketchEls, appState: { theme: "dark", viewBackgroundColor: "transparent", currentItemStrokeColor: sketchColor, ...sketchView() } },
     excalidrawAPI: (a) => { sketchApi = a; },
     onChange: (els, st) => {
-      if (st.activeTool?.type !== sketchToolNow && sketchOn) paintSketchBar(st.activeTool?.type);
+      const selId = Object.keys(st.selectedElementIds || {})[0], selColor = selId && els.find((x) => x.id === selId)?.strokeColor;
+      if (sketchOn && (st.activeTool?.type !== sketchToolNow || (selColor && selColor !== sketchColor))) { if (selColor) sketchColor = selColor; paintSketchBar(st.activeTool?.type); }
       clearTimeout(t);
       t = setTimeout(() => {
         const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
@@ -1795,7 +1800,7 @@ async function mountSketch() {
   });
   new ResizeObserver(() => sketchApi?.refresh()).observe(el);
 }
-async function setSketch(on) {
+async function setSketch(on, tool = "freedraw") {
   if (orchMode !== "free" || orchMax) { if (on) toast("Drawing works on the free canvas"); return; }
   sketchOn = on;
   $("#orch-sketch")?.classList.toggle("on", on);
@@ -1806,8 +1811,8 @@ async function setSketch(on) {
   paintSketchBar();
   await mountSketch();
   for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
-  sketchApi?.setActiveTool({ type: "freedraw" }); // turning it on means "I want to draw": the pen
-  paintSketchBar("freedraw");
+  sketchApi?.setActiveTool({ type: tool }); // the pen from the toolbar or D; the selection when a shape was clicked
+  paintSketchBar(tool);
   sketchApi?.refresh();
 }
 const SKETCH_TOOLS = [["selection", "select", "Select and move (V)"], ["freedraw", "edit", "Pen (P)"], ["rectangle", "rect", "Box (R)"], ["ellipse", "circle", "Ellipse (O)"],
@@ -1818,8 +1823,81 @@ function paintSketchBar(tool) {
   if (!bar) return;
   bar.innerHTML = SKETCH_TOOLS.map(([t, ic, tip]) => `<button type="button" class="hud-btn ${t === sketchToolNow ? "on" : ""}" data-act="sketch-tool" data-tool="${t}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 16)}</button>`).join("")
     + '<span class="orch-hud-sep"></span>'
-    + SKETCH_COLORS.map((c) => `<button type="button" class="hud-btn sketch-c ${c === sketchColor ? "on" : ""}" data-act="sketch-color" data-c="${c}" title="Color" aria-label="Color ${c}"><i style="background:${c}"></i></button>`).join("")
+    + SKETCH_COLORS.map(([c, n]) => `<button type="button" class="hud-btn sketch-c ${c === sketchColor ? "on" : ""}" data-act="sketch-color" data-c="${c}" title="${n}" aria-label="Color ${n}"><i style="background:${c}"></i></button>`).join("")
     + `<span class="orch-hud-sep"></span><button type="button" class="hud-btn" data-act="orch-sketch" title="Done (Esc)" aria-label="Stop drawing">${icon("x", 16)}</button>`;
+}
+// The topmost shape under a screen point (its box plus a few px; `edge`: only near its outline), or null. A label
+// inside a box counts as the box. ponytail: boxes ignore rotation; Excalidraw's own hit test if that ever matters.
+function sketchHit(cx, cy, edge = false) {
+  const lay = $("#orch-sketch");
+  if (!sketchApi || !lay) return null;
+  const r = lay.getBoundingClientRect(), x = (cx - r.left - orchPanX) / orchZoom, y = (cy - r.top - orchPanY) / orchZoom, pad = 8 / orchZoom;
+  const els = sketchApi.getSceneElements();
+  for (let i = els.length - 1; i >= 0; i--) {
+    const e = els[i], xs = e.points ? e.points.map((p) => e.x + p[0]) : [e.x, e.x + e.width], ys = e.points ? e.points.map((p) => e.y + p[1]) : [e.y, e.y + e.height];
+    const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+    if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+    if (edge && !e.points && x > x0 + 2 * pad && x < x1 - 2 * pad && y > y0 + 2 * pad && y < y1 - 2 * pad) continue;
+    return e.containerId ? els.find((c) => c.id === e.containerId) || e : e;
+  }
+  return null;
+}
+const sketchSelected = () => Object.keys(sketchApi?.getAppState().selectedElementIds || {});
+const sketchSelect = (id) => sketchApi?.updateScene({ appState: { selectedElementIds: id ? { [id]: true } : {} } });
+// Change the selected shapes (their labels too) and what's drawn next; undoable with Ctrl+Z.
+function sketchPaint(patch) {
+  const sel = new Set(sketchSelected());
+  if (patch.strokeColor) sketchColor = patch.strokeColor;
+  const next = { strokeColor: "currentItemStrokeColor", backgroundColor: "currentItemBackgroundColor", strokeWidth: "currentItemStrokeWidth", fillStyle: "currentItemFillStyle" };
+  sketchApi?.updateScene({
+    appState: Object.fromEntries(Object.entries(patch).filter(([k]) => next[k]).map(([k, v]) => [next[k], v])),
+    elements: sketchApi.getSceneElements().map((e) => sel.has(e.id) || sel.has(e.containerId) ? { ...e, ...(e.type === "text" ? { strokeColor: patch.strokeColor ?? e.strokeColor } : patch), version: e.version + 1, versionNonce: (Math.random() * 2 ** 31) | 0, updated: Date.now() } : e),
+    captureUpdate: "IMMEDIATELY",
+  });
+  paintSketchBar();
+}
+// Excalidraw's own actions (duplicate, layer order, delete) through their shortcuts, so links and labels stay intact.
+const sketchKey = (key, code, mods = {}) => $("#orch-sketch .excalidraw")?.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true, ...mods }));
+function sketchMenu(cx, cy) {
+  const hit = sketchHit(cx, cy);
+  if (hit && !sketchSelected().includes(hit.id)) sketchSelect(hit.id);
+  const n = sketchSelected().length;
+  const sw = (list, key, extra = {}) => list.map(([c, name]) => ({ label: name, dot: c, run: () => sketchPaint({ [key]: c, ...extra }) }));
+  ctxMenu(cx, cy, n ? [
+    { label: "Color", ic: "edit", sub: sw(SKETCH_COLORS, "strokeColor") },
+    { label: "Fill", ic: "rect", sub: [{ label: "None", ic: "x", run: () => sketchPaint({ backgroundColor: "transparent" }) }, ...sw(SKETCH_FILLS, "backgroundColor", { fillStyle: "solid" })] },
+    { label: "Thickness", ic: "type", sub: [["Thin", 1], ["Medium", 2], ["Bold", 4]].map(([l, w]) => ({ label: l, run: () => sketchPaint({ strokeWidth: w }) })) },
+    "-",
+    { label: "Duplicate", ic: "copy", kbd: "Ctrl+D", run: () => sketchKey("d", "KeyD", { ctrlKey: true }) },
+    { label: "Bring to front", ic: "front", run: () => sketchKey("]", "BracketRight", { ctrlKey: true, shiftKey: true }) },
+    { label: "Send to back", ic: "back", run: () => sketchKey("[", "BracketLeft", { ctrlKey: true, shiftKey: true }) },
+    "-",
+    { label: n > 1 ? `Delete ${n}` : "Delete", ic: "trash", kbd: "Del", danger: true, run: () => sketchKey("Delete", "Delete") },
+  ] : [
+    { label: "Select all", ic: "select", kbd: "Ctrl+A", off: !sketchEls.length, run: () => sketchApi?.updateScene({ appState: { selectedElementIds: Object.fromEntries(sketchApi.getSceneElements().map((e) => [e.id, true])) } }) },
+    { label: "Stop drawing", ic: "x", kbd: "Esc", run: () => setSketch(false) },
+  ]);
+}
+// Clicks around the sketch: a shape clicked while drawing is off opens it for editing (selected); while drawing with the
+// selection tool, a click on a card (not on a shape) leaves drawing so the next click reaches the card. Right-click on
+// the sketch gets Overlook's menu instead of Excalidraw's long one.
+function bindSketchClicks(canvas) {
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || orchMode !== "free" || orchMax || !sketchApi) return;
+    const onCard = !!e.target.closest(".orch-pane"), hit = sketchHit(e.clientX, e.clientY, onCard);
+    if (!sketchOn && hit && (onCard ? !e.target.closest("button, input, textarea, .orch-head, .orch-port, .orch-resize") : onCanvasBg(e.target, canvas))) {
+      e.preventDefault(); e.stopPropagation();
+      setSketch(true, "selection").then(() => sketchSelect(hit.id));
+    } else if (sketchOn && sketchToolNow === "selection" && !hit && document.elementsFromPoint(e.clientX, e.clientY).some((el) => el.closest(".orch-pane"))) {
+      e.preventDefault(); e.stopPropagation();
+      setSketch(false);
+    }
+  }, true);
+  canvas.addEventListener("contextmenu", (e) => {
+    if (!e.target.closest?.(".orch-sketch.on")) return;
+    e.preventDefault(); e.stopPropagation();
+    sketchMenu(e.clientX, e.clientY);
+  }, true);
 }
 // An agent's `overlook draw`: Mermaid becomes shapes, placed right of the agent's card.
 async function sketchFromMermaid(src, parent) {
@@ -2781,6 +2859,7 @@ function agentsBody() {
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
     addSketchLayer($("#orch-canvas"));
+    bindSketchClicks($("#orch-canvas"));
     magnify($(".cv-tl"), 0, true); magnify($("#orch-hud"), 10); magnify($("#orch-hud-br"), -10);
     bindMap($("#orch-map"));
     hoverMenu($('.cv-tl [data-act="cv-menu"]'), mainMenu);
@@ -3059,7 +3138,7 @@ function ctxBuild(items) {
     if (it === "-") { if (box.lastChild && !box.lastChild.classList.contains("ctx-sep")) box.insertAdjacentHTML("beforeend", '<div class="ctx-sep" role="separator"></div>'); continue; }
     const b = document.createElement("button");
     b.type = "button"; b.className = `ctx-item${it.danger ? " danger" : ""}`; b.disabled = !!it.off; b.setAttribute("role", "menuitem");
-    b.innerHTML = `<span class="ctx-ic">${it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
+    b.innerHTML = `<span class="ctx-ic">${it.dot ? `<i class="ctx-dot" style="background:${esc(it.dot)}"></i>` : it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
     if (!it.sub) {
       b.onclick = (e) => { e.stopPropagation(); ctxClose(); it.run?.(e); };
       box.appendChild(b);
@@ -4474,7 +4553,7 @@ const ACTIONS = {
   "orch-add-sticky": () => addSticky(),
   "orch-sketch": () => setSketch(!sketchOn),
   "sketch-tool": (el) => { sketchApi?.setActiveTool({ type: el.dataset.tool }); paintSketchBar(el.dataset.tool); },
-  "sketch-color": (el) => { sketchColor = el.dataset.c; sketchApi?.updateScene({ appState: { currentItemStrokeColor: sketchColor } }); paintSketchBar(); },
+  "sketch-color": (el) => sketchPaint({ strokeColor: el.dataset.c }),
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
