@@ -11,11 +11,13 @@
 //   overlook write <note> [--append] <text…>   replace (or add to) the text of a note wired to this card
 //   overlook sketch                   what's drawn on the canvas (texts, shapes, arrows as "A → B")
 //   overlook draw [mermaid…]          draw a Mermaid diagram on the canvas, beside this card (or pipe it in on stdin)
+//   overlook browser <cmd> [arg…]    drive the browser card wired to this one: open <url> | read | shot | click <css |
+//                                    text=… | x,y> | type <text> | key <Enter|Tab|…> (open, with none, puts one on the canvas)
 //   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
 // <card> is a card id or part of its name, as `overlook peers` prints them.
 const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
 const [cmd, card, ...rest] = process.argv.slice(2);
-const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook spawn <agent> [--cwd dir] [task] | overlook note <text> | overlook context | overlook write <note> [--append] <text> | overlook sketch | overlook draw <mermaid> | overlook todo [task]";
+const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook spawn <agent> [--cwd dir] [task] | overlook note <text> | overlook context | overlook write <note> [--append] <text> | overlook sketch | overlook draw <mermaid> | overlook browser <open|read|shot|click|type|key> [arg] | overlook todo [task]";
 // To-dos work from any terminal on this machine (the canvas's variables aren't needed).
 if (cmd === "todo") {
   const base = url || `http://127.0.0.1:${process.env.PORT || 3333}`, text = [card, ...rest].filter(Boolean).join(" ").trim();
@@ -72,6 +74,9 @@ if (cmd === "peers") {
   const append = rest[0] === "--append", words = append ? rest.slice(1) : rest;
   const r = await call("/api/pty/write", { to: card, append, text: words.length ? words.join(" ") : await Bun.stdin.text() });
   console.log(`wrote to "${r.name}"`);
+} else if (cmd === "browser" && card) {
+  const r = await call("/api/pty/browser", { cmd: card, arg: rest.join(" ") });
+  console.log(r.text);
 } else if (cmd === "sketch") {
   const { text } = await call("/api/pty/sketch", {});
   console.log(text || "Nothing is drawn on the canvas.");
