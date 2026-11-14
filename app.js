@@ -1232,10 +1232,19 @@ function syncWires(force) {
   const term = (k) => (k.startsWith("terminal:") ? k.slice(9) : "");
   const wires = orchLinks.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
   const names = Object.fromEntries(orchPanes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
-  const body = JSON.stringify({ wires, names });
+  // Whatever is wired to a terminal (either way round: notes, vault notes, other terminals) is context for the agent in
+  // it; the server hands it over (deliverWired in tasks.ts).
+  const ctx = {};
+  for (const l of orchLinks) for (const [t, o] of [[l.a, l.b], [l.b, l.a]]) {
+    const p = term(t) && orchPanes.find((x) => paneKey(x) === o), add = (item) => (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), ...item });
+    if (p?.kind === "sticky") add({ text: p.text || "" });
+    if (p?.kind === "note") add({ path: p.id });
+    if (p?.kind === "terminal") add({ term: p.id });
+  }
+  const body = JSON.stringify({ wires, names, ctx });
   if (body === wiresSent && !force) return;
   wiresSent = body; wiresAt = Date.now();
-  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names }).catch(() => { wiresSent = ""; });
+  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx }).catch(() => { wiresSent = ""; });
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
 const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
@@ -1752,6 +1761,40 @@ function addPane(item, x, y) {
   agentsBody();
   return true;
 }
+// Cards an agent asked for (`overlook spawn` / `overlook note`, see takeSpawns in tasks.ts): each opens right of the card
+// that asked, below the others there, wired to it, without taking the focus; the server hears how it went on the next poll.
+let spawnDone = [];
+async function takeSpawns() {
+  const panes = orchPanes.filter((p) => p.kind === "terminal").map((p) => p.id);
+  if (!panes.length && !spawnDone.length) return;
+  const done = spawnDone; spawnDone = [];
+  const r = await api("/api/canvas/spawns", { panes, done }).catch(() => { spawnDone.push(...done); return null; });
+  if (!r?.spawns?.length) return;
+  const active = orchActive;
+  for (const s of r.spawns) {
+    const parent = orchPanes.find((p) => p.kind === "terminal" && p.id === s.parent);
+    // An agent wrote into a sticky wired to it (overlook write): the text changes in place.
+    if (s.kind === "write") {
+      const note = orchPanes.find((p) => p.kind === "sticky" && paneKey(p) === s.target);
+      if (note) note.text = s.text;
+      spawnDone.push({ id: s.id, ...(note ? {} : { why: "that note is no longer on the canvas" }) });
+      continue;
+    }
+    const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
+      : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
+    if (parent && typeof parent.x === "number") {
+      ensurePaneRect(p);
+      p.x = parent.x + parent.w + 40; p.y = parent.y;
+      const hit = () => orchPanes.find((q) => typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
+      for (let n = 0, q; n < 40 && (q = hit()); n++) p.y = q.y + q.h + 40;
+    }
+    if (!parent || !addPane(p)) { spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
+    orchLinks.push({ a: paneKey(parent), b: paneKey(p) });
+    spawnDone.push({ id: s.id });
+  }
+  orchActive = active;
+  saveCanvas(); orchSigs.clear(); agentsBody();
+}
 // Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
 let hotWires = new Set();
 async function pollHandoffs() {
@@ -1759,7 +1802,7 @@ async function pollHandoffs() {
 
   if (Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
   const r = await api("/api/pty").catch(() => null);
-  const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [`terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
+  const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [h.from.includes(":") ? h.from : `terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
 // The map (bottom right, like Maestri's): the cards as coloured blocks, the screen as a frame, the rest dimmed. Its own
@@ -1862,16 +1905,23 @@ function drawLinks(tmp) {
   const plane = $("#orch-plane");
   if (!plane) return;
   drawMap(); // a card moved or resized
-  let svg = plane.querySelector("#orch-links");
-  if (!svg) {
-    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.id = "orch-links"; svg.classList.add("orch-links");
-    plane.prepend(svg);
-  }
+  // Two layers: the wires over the cards (a note dropped on a terminal still shows its wire), and their click targets
+  // under them (a click on a card never removes a wire that crosses it). Hovering a target marks its wire.
+  const layer = (id, top) => {
+    let el = plane.querySelector(`#${id}`);
+    if (!el) {
+      el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      el.id = id; el.classList.add("orch-links");
+      if (top) el.classList.add("over"); else el.onmouseover = el.onmouseout = (e) => svg.querySelector(`g[data-i="${e.target.dataset.i}"]`)?.classList.toggle("del", e.type === "mouseover");
+      top ? plane.append(el) : plane.prepend(el);
+    }
+    return el;
+  };
+  const svg = layer("orch-links", true), hits = layer("orch-wire-hits", false);
   const byKey = new Map(orchPanes.map((p) => [paneKey(p), p]));
   orchLinks = orchLinks.filter((l) => byKey.has(l.a) && byKey.has(l.b));
   const on = orchMode === "free" && !orchMax;
-  svg.style.display = on ? "" : "none";
+  svg.style.display = hits.style.display = on ? "" : "none";
   if (!on) return;
   const curve = (x1, y1, x2, y2) => {
     const dx = x2 - x1;
@@ -1879,17 +1929,108 @@ function drawLinks(tmp) {
     const sign = dx >= 0 ? 1 : -1;
     return `M${x1},${y1} C${x1 + cx * sign},${y1} ${x2 - cx * sign},${y2} ${x2},${y2}`;
   };
-  svg.innerHTML = `<defs><marker id="orch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0L10,5L0,10z"/></marker></defs>`
-    + orchLinks.map((l, i) => {
-      const a = byKey.get(l.a), b = byKey.get(l.b);
-      const fromLeft = a.x > b.x + b.w / 2;
-      const x1 = fromLeft ? a.x : a.x + a.w, y1 = a.y + a.h / 2;
-      const x2 = fromLeft ? b.x + b.w : b.x, y2 = b.y + b.h / 2;
-      const d = curve(x1, y1, x2, y2);
-      const hot = hotWires.has([l.a, l.b].sort().join("|"));
-      return `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path><path class="ln ${hot ? "hot" : ""}" d="${d}" marker-end="url(#orch-arrow)"/>`;
-    }).join("")
-    + (tmp ? `<path class="ln tmp" d="${curve(...tmp)}"/>` : "");
+  // A wire hangs from each card at the side that faces the other one (across the wider gap: a note under a terminal
+  // links bottom to top), at the point of that side closest to the other card.
+  const box = (p) => ({ x: p.x, y: p.y, w: p.w, h: p.collapsed ? 34 : p.h });
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+  const route = (a, b) => {
+    const gx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w)), gy = Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h));
+    const midY = (Math.max(a.y, b.y) + Math.min(a.y + a.h, b.y + b.h)) / 2, midX = (Math.max(a.x, b.x) + Math.min(a.x + a.w, b.x + b.w)) / 2;
+    const at = (p, dir, x = midX, y = midY) => dir === "r" || dir === "l"
+      ? { x: dir === "r" ? p.x + p.w : p.x, y: clamp(y, p.y + 16, p.y + p.h - 16), nx: dir === "r" ? 1 : -1, ny: 0 }
+      : { x: clamp(x, p.x + 16, p.x + p.w - 16), y: dir === "d" ? p.y + p.h : p.y, nx: 0, ny: dir === "d" ? 1 : -1 };
+    let s, t;
+    if (gx < 0 && gy < 0) {
+      // One card over the other: both ends leave by the edge the two cards have closest, a little apart, and the cable
+      // loops outside them.
+      const e = { r: Math.abs(a.x + a.w - b.x - b.w), l: Math.abs(a.x - b.x), d: Math.abs(a.y + a.h - b.y - b.h), u: Math.abs(a.y - b.y) };
+      const dir = Object.keys(e).reduce((m, k) => (e[k] < e[m] ? k : m));
+      t = at(b, dir);
+      const side = dir === "r" || dir === "l", room = side ? a.y + a.h - 16 - t.y : a.x + a.w - 16 - t.x, off = room >= 80 ? 80 : -80;
+      s = side ? at(a, dir, 0, t.y + off) : at(a, dir, t.x + off);
+    } else {
+      // Apart: from the edges facing each other, across the wider gap (side by side: left/right; one above the other:
+      // bottom/top), each end at the point of its edge nearest the other card, so it slides along as a card moves.
+      const dir = gx >= gy ? (b.x + b.w / 2 >= a.x + a.w / 2 ? "r" : "l") : (b.y + b.h / 2 >= a.y + a.h / 2 ? "d" : "u");
+      s = at(a, dir); t = at(b, { r: "l", l: "r", d: "u", u: "d" }[dir]);
+    }
+    return { s, t };
+  };
+  const smooth = (p) => {
+    const f = (n) => Math.round(n * 10) / 10, mid = (u, v) => `${f((u.x + v.x) / 2)},${f((u.y + v.y) / 2)}`;
+    return `M${f(p[0].x)},${f(p[0].y)} ` + p.slice(1, -1).map((q, i) => `Q${f(q.x)},${f(q.y)} ${mid(q, p[i + 2])}`).join(" ") + ` L${f(p.at(-1).x)},${f(p.at(-1).y)}`;
+  };
+  // The DOM only changes when the set of wires does; the ropes then move their paths' d.
+  const keys = orchLinks.map((l) => `${l.a}>${l.b}`), sig = keys.join(",");
+  if (svg.dataset.sig !== sig) {
+    svg.dataset.sig = sig;
+    hits.innerHTML = keys.map((_, i) => `<path class="hit" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path>`).join("");
+    svg.innerHTML = keys.map((_, i) => `<g data-i="${i}"><path class="ln"/></g>`).join("");
+    for (const k of ropes.keys()) if (!keys.includes(k)) ropes.delete(k);
+  }
+  orchLinks.forEach((l, i) => {
+    const r = rope(keys[i], route(box(byKey.get(l.a)), box(byKey.get(l.b))));
+    r.ln = svg.children[i]?.firstChild; r.hit = hits.children[i];
+    svg.children[i]?.classList.toggle("hot", hotWires.has([l.a, l.b].sort().join("|")));
+  });
+  ropePaint = () => { for (const r of ropes.values()) { const d = smooth(r.pts); r.ln?.setAttribute("d", d); r.hit?.setAttribute("d", d); } };
+  let tp = svg.querySelector("path.tmp");
+  if (tmp) { tp ||= svg.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "path")); tp.setAttribute("class", "ln tmp"); tp.setAttribute("d", curve(...tmp)); } else tp?.remove();
+  ropeKick();
+}
+// Wires are ropes (Verlet: points that remember where they were, pulled down by gravity, held at a fixed distance
+// from each other): they hang loose between the cards, drop when wired, and swing when a card moves. The simulation
+// runs only while something moves, and settles at once with reduced motion.
+const ropes = new Map(); // wire ("a>b") -> { pts: [{ x, y, px, py }], seg, s, t, ln, hit }
+const ROPE_N = 16, GRAVITY = .45, DAMPING = .965, SLACK = 1.12;
+let ropeRaf = 0, ropeStill = 0, ropePaint = () => {};
+function rope(key, { s, t }) {
+  let r = ropes.get(key);
+  if (!r) {
+    // It starts bowed out the way its ends face (a rope hung on two left edges falls to the left, not into the cards).
+    const len = Math.hypot(t.x - s.x, t.y - s.y), ox = (s.nx + t.nx) / 2 * len * .3, oy = (s.ny + t.ny) / 2 * len * .3;
+    r = { pts: Array.from({ length: ROPE_N + 1 }, (_, i) => {
+      const u = i / ROPE_N, bow = Math.sin(Math.PI * u), x = s.x + (t.x - s.x) * u + ox * bow, y = s.y + (t.y - s.y) * u + oy * bow;
+      return { x, y, px: x, py: y };
+    }) };
+    ropes.set(key, r);
+  }
+  // As long as the ends are apart, plus slack as far as the ends are side by side: lying across it hangs loose, the
+  // further the more; standing up (one card under the other) extra rope would only pile up in a kink.
+  const len = Math.hypot(t.x - s.x, t.y - s.y), across = len ? Math.abs(t.x - s.x) / len : 0;
+  r.seg = (len * (1 + (SLACK - 1) * across) + 30 * across + 2) / ROPE_N; r.s = s; r.t = t;
+  return r;
+}
+function ropeStep(r) {
+  const p = r.pts, n = p.length - 1;
+  let moved = 0;
+  for (let i = 1; i < n; i++) {
+    const q = p[i], vx = (q.x - q.px) * DAMPING, vy = (q.y - q.py) * DAMPING;
+    q.px = q.x; q.py = q.y; q.x += vx; q.y += vy + GRAVITY;
+    moved = Math.max(moved, Math.abs(vx) + Math.abs(vy));
+  }
+  p[0].x = r.s.x; p[0].y = r.s.y; p[n].x = r.t.x; p[n].y = r.t.y; // the ends ride on their cards
+  for (let k = 0; k < 24; k++) for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[i + 1], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, f = (d - r.seg) / d;
+    const wa = i === 0 ? 0 : 1, wb = i + 1 === n ? 0 : 1, w = wa + wb;
+    if (!w) continue;
+    a.x += dx * f * wa / w; a.y += dy * f * wa / w; b.x -= dx * f * wb / w; b.y -= dy * f * wb / w;
+  }
+  return moved;
+}
+function ropeTick() {
+  ropeRaf = 0;
+  if (!$("#orch-links")?.isConnected) return; // left the canvas
+  let moved = 0;
+  for (const r of ropes.values()) moved = Math.max(moved, ropeStep(r));
+  ropePaint();
+  ropeStill = moved < .02 ? ropeStill + 1 : 0;
+  if (ropeStill < 30) ropeRaf = requestAnimationFrame(ropeTick);
+}
+function ropeKick() {
+  ropeStill = 0;
+  if (calm.matches) { for (let i = 0; i < 400; i++) for (const r of ropes.values()) ropeStep(r); ropePaint(); return; }
+  if (!ropeRaf) ropeRaf = requestAnimationFrame(ropeTick);
 }
 const htmlText = (h) => { const d = document.createElement("div"); d.innerHTML = h; return d.textContent.trim(); };
 // What the cards linked into `key` say, shaped as a preamble for the next message (fits within `budget` chars).
@@ -2025,7 +2166,7 @@ function agents() {
   };
   agentsBody();
   if (afterCanvas) { const make = afterCanvas; afterCanvas = null; make(); } // a hand-off from another page (toCanvas)
-  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); }, 2000);
+  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); takeSpawns(); }, 2000);
   ambient(art("agents"));
 }
 function renderMultiChips() {
@@ -3130,7 +3271,7 @@ async function orchPaint(force) {
       if (!ta) {
         feed.innerHTML = `<div class="orch-sticky-wrap"><textarea class="orch-sticky-input" placeholder="Write a note… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
         ta = feed.querySelector(".orch-sticky-input");
-        ta.oninput = () => { p.text = ta.value; saveCanvas(); };
+        ta.oninput = () => { p.text = ta.value; saveCanvasSoon(); };
       } else if (document.activeElement !== ta) {
         ta.value = p.text || "";
       }

@@ -1784,19 +1784,21 @@ test("adversarial verification: terminal & shell launcher, emulator detection, f
   expect(appJs).toContain("set-terminal");
 });
 
+// A bash pane on the canvas, and a wait for its output.
+const openPane = (id: string) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=${id}&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=120&rows=30`, { headers: { origin: BASE } } as any);
+  const st = { ws, out: "" };
+  ws.onmessage = (e) => { st.out += e.data; };
+  return new Promise<typeof st>((res) => { ws.onopen = () => res(st); });
+};
+const until = async (st: { out: string }, re: RegExp, ms = 15000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(100)) if (re.test(st.out)) return;
+  throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
+};
+
 test("agent hand-off: a terminal talks to the terminals wired to it, and only to those", async () => {
   // Two shells; A drives everything through the `overlook` command Overlook puts on its PATH.
-  const open = (id: string) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=${id}&shell=bash&cwd=${encodeURIComponent(ROOT)}&cols=120&rows=30`, { headers: { origin: BASE } } as any);
-    const st = { ws, out: "" };
-    ws.onmessage = (e) => { st.out += e.data; };
-    return new Promise<typeof st>((res) => { ws.onopen = () => res(st); });
-  };
-  const until = async (st: { out: string }, re: RegExp, ms = 15000) => {
-    for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(100)) if (re.test(st.out)) return;
-    throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
-  };
-  const a = await open("t_ha"), b = await open("t_hb");
+  const a = await openPane("t_ha"), b = await openPane("t_hb");
   // Wires come from Overlook's own page only: a program in a pane (no Origin) can't wire itself to anything.
   const wire = (body: object, origin = BASE) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify({ client: "test-canvas", ...body }) });
   expect((await wire({ wires: [["t_ha", "t_hb"]] }, "")).status).toBe(403);
@@ -1815,6 +1817,88 @@ test("agent hand-off: a terminal talks to the terminals wired to it, and only to
   a.ws.close(); b.ws.close();
   for (const id of ["t_ha", "t_hb"]) await post("/api/pty/close", { id });
 });
+
+test("maestro: a card opens cards wired to it, through the canvas that shows it", async () => {
+  const m = await openPane("t_ma");
+  const take = (body: object, origin = BASE) => fetch(`${BASE}/api/canvas/spawns`, { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify(body) });
+  const next = async (panes: string[], done: object[] = []) => {
+    for (const end = Date.now() + 8000; Date.now() < end; await Bun.sleep(100)) { const { spawns } = await (await take({ panes, done })).json(); done = []; if (spawns.length) return spawns; }
+    throw new Error(`nothing to take: ${m.out.slice(-600)}`);
+  };
+  expect((await take({ panes: ["t_ma"] }, "")).status).toBe(403); // only Overlook's own page takes them
+  m.ws.send("overlook spawn nope; overlook spawn shell --cwd /tmp; overlook note 'remember the milk'\r");
+  await until(m, /say which agent: .*shell/);
+  expect((await (await take({ panes: ["someone-else"] })).json()).spawns).toEqual([]); // a canvas without the caller gets nothing
+  const [sh] = await next(["t_ma"]);
+  expect(sh).toMatchObject({ parent: "t_ma", kind: "shell", cwd: "/tmp" });
+  // The canvas reports it opened the card: the caller hears back with its id; a refused note says why.
+  const [note] = await next(["t_ma"], [{ id: sh.id }]);
+  await until(m, new RegExp(`${sh.id}: opened and wired to this card`));
+  expect(note).toMatchObject({ parent: "t_ma", kind: "sticky", text: "remember the milk" });
+  await take({ panes: [], done: [{ id: note.id, why: "the canvas is full" }] });
+  await until(m, /overlook: the canvas is full/);
+  m.ws.close();
+  await post("/api/pty/close", { id: "t_ma" });
+});
+
+test("wired notes reach the agent: overlook context, and --new only gives what changed", async () => {
+  const c = await openPane("t_ctx");
+  const wire = (ctx: object) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-ctx", wires: [], names: {}, ctx }) });
+  const sticky = { key: "sticky:1", name: "Note", text: "ship it on friday" };
+  await wire({ t_ctx: [sticky, { key: "note:a", name: "HTTP caching", path: "3 Concepts/HTTP caching.md" }, { key: "note:b", name: "x", path: "../package.json" }] });
+  c.ws.send("overlook context --new; echo ONE; overlook context --new; echo TWO\r");
+  await until(c, /[\r\n]TWO\r?\n/);
+  const out = c.out.slice(c.out.lastIndexOf("context --new; echo TWO"));
+  expect(out).toContain("ship it on friday");
+  expect(out).toContain(`### Vault note "HTTP caching" (${VAULT}/3 Concepts/HTTP caching.md)`);
+  expect(out).not.toContain("\"dependencies\""); // the ../package.json path is not a vault note: never read
+  expect(out.slice(out.indexOf("ONE")).replace(/ONE[\s\S]*?\n/, "")).not.toContain("ship it"); // unchanged: nothing the second time
+  // An edited note comes again; the plain form always shows everything.
+  await wire({ t_ctx: [{ ...sticky, text: "ship it on monday" }] });
+  c.ws.send("clear; overlook context --new; overlook context | wc -l; echo DONE\r");
+  await until(c, /[\r\n]DONE\r?\n/);
+  expect(c.out).toContain("ship it on monday");
+  // A cleared or compacted conversation lost them: --all (its SessionStart hook) gives everything again, seen or not.
+  c.ws.send("overlook context --all | grep -c monday; echo ALLDONE\r");
+  await until(c, /[\r\n]1\r?\nALLDONE/);
+  expect((await post("/api/pty/context", { from: "t_ctx", token: "nope" })).status).toBe(403);
+  c.ws.close();
+  await post("/api/pty/close", { id: "t_ctx" });
+});
+
+test("anything wired reaches any agent: typed in once it rests, terminals included; agents write into wired notes", async () => {
+  // A stand-in agent: any program named in agents.json's "process" counts (here cat, which shows what it's given).
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  await post("/api/settings", { agents: [...init.agents, { id: "catty", name: "Catty", process: "cat", run: ["cat"] }] });
+  const ag = await openPane("t_ag"), sh = await openPane("t_sh");
+  const wire = (ctx: object) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-push", wires: [["t_ag", "t_sh"]], names: { t_ag: "Agent", t_sh: "Shell" }, ctx }) });
+  sh.ws.send("echo SHELL_SAYS_$((6*7))\r");
+  await until(sh, /SHELL_SAYS_42/);
+  await wire({ t_ag: [{ key: "sticky:9", name: "Plan", text: "step one" }, { key: "terminal:t_sh", name: "Shell", term: "t_sh" }], t_sh: [{ key: "terminal:t_ag", name: "Agent", term: "t_ag" }] });
+  ag.ws.send("cat\r"); // the user typed: nothing is typed over it for a few seconds
+  await until(ag, /\[Overlook: the user wired this[\s\S]*step one[\s\S]*Terminal "Shell" \(card t_sh\)[\s\S]*SHELL_SAYS_42/, 25000);
+  await Bun.sleep(1500); // the tty echoes it, then cat prints it: let both land
+  const times = () => ag.out.match(/\[Overlook: the user wired/g)?.length, first = times();
+  await Bun.sleep(9000);
+  expect(times()).toBe(first); // once, not again every few seconds
+  expect(sh.out).not.toContain("[Overlook:"); // a shell at its prompt gets nothing typed in
+
+  // Writing: a vault note's file directly, a sticky through the canvas (taken and applied like a spawn).
+  ag.ws.send("\x03"); // back to the shell
+  await wire({ t_ag: [{ key: "note:h", name: "HTTP caching", path: "3 Concepts/HTTP caching.md" }, { key: "sticky:9", name: "Plan", text: "step one" }] });
+  ag.ws.send("overlook write HTTP --append 'Written by an agent'; overlook write Plan 'step two'; echo WROTE\r");
+  const take = (body: object) => fetch(`${BASE}/api/canvas/spawns`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify(body) }).then((r) => r.json());
+  let w: any[] = [];
+  for (const end = Date.now() + 8000; Date.now() < end && !w.length; await Bun.sleep(100)) w = (await take({ panes: ["t_ag"] })).spawns;
+  expect(w[0]).toMatchObject({ kind: "write", target: "sticky:9", text: "step two" });
+  await take({ panes: [], done: [{ id: w[0].id }] });
+  await until(ag, /wrote to "Plan"[\s\S]*WROTE/);
+  expect(ag.out).toContain('wrote to "HTTP caching"');
+  expect(readFileSync(`${VAULT}/3 Concepts/HTTP caching.md`, "utf8")).toMatch(/stateless\.\nWritten by an agent\n$/);
+  for (const t of [ag, sh]) t.ws.close();
+  for (const id of ["t_ag", "t_sh"]) await post("/api/pty/close", { id });
+  await post("/api/settings", { agents: init.agents });
+}, 60000);
 
 test("an agent pane runs the agent inside a shell: the prompt is text, and the shell stays when the agent exits", async () => {
   const init = await (await fetch(`${BASE}/api/settings`)).json();
