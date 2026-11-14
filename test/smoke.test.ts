@@ -2367,3 +2367,19 @@ test("to-dos: add from one typed line, complete a repeating one, delete; Tasks.m
   expect(del.todos.some((t: any) => t.id === id)).toBe(false);
   expect((await (await fetch(`${BASE}/api/todos`)).json()).todos.length).toBe(del.todos.length);
 });
+
+test("agent usage: the canvas status line keeps the newest limits, still prints the user's own line, /api/usage serves them", async () => {
+  const home = `${ROOT}/usage-home`, now = Math.floor(Date.now() / 1000);
+  mkdirSync(`${home}/.claude`, { recursive: true });
+  writeFileSync(`${home}/.claude/settings.json`, JSON.stringify({ statusLine: { type: "command", command: "cat > /dev/null; echo mine" } }));
+  const line = (used: number, reset: number) => Bun.spawnSync([`${ROOT}/bin/overlook`, "statusline"], { env: { ...ENV, HOME: home }, stdin: new TextEncoder().encode(JSON.stringify({ rate_limits: { five_hour: { used_percentage: used, resets_at: now + reset }, seven_day: { used_percentage: 5, resets_at: now + 9e5 } } })) });
+  const saved = () => JSON.parse(readFileSync(`${ROOT}/cache/usage/claude.json`, "utf8")).five_hour.used_percentage;
+  expect(line(40, 3600).stdout.toString().trim()).toBe("mine");
+  line(10, 3600); // an idle card repeating an older number in the same window
+  expect(saved()).toBe(40);
+  line(3, 7200); // a new window
+  expect(saved()).toBe(3);
+  const r = await fetch(`${BASE}/api/usage`);
+  expect(r.ok).toBe(true);
+  expect(Array.isArray((await r.json()).agents)).toBe(true);
+});

@@ -1029,6 +1029,12 @@ async function handle(req: Request, port: number) {
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/dirs") { const d = listDirs(ROOT, url.searchParams.get("path") ?? undefined, url.searchParams.get("hidden") === "1"); return d ? json(d) : new Response("invalid cwd", { status: 400 }); }
+  // The agents' limits, as each one's own status line last reported them (cache/usage/<id>.json, from `overlook statusline`);
+  // an agent with no such file shows without numbers.
+  if (p === "/api/usage") return json({ now: Date.now(), agents: loadAgents(import.meta.dir).filter((a) => tuiOk(a) && ready(a)).map((a) => {
+    try { return { id: a.id, name: a.name, usage: /^[\w-]+$/.test(a.id) ? JSON.parse(readFileSync(`${import.meta.dir}/cache/usage/${a.id}.json`, "utf8")) : null }; }
+    catch { return { id: a.id, name: a.name, usage: null }; }
+  }) });
   if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   // no-cache: the app window revalidates on every load, so a restart's new UI shows up without a hard refresh.
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`), { headers: { "cache-control": "no-cache" } });

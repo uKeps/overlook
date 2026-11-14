@@ -1347,7 +1347,49 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   top: 10px; left: 50%; translate: -50% 0; max-width: calc(100% - 340px);
   display: inline-flex; align-items: center; gap: 2px; padding: 4px;
 }
-.orch-hud.cv-br { top: auto; bottom: 12px; left: auto; right: 12px; translate: none; max-width: calc(100% - 24px); }
+/* bottom right: agent usage, then the view */
+.cv-br-row { position: absolute; z-index: 16; bottom: 12px; right: 12px; max-width: calc(100% - 24px); display: flex; align-items: flex-end; gap: 8px; }
+.cv-br-row > .cv-island { position: relative; }
+.cv-br-row > .cv-usage-panel { position: absolute; }
+.orch-hud.cv-br { top: auto; left: auto; translate: none; max-width: none; }
+.cv-usage { height: 42px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; transition: background .18s var(--ease); }
+.cv-usage[hidden] { display: none; }
+.cv-usage:hover, .cv-usage[aria-expanded="true"] { background: color-mix(in srgb, var(--surface) 80%, #333); }
+.u-ring { flex: none; rotate: -90deg; }
+.u-ring circle { fill: none; stroke-width: 3.5; }
+.u-track { stroke: rgba(255, 255, 255, .1); }
+.u-fill { stroke: var(--accent-2); stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: calc(100 - var(--p, 0));
+  transition: stroke-dashoffset .2s var(--ease), stroke .2s var(--ease); }
+.u-ring.hot .u-fill { stroke: var(--bad); }
+.u-ring.none .u-track { stroke-dasharray: 2 4; }
+.u-ring.none .u-fill { opacity: 0; }
+/* the panel rises from the button */
+.cv-usage-panel {
+  right: 0; bottom: calc(100% + 8px); width: 300px; max-width: calc(100vw - 24px); padding: 6px;
+  border-radius: 12px; font: 500 13px var(--body); color: var(--ink);
+  opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(6px) scale(.98); transform-origin: right bottom;
+  transition: opacity .18s var(--ease), transform .18s var(--ease), visibility 0s .18s;
+}
+.cv-usage-panel.open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; transition-delay: 0s; }
+.u-head { padding: 6px 8px 4px; font: 600 11px var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.u-agent { padding: 8px; border-radius: 9px; }
+.u-agent + .u-agent { border-top: 1px solid var(--line); border-radius: 0 0 9px 9px; }
+.u-top { display: flex; align-items: center; gap: 10px; }
+.u-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.u-name b { font: 600 13.5px var(--display); }
+.u-when { font-size: 11.5px; color: var(--muted); }
+.u-agent.stale .u-when { color: var(--warn); }
+.u-big { font: 600 15px var(--display); font-variant-numeric: tabular-nums; }
+.u-row { display: grid; grid-template-columns: 54px 1fr 34px; align-items: center; column-gap: 8px; margin-top: 9px; font-size: 12px; }
+.u-row[hidden] { display: none; }
+.u-lbl { color: var(--muted); }
+.u-bar { height: 5px; border-radius: 99px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+.u-bar i { display: block; height: 100%; width: 100%; border-radius: inherit; background: var(--accent-2); transform-origin: left;
+  transform: scaleX(calc(var(--p, 0) / 100)); transition: transform .2s var(--ease), background .2s var(--ease); }
+.u-bar.hot i { background: var(--bad); }
+.u-pct { text-align: right; font-variant-numeric: tabular-nums; }
+.u-reset { grid-column: 2 / -1; margin-top: 2px; font-size: 11px; color: var(--muted); }
+.u-agent.stale .u-ring, .u-agent.stale .u-row { opacity: .6; }
 .hud-btn {
   flex: none; min-width: 32px; height: 32px; padding: 0 6px; display: grid; place-items: center; border: 0; border-radius: 9px;
   background: none; color: var(--muted); font: 500 14px/1 var(--body);
@@ -1985,9 +2027,9 @@ body.canvas-page .orch-canvas { border-radius: 0; border: 0; }
 body.canvas-page .orch-canvas.tiled { padding: 60px 10px 100px; } /* the split's panes end above the dock */
 body.canvas-page.dock-float .orch-canvas.tiled { padding-bottom: 70px; }
 /* a phone: the dock spans the bottom, so the view bar and the map sit above it */
-@media (max-width: 760px) { body.canvas-page .orch-hud.cv-br { bottom: 84px; } body.canvas-page .cv-map { bottom: 136px; } }
+@media (max-width: 760px) { body.canvas-page .cv-br-row { bottom: 84px; } body.canvas-page .cv-map { bottom: 136px; } }
 /* a pinned dock (~600px wide) meets the view bar below ~1280px: the view bar and the map rise above it */
-@media (max-width: 1280px) { body.canvas-page:not(.dock-float) .orch-hud.cv-br { bottom: 100px; } body.canvas-page:not(.dock-float) .cv-map { bottom: 152px; } }
+@media (max-width: 1280px) { body.canvas-page:not(.dock-float) .cv-br-row { bottom: 100px; } body.canvas-page:not(.dock-float) .cv-map { bottom: 152px; } }
 body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill {
   height: 40px; padding: 0 16px; border-color: rgba(255, 255, 255, .09);
   background: color-mix(in srgb, var(--surface) 94%, #000); box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
