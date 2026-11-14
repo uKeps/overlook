@@ -1908,7 +1908,17 @@ function bindSketchClicks(canvas) {
     const onCard = !!e.target.closest(".orch-pane"), hit = sketchHit(e.clientX, e.clientY, onCard);
     if (!sketchOn && hit && (onCard ? !e.target.closest("button, .orch-port, .orch-resize") : onCanvasBg(e.target, canvas))) {
       e.preventDefault(); e.stopImmediatePropagation();
-      setSketch(true, "selection").then(() => sketchSelect(hit.id));
+      // The same press goes on to Excalidraw once drawing is on, so press-and-drag moves the shape in one gesture.
+      let up = false;
+      addEventListener("pointerup", () => { up = true; }, { once: true });
+      const opts = { clientX: e.clientX, clientY: e.clientY, button: 0, buttons: 1, pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: true, bubbles: true, cancelable: true };
+      setSketch(true, "selection").then(() => {
+        const cv = $("#orch-sketch canvas.interactive");
+        if (!cv) return sketchSelect(hit.id);
+        cv.dispatchEvent(new PointerEvent("pointerdown", opts));
+        if (up) cv.dispatchEvent(new PointerEvent("pointerup", { ...opts, buttons: 0 })); // already released: a click
+        if (!sketchSelected().includes(hit.id)) sketchSelect(hit.id);
+      });
     } else if (sketchOn && sketchToolNow === "selection" && !hit && document.elementsFromPoint(e.clientX, e.clientY).some((el) => el.closest(".orch-pane"))) {
       e.preventDefault(); e.stopPropagation();
       setSketch(false);
