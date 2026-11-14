@@ -13,7 +13,7 @@ import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
 import { attach, input, safeUrl } from "./browser";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, ptyBrowser, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, ptyBrowser, ptyDone, ptyClose, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -959,6 +959,8 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     if (p === "/api/pty/context") { const r = await ptyContext(b.from, b.token, !!b.fresh); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ items: r }); }
+    if (p === "/api/pty/done") { const r = ptyDone(b.from, b.token, b.text); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/pty/close-card") { const r = await ptyClose(b.from, b.token, b.to); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/browser") { const r = await ptyBrowser(b.from, b.token, b.cmd, b.arg); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/sketch") { const r = ptySketch(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/draw") { const r = await ptyDraw(b.from, b.token, b.text); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }

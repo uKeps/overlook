@@ -551,6 +551,7 @@ type Pty = {
   id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number;
   token: string; screen?: InstanceType<typeof Headless>; ser?: InstanceType<typeof SerializeAddon>; size: string; resizing?: Timer;
   typed?: number; // when the user last typed into it (wired context isn't typed in over a half-written prompt)
+  doneAt?: number; // when its agent said its task was done (overlook done); a message or the user's typing clears it
 };
 const ptys = new Map<string, Pty>();
 const TAIL = 512_000;
@@ -670,7 +671,8 @@ export function closePty(id: string) {
   setTimeout(() => { if (t.code === undefined) try { t.proc.kill(9); } catch {} }, 3000);
   return ptys.delete(id);
 }
-export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, running: t.code === undefined }));
+export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, running: t.code === undefined,
+  done: t.doneAt && (t.typed ?? 0) < t.doneAt ? t.doneAt : 0 }));
 // A drag resizes the pane every frame, and each resize is a SIGWINCH (the shell redraws its prompt): only the last size
 // in 80 ms is applied, and only if it changed.
 export function resizePty(t: Pty, cols: number, rows: number) {
@@ -700,7 +702,7 @@ export function screenText(t: Pty, max = 60) {
 // A wire between two terminal cards on the canvas lets the programs in them talk, both ways: `overlook send <card> "…"`
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
-export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Whatever the user wires to your card (notes, terminals) is context for your work: it reaches you as a message starting with [Overlook: …], and `overlook context` prints it again. `overlook write <note> \"text\"` replaces a wired note's text (`--append` adds to it): use it to keep a shared plan, progress or decisions there. The user can sketch on the canvas: `overlook sketch` prints what's drawn (texts, shapes, arrows); `overlook draw` takes a Mermaid diagram (args or stdin) and draws it beside your card, when a picture explains better than text. `overlook browser open <url>` opens a browser card the user also sees (then read, shot, click, type, key), to check a web page or app.";
+export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Whatever the user wires to your card (notes, terminals) is context for your work: it reaches you as a message starting with [Overlook: …], and `overlook context` prints it again. `overlook write <note> \"text\"` replaces a wired note's text (`--append` adds to it): use it to keep a shared plan, progress or decisions there. The user can sketch on the canvas: `overlook sketch` prints what's drawn (texts, shapes, arrows); `overlook draw` takes a Mermaid diagram (args or stdin) and draws it beside your card, when a picture explains better than text. `overlook browser open <url>` opens a browser card the user also sees (then read, shot, click, type, key), to check a web page or app. When a task you were given is finished, end with `overlook done \"summary\"`: it reports to whoever gave it and folds your card. `overlook close <card>` closes a card you opened once its work is in.";
 // claude also gets the wired notes through hooks: all of them when a conversation starts, resumes, is cleared or compacted
 // (its context lost them), then only new or changed ones with each prompt (nothing when none changed).
 const hook = (command: string) => [{ hooks: [{ type: "command", command, timeout: 5 }] }];
@@ -770,7 +772,29 @@ export function ptySend(from: unknown, token: unknown, to: unknown, text: unknow
   setTimeout(() => { if (p.code === undefined) p.proc.terminal?.write("\r"); }, 150);
   handoffs.push({ from: me.id, to: p.id, at: now });
   if (handoffs.length > 50) handoffs.shift();
+  p.doneAt = undefined; // a message is new work
   return true;
+}
+// `overlook done "summary"`: the agent's task is finished. The summary goes to the card that gave the task (if it did),
+// and the canvas folds this card; it closes by itself after a while untouched (app.js), still reopenable.
+export function ptyDone(from: unknown, token: unknown, text: unknown) {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  const parent = kids.get(me.id), msg = String(text ?? "").trim();
+  const sent = parent && msg ? ptySend(from, token, parent, msg) : null;
+  me.doneAt = Date.now();
+  return { reported: sent === true ? parent : "", why: typeof sent === "string" ? sent : "" };
+}
+// `overlook close <card>`: closes a card the caller opened (only those), once its work is in.
+export async function ptyClose(from: unknown, token: unknown, to: unknown) {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  const id = String(to ?? "");
+  if (kids.get(id) !== me.id) return `${id || "that card"} isn't one you opened (overlook spawn)`;
+  const now = Date.now(), s: Spawn = { id: `c_${now}_${Math.random().toString(36).slice(2, 6)}`, parent: me.id, kind: "close", target: id, at: now, done: () => {} };
+  spawns.push(s);
+  const why = await new Promise<string | null>((res) => { s.done = res; setTimeout(() => res(null), SPAWN_WAIT); });
+  return why === null ? { text: "queued: it closes when the Overlook canvas shows it" } : why ? why : { text: "closed" };
 }
 // Whatever the user wires to a pane is context for the agent in it: sticky notes, vault notes, other terminals. It reaches
 // any agent right away: the server types it in as a message once the agent is the pane's foreground program and the
@@ -931,7 +955,7 @@ export async function ptyWrite(from: unknown, token: unknown, to: unknown, text:
 // cards live in the browser, so a request waits here until the canvas showing the caller takes it (it polls every 2 s),
 // adds the card and the wire, and says how it went on its next poll; the caller hears back within MAX_WAIT or is told
 // it's queued. An opened agent reports to its maestro by message (push), so the maestro needn't poll its screen.
-type Spawn = { id: string; parent: string; kind: "agent" | "shell" | "sticky" | "write" | "draw" | "browser"; url?: string; agent?: string; cwd?: string; prompt?: string; text?: string; target?: string; at: number; taken?: boolean; done: (why: string | null) => void };
+type Spawn = { id: string; parent: string; kind: "agent" | "shell" | "sticky" | "write" | "draw" | "browser" | "close"; url?: string; agent?: string; cwd?: string; prompt?: string; text?: string; target?: string; at: number; taken?: boolean; done: (why: string | null) => void };
 const spawns: Spawn[] = [], kids = new Map<string, string>(); // opened card -> the card that opened it
 const MAX_KIDS = 6, SPAWN_WAIT = 8000;
 const kidsOf = (id: string) => [...kids].filter(([k, p]) => p === id && ptys.get(k)?.code === undefined).length + spawns.filter((s) => s.parent === id && (s.kind === "agent" || s.kind === "shell")).length;
@@ -952,7 +976,7 @@ export async function ptySpawn(from: unknown, token: unknown, b: any, agents: st
   if (recent.length >= 10) return "rate limit: 10 new cards a minute";
   sent.set(k, [...recent, now]);
   // The opened agent learns who gave it the task and how to answer, like a message does (see ptySend).
-  const task = kind === "agent" && prompt ? `[Task from "${nameOf(me)}" (card ${me.id}) on the Overlook canvas. When you finish, or if you get stuck, report in a few lines with: overlook send ${me.id} "..."]\n${prompt}` : "";
+  const task = kind === "agent" && prompt ? `[Task from "${nameOf(me)}" (card ${me.id}) on the Overlook canvas. When you finish, report in a few lines with: overlook done "..." (it reaches that card and folds yours); if you get stuck, ask with: overlook send ${me.id} "..."]\n${prompt}` : "";
   const s: Spawn = { id: `term_${now}_${Math.random().toString(36).slice(2, 6)}`, parent: me.id, kind, at: now, done: () => {},
     ...(kind === "sticky" ? { text } : { cwd, ...(kind === "agent" ? { agent: b.agent, prompt: task } : {}) }) };
   spawns.push(s);

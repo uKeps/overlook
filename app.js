@@ -2341,6 +2341,12 @@ async function takeSpawns() {
       spawnDone.push({ id: s.id, ...(note ? {} : { why: "that note is no longer on the canvas" }) });
       continue;
     }
+    if (s.kind === "close") {
+      const t = orchPanes.find((x) => x.kind === "terminal" && x.id === s.target);
+      if (t) closeCardQuietly(t);
+      spawnDone.push({ id: s.id, ...(t ? {} : { why: "that card is no longer on the canvas" }) });
+      continue;
+    }
     if (s.kind === "draw") {
       sketchFromMermaid(s.text, parent).then((why) => spawnDone.push({ id: s.id, ...(why ? { why } : {}) }));
       continue;
@@ -2364,13 +2370,48 @@ async function takeSpawns() {
 // Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
 let hotWires = new Set();
 async function pollHandoffs() {
-  if (!orchLinks.length || !orchPanes.some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
-
-  if (Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
+  if (!orchPanes.some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
+  if (orchLinks.length && Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
   const r = await api("/api/pty").catch(() => null);
+  doneCards(r?.sessions || []);
   const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [h.from.includes(":") ? h.from : `terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
+// An agent that ran `overlook done` folds to its title bar, dimmed with a check; untouched for 30 min it closes, and
+// stays reopenable from the canvas menu (the card keeps its session, so reopening resumes the conversation). Typing in it,
+// a message to it or expanding it keeps it.
+const CLOSED_KEY = "overlook.closed", DONE_CLOSE = 30 * 60_000;
+const closedCards = () => { try { return JSON.parse(localStorage.getItem(CLOSED_KEY) || "[]"); } catch { return []; } };
+function closeCardQuietly(p, why) {
+  if (p.run?.session) try { localStorage.setItem(CLOSED_KEY, JSON.stringify([{ pane: { ...p, doneAt: undefined, keep: undefined, collapsed: false }, name: termName(p), at: Date.now() }, ...closedCards().filter((c) => c.pane.id !== p.id)].slice(0, 10))); } catch {}
+  termClose(p.id);
+  const k = paneKey(p);
+  orchPanes = orchPanes.filter((x) => x !== p);
+  orchLinks = orchLinks.filter((l) => l.a !== k && l.b !== k);
+  orchSelected.delete(k);
+  if (orchActive === k) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
+  saveCanvas(); orchSigs.clear(); agentsBody(); orchPaint(true);
+  if (why) toast(why);
+}
+function reopenCard(c) {
+  try { localStorage.setItem(CLOSED_KEY, JSON.stringify(closedCards().filter((x) => x.pane.id !== c.pane.id))); } catch {}
+  const p = { ...c.pane };
+  delete p.x; delete p.y;
+  if (addPane(p)) { saveCanvas(); focusPane(paneKey(p), true); }
+}
+function doneCards(sessions) {
+  const done = new Map(sessions.map((t) => [t.id, t.done || 0]));
+  let changed = false;
+  for (const p of [...orchPanes]) {
+    if (p.kind !== "terminal") continue;
+    const at = done.get(p.id) || 0;
+    if (at && p.doneAt !== at) { p.doneAt = at; p.keep = false; if (orchMode === "free") p.collapsed = true; changed = true; }
+    else if (!at && p.doneAt) { p.doneAt = undefined; changed = true; } // working again
+    else if (at && !p.keep && Date.now() - at > DONE_CLOSE) { closeCardQuietly(p, `Closed "${termName(p)}", done 30 min ago: reopen it from the canvas menu`); changed = false; }
+  }
+  if (changed) { saveCanvas(); orchSigs.clear(); orchPaint(true); }
+}
+
 // The map (bottom right, like Maestri's): the cards as coloured blocks, the screen as a frame, the rest dimmed. Its own
 // zoom follows you: it frames the cards and, as you pan or zoom away from them, eases out to keep the frame in view.
 // Click a card to go to it, click elsewhere to centre the view there, drag (the frame, or anywhere) to move, wheel to
@@ -3820,6 +3861,7 @@ function canvasMenu(cx, cy) {
     { label: "New browser", ic: "globe", run: () => drawCard("browser") },
     { label: "Draw on the canvas", ic: "edit", run: () => setSketch(true) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
+    closedCards().length && { label: "Reopen a closed agent", ic: "reload", sub: closedCards().map((c) => ({ label: c.name || "Agent", ic: "agents", run: () => reopenCard(c) })) },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
     "-",
     { label: "Paste card", ic: "paste", off: !canvasClip, run: () => placeSpec(canvasClip, at) },
@@ -3998,6 +4040,7 @@ async function orchPaint(force) {
     }
     card.classList.toggle("active", key === orchActive);
     card.classList.toggle("collapsed", !!p.collapsed && isFree);
+    card.classList.toggle("done", !!p.doneAt);
     card.classList.toggle("selected", orchSelected.has(key));
     card.classList.toggle("locked", !!p.locked && isFree);
     card.dataset.kind = p.kind;
@@ -5068,6 +5111,7 @@ const ACTIONS = {
     if (!p) return;
     if (orchMode !== "free" || orchMax) return toast("Minimize works on the free canvas");
     p.collapsed = !p.collapsed;
+    if (p.doneAt) p.keep = true; // looked at: it stays until closed by hand
     saveCanvas(); orchSigs.clear(); orchPaint(true);
   },
   "pane-tui": (el) => {

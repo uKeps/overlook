@@ -15,11 +15,13 @@
 //                                    text=… | x,y> | type <text> | key <Enter|Tab|…> (open, with none, puts one on the canvas)
 //   overlook statusline               claude's status line on the canvas: keeps the account's rate limits from its stdin in
 //                                    cache/usage/claude.json, then runs the user's own status line so it looks the same
+//   overlook done [summary…]         your task is finished: the summary goes to the card that gave it, and yours folds
+//   overlook close <card>             close a card you opened (overlook spawn) once its work is in
 //   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
 // <card> is a card id or part of its name, as `overlook peers` prints them.
 const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
 const [cmd, card, ...rest] = process.argv.slice(2);
-const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook spawn <agent> [--cwd dir] [task] | overlook note <text> | overlook context | overlook write <note> [--append] <text> | overlook sketch | overlook draw <mermaid> | overlook browser <open|read|shot|click|type|key> [arg] | overlook todo [task]";
+const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook spawn <agent> [--cwd dir] [task] | overlook note <text> | overlook context | overlook write <note> [--append] <text> | overlook sketch | overlook draw <mermaid> | overlook browser <open|read|shot|click|type|key> [arg] | overlook done [summary] | overlook close <card> | overlook todo [task]";
 // To-dos work from any terminal on this machine (the canvas's variables aren't needed).
 if (cmd === "todo") {
   const base = url || `http://127.0.0.1:${process.env.PORT || 3333}`, text = [card, ...rest].filter(Boolean).join(" ").trim();
@@ -96,6 +98,11 @@ if (cmd === "peers") {
   const append = rest[0] === "--append", words = append ? rest.slice(1) : rest;
   const r = await call("/api/pty/write", { to: card, append, text: words.length ? words.join(" ") : await Bun.stdin.text() });
   console.log(`wrote to "${r.name}"`);
+} else if (cmd === "done") {
+  const r = await call("/api/pty/done", { text: [card, ...rest].filter(Boolean).join(" ") });
+  console.log(r.reported ? `done; reported to ${r.reported}` : r.why ? `done (the report didn't go: ${r.why})` : "done");
+} else if (cmd === "close" && card) {
+  console.log((await call("/api/pty/close-card", { to: card })).text);
 } else if (cmd === "browser" && card) {
   const r = await call("/api/pty/browser", { cmd: card, arg: rest.join(" ") });
   console.log(r.text);
