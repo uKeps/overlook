@@ -704,7 +704,9 @@ export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. C
 // claude also gets the wired notes through hooks: all of them when a conversation starts, resumes, is cleared or compacted
 // (its context lost them), then only new or changed ones with each prompt (nothing when none changed).
 const hook = (command: string) => [{ hooks: [{ type: "command", command, timeout: 5 }] }];
-export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("overlook context --all"), UserPromptSubmit: hook("overlook context --new") } });
+// Its status line goes through `overlook statusline`, which keeps the account's limits for the usage panel and then runs
+// the user's own status line.
+export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("overlook context --all"), UserPromptSubmit: hook("overlook context --new") }, statusLine: { type: "command", command: "overlook statusline" } });
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
 type Ctx = { key: string; name: string; text?: string; path?: string; term?: string; browser?: string; url?: string };

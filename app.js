@@ -3072,7 +3072,11 @@ function agentsBody() {
           <button type="button" class="cv-tl-btn" data-act="cv-menu" title="Menu: search, capture, layout" aria-label="Menu">${icon("menu", 18)}</button>
         </nav>
         <div class="cv-island orch-hud" id="orch-hud" role="toolbar" aria-label="Canvas tools"></div>
-        <div class="cv-island orch-hud cv-br" id="orch-hud-br" role="toolbar" aria-label="View"></div>
+        <div class="cv-br-row">
+          <button type="button" class="cv-island cv-usage" id="cv-usage" aria-label="Agent usage" aria-expanded="false" aria-controls="cv-usage-panel" hidden></button>
+          <div class="cv-island cv-usage-panel" id="cv-usage-panel" role="dialog" aria-label="Agent usage"></div>
+          <div class="cv-island orch-hud cv-br" id="orch-hud-br" role="toolbar" aria-label="View"></div>
+        </div>
         <div class="cv-island cv-map" id="orch-map" hidden>
           <svg role="img" aria-label="Map of the canvas: click or drag to move the view"></svg>
           <button type="button" class="cv-map-x" data-act="orch-map" title="Close the map (M)" aria-label="Close the map">${icon("x", 12)}</button>
@@ -3084,6 +3088,7 @@ function agentsBody() {
     magnify($(".cv-tl"), 0, true); magnify($("#orch-hud"), 10); magnify($("#orch-hud-br"), -10);
     bindMap($("#orch-map"));
     hoverMenu($('.cv-tl [data-act="cv-menu"]'), mainMenu);
+    bindUsage();
   }
   const fleetBadge = $("#orch-fleet-badge"), fleetPillCnt = $("#orch-fleet-pill-cnt"), pill = el.querySelector(".orch-fleet-pill"), fleetEl = el.querySelector(".orch-fleet"), fleetWrap = $("#orch-fleet-wrap");
   if (fleetBadge) fleetBadge.textContent = counts.all;
@@ -3338,6 +3343,71 @@ function paintHud(hud, isFree) {
   put(br, isFree ? view : "");
   if (br) br.hidden = !isFree;
 }
+// Agent usage, bottom right (Maestri's "Agent Usage"): a mini ring per agent (its 5-hour session), a click opens rings and
+// bars for the session and the week. Numbers come from what each agent itself reported (GET /api/usage); none = no data.
+let usageData = null;
+const usageLeft = (t) => { const m = Math.max(0, Math.round(t / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; };
+// A window that already reset says nothing about now: shown empty, not as its old number.
+const usageWin = (w, now) => w && w.resets_at * 1000 > now ? { p: Math.min(100, Math.max(0, Math.round(w.used_percentage))), left: usageLeft(w.resets_at * 1000 - now) } : null;
+const usageRing = (k, size) => `<svg class="u-ring" data-k="${k}" viewBox="0 0 36 36" width="${size}" height="${size}" aria-hidden="true"><circle class="u-track" cx="18" cy="18" r="15.5" pathLength="100"/><circle class="u-fill" cx="18" cy="18" r="15.5" pathLength="100"/></svg>`;
+function usagePaint() {
+  const btn = $("#cv-usage"), panel = $("#cv-usage-panel");
+  if (!btn || !usageData) return;
+  const { agents, now } = usageData;
+  btn.hidden = !agents.length;
+  // Rebuilt only when the agents change; the numbers are set on the same elements so rings and bars glide to them.
+  const sig = agents.map((a) => a.id).join();
+  if (btn.dataset.sig !== sig) {
+    btn.dataset.sig = sig;
+    btn.innerHTML = agents.map((a) => usageRing(`b-${a.id}`, 22)).join("");
+    panel.innerHTML = `<div class="u-head">Agent usage</div>` + agents.map((a) => `<section class="u-agent" data-a="${esc(a.id)}">
+        <div class="u-top">${usageRing(`p-${a.id}`, 40)}<div class="u-name"><b>${esc(a.name)}</b><span class="u-when"></span></div><span class="u-big"></span></div>
+        ${["Session", "Weekly"].map((l) => `<div class="u-row" data-w="${l}"><span class="u-lbl">${l}</span><span class="u-bar"><i></i></span><span class="u-pct"></span><span class="u-reset"></span></div>`).join("")}
+      </section>`).join("");
+    return void requestAnimationFrame(usagePaint); // a frame at 0 first, so they fill in
+  }
+  const tips = [];
+  for (const a of agents) {
+    const u = a.usage, s = usageWin(u?.five_hour, now), w = usageWin(u?.seven_day, now), sec = panel.querySelector(`[data-a="${CSS.escape(a.id)}"]`);
+    const set = (el, p) => { el.style.setProperty("--p", p ?? 0); el.classList.toggle("hot", p >= 80); };
+    for (const r of [btn.querySelector(`[data-k="b-${CSS.escape(a.id)}"]`), sec.querySelector(".u-ring")]) { set(r, s?.p); r.classList.toggle("none", !u); }
+    sec.classList.toggle("none", !u);
+    sec.querySelector(".u-big").textContent = s ? `${s.p}%` : "";
+    const ago = u && now - u.at;
+    sec.querySelector(".u-when").textContent = !u ? "No usage data" : ago < 60000 ? "Updated just now" : `Updated ${usageLeft(ago)} ago`;
+    sec.classList.toggle("stale", !!u && ago > 30 * 60000);
+    [s, w].forEach((x, i) => {
+      const row = sec.querySelectorAll(".u-row")[i];
+      row.hidden = !u;
+      set(row.querySelector(".u-bar"), x?.p);
+      row.querySelector(".u-pct").textContent = x ? `${x.p}%` : "--";
+      row.querySelector(".u-reset").textContent = x ? `resets in ${x.left}` : "reset, no new data";
+    });
+    tips.push(u ? `${a.name}: session ${s ? `${s.p}%` : "--"}, weekly ${w ? `${w.p}%` : "--"}` : `${a.name}: no usage data`);
+  }
+  btn.title = tips.join("\n");
+}
+async function usageLoad() {
+  const r = await fetch("/api/usage").catch(() => null);
+  if (r?.ok) { usageData = await r.json(); usagePaint(); }
+}
+function usageOpen(on) {
+  const btn = $("#cv-usage"), panel = $("#cv-usage-panel");
+  if (!btn) return;
+  panel.classList.toggle("open", on); btn.setAttribute("aria-expanded", on);
+  if (on) usageLoad();
+}
+function bindUsage() {
+  const btn = $("#cv-usage");
+  btn.onclick = (e) => { e.stopPropagation(); usageOpen(btn.getAttribute("aria-expanded") !== "true"); };
+  usageLoad();
+}
+// Live while the canvas is on screen: every 30 s, and at once when the window comes back.
+setInterval(() => { if (!document.hidden && $("#cv-usage")?.isConnected) usageLoad(); }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && $("#cv-usage")?.isConnected) usageLoad(); });
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.("#cv-usage, #cv-usage-panel")) usageOpen(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#cv-usage")?.getAttribute("aria-expanded") === "true") { usageOpen(false); $("#cv-usage").focus(); } });
+
 // The task bar (agent, folder, role, model, a prompt for one or more agents) floats under the tools while it's open.
 function deckShow(on = !$("#run")?.classList.contains("show")) {
   const deck = $("#run");

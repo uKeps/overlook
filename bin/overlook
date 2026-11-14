@@ -13,6 +13,8 @@
 //   overlook draw [mermaid…]          draw a Mermaid diagram on the canvas, beside this card (or pipe it in on stdin)
 //   overlook browser <cmd> [arg…]    drive the browser card wired to this one: open <url> | read | shot | click <css |
 //                                    text=… | x,y> | type <text> | key <Enter|Tab|…> (open, with none, puts one on the canvas)
+//   overlook statusline               claude's status line on the canvas: keeps the account's rate limits from its stdin in
+//                                    cache/usage/claude.json, then runs the user's own status line so it looks the same
 //   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
 // <card> is a card id or part of its name, as `overlook peers` prints them.
 const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
@@ -32,6 +34,26 @@ if (cmd === "todo") {
     console.log(now.map(show).join("\n") || "Nothing for today.");
     if (open.length > now.length) console.log(`(${open.length - now.length} more upcoming or without a date)`);
   }
+  process.exit(0);
+}
+// claude hands its status line the account's limits; every canvas card does, so a card idle since hours ago would
+// write back old numbers: a window only moves forward (a later reset, or the same one used more), whichever card ran last.
+if (cmd === "statusline") {
+  const { mkdirSync, readFileSync, writeFileSync, renameSync } = await import("node:fs");
+  const input = await Bun.stdin.text(), dir = `${import.meta.dir}/../cache/usage`, file = `${dir}/claude.json`;
+  try {
+    const rl = JSON.parse(input).rate_limits, old = (() => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return {}; } })();
+    const win = (n: any, o: any) => n?.resets_at && (!o?.resets_at || n.resets_at > o.resets_at || (n.resets_at === o.resets_at && n.used_percentage > o.used_percentage)) ? n : o;
+    const next = rl && { five_hour: win(rl.five_hour, old.five_hour), seven_day: win(rl.seven_day, old.seven_day) };
+    if (next && (next.five_hour !== old.five_hour || next.seven_day !== old.seven_day)) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(`${file}.${process.pid}`, JSON.stringify({ ...next, at: Date.now() }));
+      renameSync(`${file}.${process.pid}`, file); // atomic: the server never reads half a file
+    }
+  } catch {}
+  let line = "";
+  try { line = JSON.parse(readFileSync(`${process.env.CLAUDE_CONFIG_DIR || `${process.env.HOME}/.claude`}/settings.json`, "utf8")).statusLine?.command ?? ""; } catch {}
+  if (line) process.exit(Bun.spawnSync(["sh", "-c", line], { stdin: new TextEncoder().encode(input), stdout: "inherit", stderr: "inherit" }).exitCode ?? 0);
   process.exit(0);
 }
 // The hook form runs before each of the user's prompts: whatever goes wrong, it prints nothing and exits 0 (an exit 2
