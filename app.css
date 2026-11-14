@@ -2546,18 +2546,74 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .cv-map .map-ink { fill: none; stroke: color-mix(in srgb, var(--ink) 55%, transparent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .orch-sketch-box { position: absolute; z-index: 7; pointer-events: none; border: 1px solid #6965db; background: rgba(105, 101, 219, .08); border-radius: 2px; }
 
-/* Browser card: a slim address bar over the page (frames from the server's headless browser). */
+/* Browser card: a slim bar (back, forward, reload, a rounded address field, width/zoom) over the page, whose frames
+   come from the server's headless browser. Dark until the first frame: no white flash. */
 .orch-br { display: flex; flex-direction: column; height: 100%; }
-.orch-br-bar { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, .06); }
-.orch-br-url {
-  flex: 1; min-width: 0; margin-left: 4px; height: 28px; padding: 0 12px; border-radius: 8px; border: 1px solid transparent;
-  background: rgba(255, 255, 255, .05); color: var(--ink); font: 400 12.5px var(--body); outline: none;
-  transition: border-color .15s, background .15s;
+.orch-br-bar { position: relative; flex: none; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 6px; background: var(--win-bg); border-bottom: 1px solid var(--win-line); }
+.orch-br-btn {
+  flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; color: var(--muted);
+  transition: background .15s, color .15s, opacity .15s;
 }
-.orch-br-url:focus { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: rgba(255, 255, 255, .07); }
-.orch-br-view { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #fff; outline: none; cursor: default; }
-.orch-br-view canvas { display: block; width: 100%; height: 100%; }
-.orch-br-msg { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 20px; text-align: center; background: var(--surface); color: var(--muted, #999); font: 400 13px var(--body); }
-.orch-br-msg[hidden] { display: none; }
+.orch-br-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .07); color: var(--ink); }
+.orch-br-btn:active:not(:disabled) { background: rgba(255, 255, 255, .1); }
+.orch-br-btn:disabled { opacity: .3; cursor: default; }
+.orch-br-btn.on { color: var(--accent); }
+.orch-br-addr {
+  position: relative; flex: 1; min-width: 0; height: 26px; margin: 0 6px; border-radius: 999px; cursor: text;
+  background: rgba(255, 255, 255, .045); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .05);
+  transition: background .15s, box-shadow .15s;
+}
+.orch-br-addr:hover { background: rgba(255, 255, 255, .065); }
+.orch-br-addr:focus-within { background: rgba(0, 0, 0, .28); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent); }
+.orch-br-url {
+  width: 100%; height: 100%; padding: 0 14px; border: 0; background: none; outline: none; color: var(--ink); font: 400 12.5px var(--body);
+}
+.orch-br-url:not(:focus) { color: transparent; }
+.orch-br-url::placeholder { color: var(--faint); opacity: .7; }
+.orch-br-disp {
+  position: absolute; inset: 0 14px; display: flex; align-items: center; justify-content: center; pointer-events: none;
+  white-space: nowrap; overflow: hidden; font: 400 12.5px var(--body); color: color-mix(in srgb, var(--ink) 38%, transparent); transition: opacity .15s;
+}
+.orch-br-disp b { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-weight: 500; color: var(--ink); }
+.orch-br-disp span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.orch-br-addr:focus-within .orch-br-disp { opacity: 0; transition: none; }
+.orch-br-url::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--ink); }
+.orch-br-zoom {
+  flex: none; height: 20px; padding: 0 7px; margin-right: 2px; border-radius: 999px; font: 500 10.5px var(--body); font-variant-numeric: tabular-nums;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); transition: background .15s;
+}
+.orch-br-zoom:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.orch-br-zoom[hidden] { display: none; }
+/* the loading line: creeps toward the end while the page loads, fills and fades out when it's done */
+.orch-br-load {
+  position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; transform-origin: 0 50%; transform: scaleX(0); opacity: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 40%, transparent), var(--accent));
+}
+.orch-br-bar.loading .orch-br-load { opacity: 1; transform: scaleX(.85); transition: transform 8s cubic-bezier(.1, .7, .2, 1), opacity .15s; }
+.orch-br-bar.loaded .orch-br-load { opacity: 0; transform: scaleX(1); transition: transform .2s var(--ease), opacity .25s ease .18s; }
+.orch-br-view { position: relative; flex: 1; min-height: 0; overflow: hidden; background: color-mix(in srgb, var(--win-bg) 80%, #000); outline: none; cursor: default; }
+.orch-br-view canvas { display: block; width: 100%; height: 100%; opacity: 0; transition: opacity .18s var(--ease); }
+.orch-br-view.framed canvas { opacity: 1; }
+/* mobile width: the page as a phone-wide column in the middle of the card */
+.orch-br-view.phone { display: flex; justify-content: center; }
+.orch-br-view.phone canvas { flex: none; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
+/* starting, blank, disconnected, couldn't start: a quiet note over the page */
+.orch-br-msg {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; text-align: center;
+  background: color-mix(in srgb, var(--win-bg) 80%, #000); color: var(--muted); font: 400 12.5px var(--body);
+  opacity: 0; visibility: hidden; transition: opacity .18s var(--ease), visibility 0s .18s;
+}
+.orch-br-view:not([data-s=""]) .orch-br-msg { opacity: 1; visibility: visible; transition: opacity .18s var(--ease); }
+.orch-br-msg svg { color: var(--faint); opacity: .55; margin-bottom: 4px; }
+.orch-br-msg b { font: 500 13px var(--body); color: var(--ink); opacity: .85; }
+.orch-br-msg small { max-width: 340px; font-size: 12px; color: var(--faint); }
+.orch-br-msg .btn { margin-top: 8px; height: 28px; padding: 0 14px; font-size: 12px; border-radius: 999px; background: rgba(255, 255, 255, .07); color: var(--ink); }
+.orch-br-msg .btn:hover { background: rgba(255, 255, 255, .12); }
+.orch-br-view[data-s="blank"] .orch-br-msg { cursor: text; }
+.orch-br-view[data-s="blank"] .orch-br-msg b { font-weight: 400; color: var(--muted); }
+.orch-br-view[data-s="start"] .orch-br-msg svg { animation: br-breathe 1.6s ease-in-out infinite; }
+@keyframes br-breathe { 50% { opacity: .2; } }
+.win-fav { display: inline-grid; place-items: center; width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; color: var(--faint); }
+.win-fav img { width: 14px; height: 14px; border-radius: 3px; object-fit: contain; }
 .orch-pane[data-kind="browser"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 0 0 12px 12px; }
 .orch-pane[data-kind="browser"] .orch-br { flex: 1; min-width: 0; }

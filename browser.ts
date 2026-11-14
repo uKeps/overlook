@@ -9,7 +9,8 @@ const ROOT = import.meta.dir, PROFILE = `${ROOT}/cache/browser-profile`, SHOTS =
 type Sub = (m: string | Uint8Array) => void;
 type Tab = {
   id: string; target: string; ws: WebSocket; seq: number; calls: Map<number, (r: any) => void>; subs: Set<Sub>;
-  url: string; title: string; w: number; h: number; used: number; ready: Promise<void>;
+  url: string; title: string; icon: string; back: boolean; fwd: boolean; loading: boolean;
+  w: number; h: number; z: number; mobile: boolean; used: number; ready: Promise<void>;
 };
 let proc: ReturnType<typeof Bun.spawn> | null = null, base: Promise<string> | null = null, lastTab = Date.now();
 const tabs = new Map<string, Tab>(), opening = new Map<string, Promise<Tab>>();
@@ -50,13 +51,26 @@ function call(t: Tab, method: string, params: object = {}): Promise<any> {
   });
 }
 const send = (t: Tab, m: string | Uint8Array) => { for (const s of t.subs) s(m); };
-const meta = (t: Tab) => send(t, JSON.stringify({ t: "nav", url: t.url, title: t.title }));
+// The page's address, title, icon and whether back/forward can go anywhere (the card greys out its buttons).
+async function meta(t: Tab) {
+  const h = (await call(t, "Page.getNavigationHistory")).result;
+  if (h?.entries) { t.back = h.entries.slice(0, h.currentIndex).some((e: any) => e.url !== "about:blank"); t.fwd = h.currentIndex < h.entries.length - 1; }
+  send(t, JSON.stringify({ t: "nav", url: t.url, title: t.title, icon: t.icon, back: t.back, fwd: t.fwd }));
+}
+// The page's own icon (its <link rel=icon>, else /favicon.ico); the card shows it as an <img>, so http(s) only.
+const ICON = `(() => { const l = [...document.querySelectorAll("link[rel~=icon]")].pop(); return l ? l.href : /^https?:/.test(location.href) ? location.origin + "/favicon.ico" : ""; })()`;
 function drop(t: Tab) {
   tabs.delete(t.id);
   try { t.ws.close(); } catch {}
   for (const r of t.calls.values()) r({ error: { message: "the tab closed" } });
   send(t, JSON.stringify({ t: "gone" }));
 }
+
+// The title and icon, read again on every navigation (a page back from the back/forward cache fires no load event).
+const look = (t: Tab) => call(t, "Runtime.evaluate", { expression: `[document.title, ${ICON}]`, returnByValue: true }).then((r) => {
+  const [title, icon] = r.result?.result?.value ?? [];
+  t.title = String(title ?? ""); t.icon = /^https?:\/\//.test(String(icon)) ? String(icon).slice(0, 2000) : ""; meta(t);
+});
 
 // The card's tab (opened at `url` the first time).
 export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
@@ -67,7 +81,7 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
     const b = await devtools();
     const info = await (await fetch(`${b}/json/new?${encodeURIComponent(safeUrl(url) || "about:blank")}`, { method: "PUT" })).json() as any;
     const ws = new WebSocket(info.webSocketDebuggerUrl);
-    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: info.url, title: "", w: 900, h: 600, used: Date.now(), ready: Promise.resolve() };
+    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: info.url, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, used: Date.now(), ready: Promise.resolve() };
     t.ready = new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error("couldn't reach the tab")); });
     ws.onclose = () => { if (tabs.get(id) === t) drop(t); };
     ws.onmessage = (ev) => {
@@ -76,10 +90,12 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
       if (m.method === "Page.screencastFrame") {
         call(t, "Page.screencastFrameAck", { sessionId: m.params.sessionId });
         send(t, Buffer.from(m.params.data, "base64"));
-      } else if (m.method === "Page.frameNavigated" && !m.params.frame.parentId) { t.url = m.params.frame.url; meta(t); }
-      else if (m.method === "Page.navigatedWithinDocument") { t.url = m.params.url; meta(t); }
-      else if (m.method === "Page.loadEventFired" || m.method === "Page.domContentEventFired") {
-        call(t, "Runtime.evaluate", { expression: "document.title", returnByValue: true }).then((r) => { t.title = String(r.result?.result?.value ?? ""); meta(t); });
+      } else if (m.method === "Page.frameNavigated" && !m.params.frame.parentId) { t.url = m.params.frame.url; look(t); }
+      else if (m.method === "Page.navigatedWithinDocument") { t.url = m.params.url; look(t); }
+      else if (m.method === "Page.loadEventFired" || m.method === "Page.domContentEventFired") look(t);
+      else if ((m.method === "Page.frameStartedLoading" || m.method === "Page.frameStoppedLoading") && m.params.frameId === t.target) {
+        t.loading = m.method === "Page.frameStartedLoading";
+        send(t, JSON.stringify({ t: "load", on: t.loading }));
       }
     };
     await t.ready;
@@ -92,15 +108,18 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
   return p;
 }
 
-async function size(t: Tab, w: number, h: number) {
-  t.w = Math.max(200, Math.min(2400, Math.round(w))); t.h = Math.max(150, Math.min(1600, Math.round(h)));
-  await call(t, "Emulation.setDeviceMetricsOverride", { width: t.w, height: t.h, deviceScaleFactor: 1, mobile: false });
+// w × h in the page's CSS pixels; z is the card's page zoom (the page renders at z device pixels per CSS pixel, so frames
+// stay the card's size); mobile lays the page out as a phone would (viewport meta, no scrollbars), touch stays off.
+async function size(t: Tab, w: number, h: number, z = t.z, mobile = t.mobile) {
+  t.z = Math.max(0.25, Math.min(3, z)); t.mobile = mobile;
+  t.w = Math.max(200, Math.min(4000, Math.round(w))); t.h = Math.max(150, Math.min(3000, Math.round(h)));
+  await call(t, "Emulation.setDeviceMetricsOverride", { width: t.w, height: t.h, deviceScaleFactor: t.z, mobile: t.mobile });
   if (t.subs.size) await cast(t);
 }
 // Frames at the card's size; a fresh one right away (the screencast only sends when the page changes).
 async function cast(t: Tab) {
   await call(t, "Page.stopScreencast");
-  await call(t, "Page.startScreencast", { format: "jpeg", quality: 72, maxWidth: t.w, maxHeight: t.h, everyNthFrame: 1 });
+  await call(t, "Page.startScreencast", { format: "jpeg", quality: 72, maxWidth: Math.round(t.w * t.z), maxHeight: Math.round(t.h * t.z), everyNthFrame: 1 });
   const r = await call(t, "Page.captureScreenshot", { format: "jpeg", quality: 72 });
   if (r.result?.data) send(t, Buffer.from(r.result.data, "base64"));
 }
@@ -110,6 +129,7 @@ export async function attach(id: string, url: string, sub: Sub) {
   const t = await tabFor(id, url);
   t.subs.add(sub); t.used = Date.now();
   meta(t);
+  if (t.loading) sub(JSON.stringify({ t: "load", on: true }));
   await cast(t);
   return () => { t.subs.delete(sub); t.used = Date.now(); if (!t.subs.size) call(t, "Page.stopScreencast"); };
 }
@@ -132,7 +152,7 @@ export async function input(id: string, raw: string) {
     await call(t, "Input.dispatchMouseEvent", { type: "mouseWheel", x: num(m.x), y: num(m.y), deltaX: num(m.dx), deltaY: num(m.dy), modifiers: mods });
   } else if (m.t === "key" && typeof m.key === "string" && m.key.length <= 32) await key(t, m.key, String(m.code ?? "").slice(0, 32), m.e === "up", mods);
   else if (m.t === "text" && typeof m.text === "string") await call(t, "Input.insertText", { text: m.text.slice(0, 20_000) });
-  else if (m.t === "size") await size(t, num(m.w, 900), num(m.h, 600));
+  else if (m.t === "size") await size(t, num(m.w, 900), num(m.h, 600), num(m.z, 1), m.mobile === true);
   else if (m.t === "go" && safeUrl(m.url)) await call(t, "Page.navigate", { url: safeUrl(m.url) });
   else if (m.t === "reload") await call(t, "Page.reload");
   else if (m.t === "back" || m.t === "fwd") {
