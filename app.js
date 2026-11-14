@@ -1928,15 +1928,11 @@ function drawLinks(tmp) {
       t = at(b, dir);
       const side = dir === "r" || dir === "l", room = side ? a.y + a.h - 16 - t.y : a.x + a.w - 16 - t.x, off = room >= 80 ? 80 : -80;
       s = side ? at(a, dir, 0, t.y + off) : at(a, dir, t.x + off);
-    } else if (gx >= gy) {
-      // Side by side: from the sides facing each other; the rope sags between them.
-      const dir = b.x + b.w / 2 >= a.x + a.w / 2 ? "r" : "l";
-      s = at(a, dir); t = at(b, dir === "r" ? "l" : "r");
     } else {
-      // One above the other: a rope from the bottom to the top would just hang straight, so both ends hang from the
-      // same side (the one whose edges line up best), near the gap, and the rope loops loose beside the cards.
-      const dir = Math.abs(a.x + a.w - b.x - b.w) <= Math.abs(a.x - b.x) ? "r" : "l", down = b.y > a.y;
-      s = at(a, dir, 0, down ? a.y + a.h - 24 : a.y + 24); t = at(b, dir, 0, down ? b.y + 24 : b.y + b.h - 24);
+      // Apart: from the edges facing each other, across the wider gap (side by side: left/right; one above the other:
+      // bottom/top), each end at the point of its edge nearest the other card, so it slides along as a card moves.
+      const dir = gx >= gy ? (b.x + b.w / 2 >= a.x + a.w / 2 ? "r" : "l") : (b.y + b.h / 2 >= a.y + a.h / 2 ? "d" : "u");
+      s = at(a, dir); t = at(b, { r: "l", l: "r", d: "u", u: "d" }[dir]);
     }
     return { s, t };
   };
@@ -1979,8 +1975,10 @@ function rope(key, { s, t }) {
     }) };
     ropes.set(key, r);
   }
-  // As long as the ends are apart, plus slack: the further the cards, the more it hangs.
-  r.seg = (Math.hypot(t.x - s.x, t.y - s.y) * SLACK + 30) / ROPE_N; r.s = s; r.t = t;
+  // As long as the ends are apart, plus slack as far as the ends are side by side: lying across it hangs loose, the
+  // further the more; standing up (one card under the other) extra rope would only pile up in a kink.
+  const len = Math.hypot(t.x - s.x, t.y - s.y), across = len ? Math.abs(t.x - s.x) / len : 0;
+  r.seg = (len * (1 + (SLACK - 1) * across) + 30 * across + 2) / ROPE_N; r.s = s; r.t = t;
   return r;
 }
 function ropeStep(r) {
