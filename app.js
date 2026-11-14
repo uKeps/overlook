@@ -1448,6 +1448,20 @@ async function mountTerminalPane(card, p) {
         if (cols !== st.term.cols || rows !== st.term.rows) st.term.resize(cols, rows);
       } };
       st.term.open(st.el);
+      // The canvas zooms with a CSS scale: xterm turns a click into a cell from the scaled box but unscaled cells, so at
+      // 60% a click landed rows below the pointer. Its mouse service (selection, links, mouse reporting) gets the point
+      // mapped back into the terminal's own units first.
+      // ponytail: xterm's private _mouseService; if an update renames it, clicks are off at zoom again, nothing breaks.
+      const ms = st.term._core?._mouseService;
+      if (ms) {
+        const unscaled = (e, el) => {
+          const r = el.getBoundingClientRect(), k = el.offsetWidth ? r.width / el.offsetWidth : 1;
+          return Math.abs(k - 1) < 1e-3 ? e : { clientX: r.left + (e.clientX - r.left) / k, clientY: r.top + (e.clientY - r.top) / k };
+        };
+        const coords = ms.getCoords.bind(ms), report = ms.getMouseReportCoords.bind(ms);
+        ms.getCoords = (e, el, ...rest) => coords(unscaled(e, el), el, ...rest);
+        ms.getMouseReportCoords = (e, el) => report(unscaled(e, el), el);
+      }
       st.fit.fit();
       // Resize once the size settles (end of a drag), not every frame: each resize is a SIGWINCH and a prompt redraw.
       st.ro = new ResizeObserver(() => { clearTimeout(st.rt); st.rt = setTimeout(() => st.fit?.fit(), 70); });
