@@ -1183,7 +1183,8 @@ const bgEntry = (k) => CANVAS_BGS.find(([id]) => id === k) || CANVAS_BGS[0];
 let orchRole = "", orchCwd = "", orchMode = "free", orchDir = "cols", orchRatio = 50, orchBg = "dots",
   orchPanX = 24, orchPanY = CANVAS_TOP, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
   orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchMapOpen = true, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
-let cwdOpen = false, cwdBrowse = "~/dev", cwdQuery = "", cwdData = null, cwdPaneKey = "", cwdLaunch = null, cwdItems = [], cwdIdx = 0, cwdStart = "";
+let drawing = null; // a card being drawn: { kind, layer, sheet } (drawCard)
+let cwdOpen = false, cwdBrowse = "~/dev", cwdQuery = "", cwdData = null, cwdPaneKey = "", cwdItems = [], cwdIdx = 0, cwdStart = "";
 // Folders picked in the folder popover, latest first: they head its Recent list.
 const RECENT_CWDS = "overlook.recent-cwds";
 const recentCwds = () => { try { return JSON.parse(localStorage.getItem(RECENT_CWDS) || "[]"); } catch { return []; } };
@@ -1288,10 +1289,11 @@ const termLoad = () => (termLib ??= Promise.all([
   return r;
 }).catch((e) => { termLib = null; throw e; }));
 const terms = new Map(); // pane id -> { el, term, fit, ws, title, dead }
-// `at`: canvas coordinates (a right-click): the card opens there and the view stays put.
-function newTermPane(cwd, at) {
-  const p = { kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "" };
-  if (addPane(p, at?.x, at?.y)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p), !!at); }
+// `at`: canvas coordinates (a right-click), or a drawn rect {x, y, w, h}: the card opens there and the view stays put.
+// `extra`: more fields for the card (a name).
+function newTermPane(cwd, at, extra) {
+  const p = { kind: "terminal", id: `term_${Date.now()}`, shell: prefShell || "", cwd: cwd || $("#run-cwd")?.value || orchCwd || "", ...extra };
+  if (addAt(p, at)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p), !!at); }
 }
 // Turns a pane into a terminal running the agent's own TUI, in place (same spot, size and links); a pane for a session
 // that already has its terminal on the canvas just goes.
@@ -1305,10 +1307,10 @@ function tuiInPlace(p, run) {
 }
 function paneToTui(p, run) { tuiInPlace(p, run); saveCanvas(); orchSigs.clear(); agentsBody(); }
 // A new agent is a terminal running it (in the bar's folder); one without a TUI opens a shell.
-function newAgentTerm(agent, at) {
-  if (!S.runners?.find((r) => r.id === agent)?.tui) return newTermPane(undefined, at);
-  const p = { kind: "terminal", id: `term_${Date.now()}`, cwd: $("#run-cwd")?.value || orchCwd || "", run: newTuiRun(agent) };
-  if (addPane(p, at?.x, at?.y)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p), !!at); }
+function newAgentTerm(agent, at, extra) {
+  if (!S.runners?.find((r) => r.id === agent)?.tui) return newTermPane(undefined, at, extra);
+  const p = { kind: "terminal", id: `term_${Date.now()}`, cwd: $("#run-cwd")?.value || orchCwd || "", run: newTuiRun(agent), ...extra };
+  if (addAt(p, at)) { saveCanvas(); if (orchMode === "free") focusPane(paneKey(p), !!at); }
 }
 const defaultAgent = () => [$("#run-agent")?.value, "claude", ...(S.runners || []).map((r) => r.id)].find((id) => S.runners?.find((r) => r.id === id)?.tui);
 // A new agent TUI: claude gets --session-id up front so the pane can resume it later.
@@ -1628,7 +1630,7 @@ function paintCwdPop() {
   const pop = $("#cwd-pop");
   if (!pop) return;
   pop.hidden = !cwdOpen;
-  if (!cwdOpen) cwdLaunch = null;
+  if (!cwdOpen) sheetCwd();
   if (!cwdOpen || !cwdData) return;
   requestAnimationFrame(() => placeCwdPop(lastCwdBtn));
   // "planeit" finds plane-it-frontend: case, accents and separators don't count.
@@ -1675,7 +1677,7 @@ function paintCwdPop() {
       else if (e.key === "Backspace" && !inp.value && cwdData.parent) { e.preventDefault(); cwdGo(cwdData.parent); }
     };
   }
-  pop.querySelector("#cwd-q").placeholder = cwdLaunch ? `Open ${cwdLaunch.name} in…` : "Choose a folder…";
+  pop.querySelector("#cwd-q").placeholder = "Choose a folder…";
   $("#cwd-list").innerHTML = cwdItems.map((it, i) => `<div class="cwd-row ${i === cwdIdx ? "on" : ""}" role="option" aria-selected="${i === cwdIdx}">
       <button type="button" class="cwd-open" data-act="cwd-pick" data-path="${esc(it.path)}" title="${esc(it.path || D.vault)}">${icon(it.ic, 15)}<b>${esc(it.name)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ""}</button>
       ${it.nav ? `<button type="button" class="cwd-in" data-act="cwd-nav" data-path="${esc(it.nav)}" title="Go inside (Tab)" aria-label="Go inside ${esc(it.name)}">${icon("r", 14)}</button>` : ""}
@@ -1688,7 +1690,6 @@ function cwdGo(path) {
   loadCwdBrowser(path);
 }
 function pickCwd(val) {
-  const launch = cwdLaunch;
   if (val) try { localStorage.setItem(RECENT_CWDS, JSON.stringify([val, ...recentCwds().filter((c) => c !== val)].slice(0, 8))); } catch {}
   if (cwdPaneKey) {
     const p = orchPanes.find((x) => paneKey(x) === cwdPaneKey);
@@ -1702,15 +1703,6 @@ function pickCwd(val) {
   cwdOpen = false; cwdPaneKey = "";
   paintCwdPop();
   orchPaint(true);
-  if (launch) newAgentTerm(launch.agent, launch.at);
-}
-// A new agent from a menu asks where it works first (Shift+click, or Ctrl+Alt+N, skips this: the last folder).
-// `from`: the button the menu came from, or the screen point of a right-click.
-async function askAgentCwd(r, at, from) {
-  cwdPaneKey = ""; cwdLaunch = { agent: r.id, name: r.name, at }; lastCwdBtn = from; cwdOpen = true;
-  await loadCwdBrowser(orchCwd.replace(/\/[^/]+\/?$/, "") || "~/dev", true); // the folder around the last one: its siblings
-  placeCwdPop(from);
-  $("#cwd-q")?.focus();
 }
 
 const mdCache = new Map();
@@ -2027,7 +2019,7 @@ async function sketchFromMermaid(src, parent) {
 const brs = new Map(); // card id -> { ws, ro }
 function addBrowser(at) {
   const p = { kind: "browser", id: `br${++orchSeq}`, url: "about:blank" };
-  if (!addPane(p, at?.x, at?.y)) return;
+  if (!addAt(p, at)) return;
   saveCanvas();
   setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-br-url`)?.focus(), 120);
 }
@@ -2220,12 +2212,14 @@ function makeRoom() {
   return true;
 }
 // Puts a card on the workspace (from a click, a drop or the HUD); x/y are canvas coordinates of a drop.
+const bornKeys = new Set(); // cards just added: they fade in once (orchPaint)
 function addPane(item, x, y) {
   const k = paneKey(item), have = orchPanes.find((p) => paneKey(p) === k), p = have || item;
   if (!have) {
     if (!makeRoom()) return false;
     ensurePaneRect(p, orchPanes.length);
     orchPanes.push(p);
+    bornKeys.add(k);
   }
   if (x != null && orchMode === "free") { p.x = Math.round(x - 40); p.y = Math.round(y - 16); }
   orchActive = k; orchMax = ""; orchSigs.clear();
@@ -3324,7 +3318,7 @@ function paintHud(hud, isFree) {
   const sep = '<span class="orch-hud-sep"></span>', isFull = document.body.classList.contains("canvas-full");
   const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
   const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
-    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note") + b("orch-add-browser", "globe", "New browser") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
+    + b("draw-card", "agents", "New agent: drag where it goes (Ctrl+Alt+N)", 'data-kind="agent"', drawing?.kind === "agent") + b("draw-card", "terminal", "New terminal: drag where it goes (Ctrl+Alt+T)", 'data-kind="terminal"', drawing?.kind === "terminal") + b("draw-card", "notes", "New note: drag where it goes", 'data-kind="sticky"', drawing?.kind === "sticky") + b("draw-card", "globe", "New browser: drag where it goes", 'data-kind="browser"', drawing?.kind === "browser") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
     + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
@@ -3446,8 +3440,8 @@ const canvasPt = (cx, cy) => {
   const r = $("#orch-canvas")?.getBoundingClientRect();
   return r && orchMode === "free" && !orchMax ? { x: (cx - r.left - orchPanX) / orchZoom, y: (cy - r.top - orchPanY) / orchZoom } : null;
 };
-const agentItems = (at, from) => [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => ({ label: r.name, ic: "agents", run: (e) => (e?.shiftKey ? newAgentTerm(r.id, at) : askAgentCwd(r, at, from)) })),
-  "-", { label: "Shell", ic: "terminal", run: () => newTermPane(undefined, at) }];
+const agentItems = () => [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => ({ label: r.name, ic: "agents", run: () => drawCard("agent", r.id) })),
+  "-", { label: "Shell", ic: "terminal", run: () => drawCard("terminal") }];
 const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));
 const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
   : p.kind === "sticky" ? (p.text || "").trim().split("\n")[0].slice(0, 40) || "Note"
@@ -3462,10 +3456,124 @@ function openVaultNotes(at) {
 }
 function addSticky(at) {
   const p = { kind: "sticky", id: String(++orchSeq), text: "" };
-  if (!addPane(p, at?.x, at?.y)) return;
+  if (!addAt(p, at)) return;
   saveCanvas();
   setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-sticky-input`)?.focus(), 80);
 }
+// `at`: a canvas point (the card's corner goes near it) or a drawn rect {x, y, w, h} (the card fills it).
+const addAt = (p, at) => (at?.w ? addPane(Object.assign(p, { x: Math.round(at.x), y: Math.round(at.y), w: Math.round(at.w), h: Math.round(at.h) })) : addPane(p, at?.x, at?.y));
+// A new card is drawn, Maestri-style: pick agent / terminal / note (top bar or right-click), the cursor turns into a
+// crosshair, drag where it goes and how big (a click: the default size there; Esc or a right-click cancels). An agent or
+// a terminal then asks, in a small sheet at that spot, what runs, its name and its folder; Shift on release skips the
+// sheet (the last agent, the last folder). The split has nothing to draw on: the sheet opens straight away.
+const LAST_NEW = "overlook.new-agent";
+function drawCard(kind, agent) {
+  endDraw();
+  const canvas = $("#orch-canvas");
+  if (orchMode !== "free" || orchMax || !canvas) return drawn(kind, agent, null, false);
+  const layer = document.createElement("div");
+  layer.className = "draw-layer";
+  canvas.appendChild(layer);
+  drawing = { kind, layer };
+  paintHud($("#orch-hud"), true);
+  // the canvas rect from corner a to b, held to the sizes a card can be resized to
+  const box = (a, b) => {
+    const w = Math.min(2600, Math.max(280, Math.abs(b.x - a.x))), h = Math.min(1800, Math.max(180, Math.abs(b.y - a.y)));
+    return { x: b.x < a.x ? a.x - w : a.x, y: b.y < a.y ? a.y - h : a.y, w, h };
+  };
+  const show = (el, r) => Object.assign(el.style, { left: `${r.x * orchZoom + orchPanX}px`, top: `${r.y * orchZoom + orchPanY}px`, width: `${r.w * orchZoom}px`, height: `${r.h * orchZoom}px` });
+  layer.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); endDraw(); };
+  layer.onpointerdown = (e) => {
+    e.stopPropagation();
+    if (e.button !== 0 || drawing?.sheet) { if (e.button === 0) endDraw(); return; } // a click beside the sheet cancels
+    layer.setPointerCapture(e.pointerId);
+    const a = canvasPt(e.clientX, e.clientY), el = document.createElement("div");
+    el.className = "draw-box";
+    layer.appendChild(el);
+    layer.onpointermove = (ev) => show(el, box(a, canvasPt(ev.clientX, ev.clientY)));
+    layer.onpointerup = (ev) => {
+      layer.onpointermove = layer.onpointerup = null;
+      const d = ensurePaneRect({ kind: kind === "sticky" || kind === "browser" ? kind : "terminal", x: 0 });
+      const r = Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > 4 ? box(a, canvasPt(ev.clientX, ev.clientY)) : { x: a.x, y: a.y, w: d.w, h: d.h };
+      show(el, r);
+      drawn(kind, agent, r, ev.shiftKey);
+    };
+  };
+}
+function drawn(kind, agent, at, skip) {
+  if (kind === "sticky") { endDraw(); return addSticky(at); }
+  if (kind === "browser") { endDraw(); return addBrowser(at); }
+  const opts = [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => [r.id, r.name, "agents"]), ["", "Shell", "terminal"]];
+  let last = "";
+  try { last = localStorage.getItem(LAST_NEW) || ""; } catch {}
+  let pick = kind === "agent" ? [agent, last, defaultAgent()].find((id) => id && opts.some((o) => o[0] === id)) || "" : "";
+  if (skip) { endDraw(); return pick ? newAgentTerm(pick, at) : newTermPane(undefined, at); }
+  const sheet = document.createElement("div");
+  sheet.className = "ns-sheet";
+  sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-label", "New terminal");
+  sheet.innerHTML = `<div class="ns-title">New terminal</div>
+    <div class="ns-quick" role="radiogroup" aria-label="Quick start">${opts.map(([id, name, ic]) => `<button type="button" role="radio" data-id="${esc(id)}">${icon(ic, 18)}<span>${esc(name)}</span></button>`).join("")}</div>
+    <label class="ns-field"><span>Name</span><input class="ns-name" type="text" autocomplete="off" spellcheck="false"></label>
+    <div class="ns-field"><span>Folder</span><button type="button" class="ns-cwd" data-act="cwd-open" title="The folder it works in">${icon("folder", 14)}<span class="ns-cwd-lbl"></span></button></div>
+    <div class="ns-foot"><button type="button" class="btn ns-cancel">Cancel</button><button type="button" class="btn peach ns-ok">Create <kbd>↵</kbd></button></div>`;
+  document.body.appendChild(sheet);
+  drawing = { ...drawing, kind, sheet };
+  const name = sheet.querySelector(".ns-name"), radios = [...sheet.querySelectorAll("[role=radio]")];
+  const choose = (id) => {
+    pick = id;
+    for (const b of radios) { b.setAttribute("aria-checked", b.dataset.id === id); b.tabIndex = b.dataset.id === id ? 0 : -1; }
+    name.placeholder = opts.find((o) => o[0] === id)[1];
+  };
+  const ok = () => {
+    const extra = name.value.trim() ? { name: name.value.trim() } : {};
+    if (pick) try { localStorage.setItem(LAST_NEW, pick); } catch {}
+    endDraw();
+    if (pick) newAgentTerm(pick, at, extra); else newTermPane(undefined, at, extra);
+  };
+  sheet.onclick = (e) => {
+    const r = e.target.closest("[role=radio]");
+    if (r) { choose(r.dataset.id); name.focus(); } else if (e.target.closest(".ns-ok")) ok(); else if (e.target.closest(".ns-cancel")) endDraw();
+  };
+  sheet.onkeydown = (e) => {
+    e.stopPropagation(); // the page's own keys (arrows, letters, Ctrl+K) stay out of the sheet; Esc is caught before
+    if (e.key === "Enter" && !e.target.closest(".ns-cancel, .ns-cwd")) { e.preventDefault(); ok(); }
+    else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.target.matches("[role=radio]")) {
+      e.preventDefault();
+      const i = opts.findIndex((o) => o[0] === pick), n = opts.length;
+      choose(opts[(i + (e.key === "ArrowRight" ? 1 : -1) + n) % n][0]);
+      sheet.querySelector('[aria-checked="true"]').focus();
+    }
+  };
+  choose(pick);
+  // over the middle of the drawn rect (of the canvas, in the split), inside the window
+  const cr = $("#orch-canvas")?.getBoundingClientRect() ?? { left: 0, top: 0, width: innerWidth, height: innerHeight };
+  const sr = at ? { x: cr.left + at.x * orchZoom + orchPanX, y: cr.top + at.y * orchZoom + orchPanY, w: at.w * orchZoom, h: at.h * orchZoom } : { x: cr.left, y: cr.top, w: cr.width, h: cr.height };
+  const w = sheet.offsetWidth, h = sheet.offsetHeight;
+  sheet.style.left = `${Math.round(Math.max(8, Math.min(sr.x + sr.w / 2 - w / 2, innerWidth - w - 8)))}px`;
+  sheet.style.top = `${Math.round(Math.max(8, Math.min(sr.y + sr.h / 2 - h / 2, innerHeight - h - 8)))}px`;
+  sheetCwd();
+}
+// The sheet's folder is the last one picked (the bar's); the folder popover changes it, and gives the focus back.
+function sheetCwd() {
+  const s = drawing?.sheet;
+  if (!s) return;
+  s.querySelector(".ns-cwd-lbl").textContent = cwdLabel($("#run-cwd")?.value || orchCwd);
+  if (!s.contains(document.activeElement)) s.querySelector(".ns-name").focus();
+}
+function endDraw() {
+  if (!drawing) return;
+  const { layer, sheet } = drawing;
+  drawing = null;
+  layer?.remove();
+  if (sheet) {
+    sheet.classList.add("out");
+    setTimeout(() => sheet.remove(), 150);
+    if (cwdOpen) { cwdOpen = false; paintCwdPop(); }
+  }
+  paintHud($("#orch-hud"), orchMode === "free" && !orchMax);
+}
+addEventListener("keydown", (e) => { if (drawing && e.key === "Escape" && !cwdOpen) { e.preventDefault(); e.stopPropagation(); endDraw(); } }, true);
+addEventListener("hashchange", () => endDraw());
 // Copy card / Duplicate: what it takes to make the card again. A terminal starts fresh in the same folder, an agent
 // starts a new session of the same agent; notes, tasks and sessions are one card each, so they have none.
 let canvasClip = null;
@@ -3529,10 +3637,10 @@ function renamePane(p) {
 function canvasMenu(cx, cy) {
   const at = canvasPt(cx, cy), free = orchMode === "free" && !orchMax, any = orchPanes.length > 0;
   ctxMenu(cx, cy, [
-    { label: "New agent", ic: "agents", sub: agentItems(at, { x: cx, y: cy }) },
-    { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => newTermPane(undefined, at) },
-    { label: "New note", ic: "notes", run: () => addSticky(at) },
-    { label: "New browser", ic: "globe", run: () => addBrowser(at) },
+    { label: "New agent", ic: "agents", sub: agentItems() },
+    { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => drawCard("terminal") },
+    { label: "New note", ic: "notes", run: () => drawCard("sticky") },
+    { label: "New browser", ic: "globe", run: () => drawCard("browser") },
     { label: "Draw on the canvas", ic: "edit", run: () => setSketch(true) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
@@ -3705,6 +3813,7 @@ async function orchPaint(force) {
         agentsBody();
       });
       bindPaneDragResize(card, p);
+      if (bornKeys.delete(key)) card.classList.add("pane-in");
       plane.appendChild(card);
     }
     card.classList.toggle("active", key === orchActive);
@@ -4593,7 +4702,6 @@ const ACTIONS = {
     document.querySelectorAll('[data-act="orch-deck-toggle"]').forEach((b) => b.classList.toggle("on", orchDeckOpen));
     if (!orchDeckOpen && el) el.blur();
   },
-  "term-canvas": (el) => newTermPane(el?.dataset?.cwd),
   "cv-menu": (el) => mainMenu(el),
   "orch-deck-show": () => deckShow(),
   "orch-vault-note": () => openVaultNotes(),
@@ -4714,7 +4822,7 @@ const ACTIONS = {
     agentsBody();
     if (orchMode === "free" && orchPanX === 24 && orchPanY === CANVAS_TOP && orchZoom === 1) fitCanvasView();
   },
-  "orch-new": (el) => (el?.dataset?.agent ? newAgentTerm(el.dataset.agent) : ctxAt(el, agentItems(undefined, el))),
+  "draw-card": (el) => (drawing?.kind === el.dataset.kind ? endDraw() : drawCard(el.dataset.kind)),
   "orch-bg-menu": (el) => ctxAt(el, bgItems()),
   "orch-bg": (el) => setCanvasBg(el.dataset.bg || el.dataset.v),
   "set-canvas-bg": (el) => { setCanvasBg(el.dataset.v); if (route().pg === "settings") settingsPage(); },
@@ -4792,8 +4900,6 @@ const ACTIONS = {
       toast("Link removed");
     }
   },
-  "orch-add-sticky": () => addSticky(),
-  "orch-add-browser": () => addBrowser(),
   "orch-sketch": () => setSketch(!sketchOn),
   "sketch-tool": (el) => { sketchApi?.setActiveTool({ type: el.dataset.tool }); paintSketchBar(el.dataset.tool); },
   "sketch-color": (el) => sketchPaint({ strokeColor: el.dataset.c }),
