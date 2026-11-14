@@ -1029,9 +1029,32 @@ async function handle(req: Request, port: number) {
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/dirs") { const d = listDirs(ROOT, url.searchParams.get("path") ?? undefined, url.searchParams.get("hidden") === "1"); return d ? json(d) : new Response("invalid cwd", { status: 400 }); }
-  // The agents' limits, as each one's own status line last reported them (cache/usage/<id>.json, from `overlook statusline`);
+  // agy has no status line: it tells its limits only through its /usage command (`agy -p /usage` prints group, window,
+// % remaining and reset time as TSV, without starting a conversation). Run at most every 2 min, while the usage panel
+// asks, into cache/usage/agy.json in the same shape as Claude's; the most used group (Gemini, or Claude and GPT) counts.
+let agyUsageAt = 0;
+function refreshAgyUsage() {
+  if (Date.now() - agyUsageAt < 120_000 || !Bun.which("agy")) return;
+  agyUsageAt = Date.now();
+  (async () => {
+    mkdirSync(`${import.meta.dir}/cache/usage`, { recursive: true });
+    const proc = Bun.spawn(["agy", "-p", "/usage"], { cwd: `${import.meta.dir}/cache`, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const stop = setTimeout(() => proc.kill(), 60_000), out = await new Response(proc.stdout).text();
+    clearTimeout(stop);
+    const win = (name: string) => out.split("\n").map((l) => l.split("\t")).filter((c) => c.length >= 4 && c[1].trim() === name)
+      .map((c) => ({ used_percentage: 100 - Number.parseFloat(c[2]), resets_at: Math.round(Date.parse(c[3]) / 1000) }))
+      .filter((w) => Number.isFinite(w.used_percentage) && Number.isFinite(w.resets_at))
+      .sort((a, b) => b.used_percentage - a.used_percentage)[0];
+    const five_hour = win("Five Hour Limit Remaining"), seven_day = win("Weekly Limit Remaining");
+    if (!five_hour && !seven_day) return;
+    const f = `${import.meta.dir}/cache/usage/agy.json`;
+    writeFileSync(`${f}.tmp`, JSON.stringify({ five_hour, seven_day, at: Date.now() }));
+    renameSync(`${f}.tmp`, f);
+  })().catch(() => {});
+}
+// The agents' limits, as each one's own status line last reported them (cache/usage/<id>.json, from `overlook statusline`);
   // an agent with no such file shows without numbers.
-  if (p === "/api/usage") return json({ now: Date.now(), agents: loadAgents(import.meta.dir).filter((a) => tuiOk(a) && ready(a)).map((a) => {
+  if (p === "/api/usage") return refreshAgyUsage(), json({ now: Date.now(), agents: loadAgents(import.meta.dir).filter((a) => tuiOk(a) && ready(a)).map((a) => {
     try { return { id: a.id, name: a.name, usage: /^[\w-]+$/.test(a.id) ? JSON.parse(readFileSync(`${import.meta.dir}/cache/usage/${a.id}.json`, "utf8")) : null }; }
     catch { return { id: a.id, name: a.name, usage: null }; }
   }) });
