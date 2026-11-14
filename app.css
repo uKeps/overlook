@@ -2617,3 +2617,9 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .win-fav img { width: 14px; height: 14px; border-radius: 3px; object-fit: contain; }
 .orch-pane[data-kind="browser"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 0 0 12px 12px; }
 .orch-pane[data-kind="browser"] .orch-br { flex: 1; min-width: 0; }
+
+/* An agent that said it's done (overlook done): folded, dimmed, a check before its name; full again on hover. */
+.orch-pane.done { opacity: .62; transition: opacity .18s cubic-bezier(.2, .8, .2, 1); }
+.orch-pane.done:hover, .orch-pane.done.active { opacity: 1; }
+.orch-pane.done .win-title b::before { content: "✓ "; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .orch-pane.done { transition: none; } }
