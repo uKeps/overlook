@@ -1826,6 +1826,7 @@ async function setSketch(on, tool = "freedraw") {
   sketchApi?.setActiveTool({ type: tool }); // the pen from the toolbar or D; the selection when a shape was clicked
   paintSketchBar(tool);
   sketchApi?.refresh();
+  $("#orch-sketch .excalidraw")?.focus(); // its keys (Delete, Ctrl+Z, tool letters) work only while it has the focus
 }
 const SKETCH_TOOLS = [["selection", "select", "Select and move (V)"], ["freedraw", "edit", "Pen (P)"], ["rectangle", "rect", "Box (R)"], ["ellipse", "circle", "Ellipse (O)"],
   ["arrow", "arrowR", "Arrow (A): drag from one shape to another and it sticks"], ["text", "type", "Text (T)"], ["eraser", "eraser", "Eraser (E)"]];
@@ -1849,11 +1850,17 @@ function sketchHit(cx, cy, edge = false) {
     const e = els[i], xs = e.points ? e.points.map((p) => e.x + p[0]) : [e.x, e.x + e.width], ys = e.points ? e.points.map((p) => e.y + p[1]) : [e.y, e.y + e.height];
     const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
     if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+    // A stroke, line or arrow is hit on its path, not its box (so a scribble over a card doesn't swallow the card).
+    if (e.points && e.points.length > 1 && !e.points.some((p, j) => j && segDist(x, y, e.x + e.points[j - 1][0], e.y + e.points[j - 1][1], e.x + p[0], e.y + p[1]) < pad)) continue;
     if (edge && !e.points && x > x0 + 2 * pad && x < x1 - 2 * pad && y > y0 + 2 * pad && y < y1 - 2 * pad) continue;
     return e.containerId ? els.find((c) => c.id === e.containerId) || e : e;
   }
   return null;
 }
+const segDist = (px, py, ax, ay, bx, by) => {
+  const dx = bx - ax, dy = by - ay, t = dx || dy ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy))) : 0;
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+};
 const sketchSelected = () => Object.keys(sketchApi?.getAppState().selectedElementIds || {});
 const sketchSelect = (id) => sketchApi?.updateScene({ appState: { selectedElementIds: id ? { [id]: true } : {} } });
 // Change the selected shapes (their labels too) and what's drawn next; undoable with Ctrl+Z.
@@ -1896,11 +1903,11 @@ function sketchMenu(cx, cy) {
 function bindSketchClicks(canvas) {
   canvas.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || orchMode !== "free" || orchMax) return;
-    if (e.altKey && !sketchOn && onCanvasBg(e.target, canvas)) { e.preventDefault(); e.stopPropagation(); quickInk(e, canvas); return; }
+    if (e.altKey && !sketchOn && onCanvasBg(e.target, canvas)) { e.preventDefault(); e.stopImmediatePropagation(); quickInk(e, canvas); return; }
     if (!sketchApi) return;
     const onCard = !!e.target.closest(".orch-pane"), hit = sketchHit(e.clientX, e.clientY, onCard);
-    if (!sketchOn && hit && (onCard ? !e.target.closest("button, input, textarea, .orch-head, .orch-port, .orch-resize") : onCanvasBg(e.target, canvas))) {
-      e.preventDefault(); e.stopPropagation();
+    if (!sketchOn && hit && (onCard ? !e.target.closest("button, .orch-port, .orch-resize") : onCanvasBg(e.target, canvas))) {
+      e.preventDefault(); e.stopImmediatePropagation();
       setSketch(true, "selection").then(() => sketchSelect(hit.id));
     } else if (sketchOn && sketchToolNow === "selection" && !hit && document.elementsFromPoint(e.clientX, e.clientY).some((el) => el.closest(".orch-pane"))) {
       e.preventDefault(); e.stopPropagation();
