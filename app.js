@@ -2514,7 +2514,7 @@ async function linkedContext(key, budget) {
   const srcs = orchLinks.filter((l) => l.b === key).map((l) => orchPanes.find((p) => paneKey(p) === l.a)).filter(Boolean);
   if (budget < 300 || (!srcs.length && !orchLinks.some((l) => l.a === key || l.b === key))) return "";
   const parts = await Promise.all(srcs.map(async (p) => {
-    if (p.kind === "sticky") return p.text?.trim() ? `### Sticky note\n${p.text.trim()}` : "";
+    if (p.kind === "sticky") return p.text?.trim() ? `### ${p.name ? `Note: ${p.name}` : "Sticky note"}\n${p.text.trim()}` : "";
     if (p.kind === "note") {
       const txt = p.ctx || htmlText((await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null))?.html || "");
       return txt ? `### Vault note: ${p.id}\n${txt}` : "";
@@ -3302,6 +3302,15 @@ async function retryTask(taskId, model, paneKeyStr, opts = {}) {
 
 // Every card is a window: traffic lights (close · minimize · maximize), a centered title, actions on hover.
 // A name the user gave the card (right-click › Rename) wins over the title it would show.
+// A note's color (soft tints of the theme's own palette) and text size, kept on the pane.
+const NOTE_TONES = [["", "Sand", "var(--accent)"], ["yellow", "Yellow", "var(--p5)"], ["green", "Green", "var(--p4)"], ["blue", "Blue", "var(--p2)"], ["violet", "Violet", "var(--p3)"], ["rose", "Rose", "var(--p6)"]];
+const NOTE_SIZES = [["s", "Small"], ["", "Medium"], ["l", "Large"]];
+function noteStyle(key, patch) {
+  const p = orchPanes.find((x) => paneKey(x) === key);
+  if (!p) return;
+  for (const [k, v] of Object.entries(patch)) if (v) p[k] = v; else delete p[k];
+  saveCanvas(); orchSigs.delete(key); orchPaint(true);
+}
 const winHead = (key, title0, sub, acts = "", title = orchPanes.find((x) => paneKey(x) === key)?.name || title0) => `<div class="win-lights">
     <button type="button" class="wl close" data-act="orch-unpin" data-key="${esc(key)}" title="Close (Ctrl+Alt+W)" aria-label="Close"></button>
     <button type="button" class="wl min" data-act="orch-collapse" data-key="${esc(key)}" title="Minimize to the title bar" aria-label="Minimize"></button>
@@ -3359,7 +3368,7 @@ function ctxBuild(items) {
     if (it === "-") { if (box.lastChild && !box.lastChild.classList.contains("ctx-sep")) box.insertAdjacentHTML("beforeend", '<div class="ctx-sep" role="separator"></div>'); continue; }
     const b = document.createElement("button");
     b.type = "button"; b.className = `ctx-item${it.danger ? " danger" : ""}`; b.disabled = !!it.off; b.setAttribute("role", "menuitem");
-    b.innerHTML = `<span class="ctx-ic">${it.dot ? `<i class="ctx-dot" style="background:${esc(it.dot)}"></i>` : it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
+    b.innerHTML = `<span class="ctx-ic">${it.dot || it.tint ? `<i class="ctx-dot${it.tint ? " tint" : ""}" style="background:${esc(it.dot || it.tint)}"></i>` : it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
     if (!it.sub) {
       b.onclick = (e) => { e.stopPropagation(); ctxClose(); it.run?.(e); };
       box.appendChild(b);
@@ -3578,7 +3587,7 @@ addEventListener("hashchange", () => endDraw());
 // starts a new session of the same agent; notes, tasks and sessions are one card each, so they have none.
 let canvasClip = null;
 function paneSpec(p) {
-  if (p.kind === "sticky") return { kind: "sticky", text: p.text || "", w: p.w, h: p.h };
+  if (p.kind === "sticky") return { kind: "sticky", text: p.text || "", name: p.name, tone: p.tone, size: p.size, w: p.w, h: p.h };
   if (p.kind === "browser") return { kind: "browser", url: p.url || "", w: p.w, h: p.h };
   if (p.kind === "terminal") return { kind: "terminal", shell: p.shell || "", cwd: p.cwd || "", agent: p.run?.agent || "", fontSize: p.fontSize, w: p.w, h: p.h };
   return null;
@@ -3589,6 +3598,7 @@ function placeSpec(s, at) {
     : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url }
     : { kind: "terminal", id: `term_${Date.now()}`, shell: s.shell, cwd: s.cwd, ...(S.runners?.find((r) => r.id === s.agent)?.tui ? { run: newTuiRun(s.agent) } : {}) };
   Object.assign(p, { w: s.w, h: s.h }, s.fontSize ? { fontSize: s.fontSize } : {});
+  if (s.kind === "sticky") for (const k of ["name", "tone", "size"]) if (s[k]) p[k] = s[k];
   if (addPane(p, at?.x, at?.y)) { saveCanvas(); focusPane(paneKey(p), !!at); }
 }
 function toggleLink(a, b) {
@@ -3619,7 +3629,8 @@ function renamePane(p) {
   const key = paneKey(p), t = $(`.orch-pane[data-key="${CSS.escape(key)}"] .win-title`);
   if (!t) return;
   const inp = document.createElement("input");
-  inp.className = "win-rename"; inp.value = paneLabel(p); inp.setAttribute("aria-label", "Card name");
+  inp.className = "win-rename"; inp.value = p.kind === "sticky" ? p.name || "" : paneLabel(p); inp.setAttribute("aria-label", "Card name");
+  if (p.kind === "sticky") { inp.placeholder = "Title"; inp.setAttribute("aria-label", "Note title"); }
   const v0 = inp.value; // unchanged = no name, so the title keeps following the shell, the agent or the note
   t.replaceChildren(inp); t.classList.add("editing");
   inp.focus(); inp.select();
@@ -3681,6 +3692,8 @@ function paneMenu(key, cx, cy) {
     term && { label: "Clear screen", ic: "clear", run: () => { term.clear(); term.focus(); } },
     !term && picked && { label: "Copy", ic: "copy", run: () => copyText(picked) },
     p.kind === "sticky" && { label: "Copy text", ic: "copy", off: !p.text, run: () => copyText(p.text) },
+    p.kind === "sticky" && { label: "Color", ic: "canvasBg", sub: NOTE_TONES.map(([t, n, c]) => ({ label: n, tint: c, on: (p.tone || "") === t, run: () => noteStyle(key, { tone: t }) })) },
+    p.kind === "sticky" && { label: "Text size", ic: "edit", sub: NOTE_SIZES.map(([z, n]) => ({ label: n, on: (p.size || "") === z, run: () => noteStyle(key, { size: z }) })) },
     p.kind === "note" && { label: "Open in the reader", ic: "book", run: () => { location.hash = `#/n/${encodeURIComponent(p.id)}`; } },
     (p.kind === "task" || p.kind === "agent") && { label: "Open its page", ic: "ext", run: () => { location.hash = `#/${p.kind === "task" ? "t" : "a"}/${encodeURIComponent(p.id)}`; } },
     "-",
@@ -3807,6 +3820,7 @@ async function orchPaint(force) {
       head.addEventListener("dblclick", (e) => {
         const key = card.dataset.key;
         if (e.target.closest("button, a, select, input, textarea")) return;
+        if (card.dataset.kind === "sticky" && !orchMax) return renamePane(p);
         orchMax = orchMax === key ? "" : key;
         orchActive = key;
         orchSigs.clear();
@@ -3870,19 +3884,25 @@ async function orchPaint(force) {
     }
     if (p.kind === "sticky") {
       p.w ??= 320; p.h ??= 220;
-      const sig = `sticky|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      card.dataset.tone = p.tone || ""; card.dataset.size = p.size || "";
+      const sig = `sticky|${p.name}|${p.tone}|${p.size}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
       if (!force && orchSigs.get(key) === sig) return;
       orchSigs.set(key, sig);
-      card.querySelector(".orch-head").innerHTML = winHead(key, "Note", "", paneBtns);
+      // A note's bar is its title (double-click edits it) and, on hover, its color, text size and close.
+      const size = NOTE_SIZES.find((x) => x[0] === (p.size || ""));
+      card.querySelector(".orch-head").innerHTML = winHead(key, "", "", `${paneBtns}<span class="note-tones">${NOTE_TONES.map(([t, n, c]) => `<button type="button" class="note-tone ${(p.tone || "") === t ? "on" : ""}" style="--note:${c}" data-act="note-style" data-key="${esc(key)}" data-tone="${t}" title="${n}" aria-label="Color: ${n}"></button>`).join("")}</span>
+          <button type="button" class="btn orch-icon-btn note-size" data-act="note-style" data-key="${esc(key)}" data-size="${NOTE_SIZES[(NOTE_SIZES.indexOf(size) + 1) % NOTE_SIZES.length][0]}" title="Text size: ${size[1]}" aria-label="Text size: ${size[1]}">Aa</button>
+          <button type="button" class="btn orch-icon-btn" data-act="orch-unpin" data-key="${esc(key)}" title="Close" aria-label="Close">${icon("x", 12)}</button>`);
       card.querySelector(".orch-needs").innerHTML = "";
       const feed = card.querySelector(".orch-feed");
       // Read as markdown; a click (not on a link) edits the text, leaving the field shows it rendered again.
       let ta = feed.querySelector(".orch-sticky-input");
       if (!ta) {
-        feed.innerHTML = `<div class="orch-sticky-wrap"><div class="orch-sticky-view prose" title="Click to edit"></div><textarea class="orch-sticky-input" spellcheck="false" placeholder="Write a note (markdown)… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
+        feed.innerHTML = `<div class="orch-sticky-wrap"><div class="orch-sticky-view prose" title="Click to edit"></div><textarea class="orch-sticky-input" spellcheck="false" placeholder="Write in markdown. Wire it to an agent and it becomes context.">${esc(p.text || "")}</textarea></div>`;
         ta = feed.querySelector(".orch-sticky-input");
         const view = feed.querySelector(".orch-sticky-view");
         ta.oninput = () => { p.text = ta.value; saveCanvasSoon(); };
+        ta.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); ta.blur(); } };
         ta.onblur = () => stickyShow(view, ta, p.text);
         view.onclick = (e) => { if (e.target.closest("a")) return; view.hidden = true; ta.hidden = false; ta.focus(); };
         stickyShow(view, ta, p.text);
@@ -4917,6 +4937,7 @@ const ACTIONS = {
     orchSigs.clear();
     agentsBody();
   },
+  "note-style": (el) => noteStyle(el.dataset.key, el.dataset.size !== undefined ? { size: el.dataset.size } : { tone: el.dataset.tone }),
   "orch-unpin": async (el) => {
     const k = el.dataset.key;
     if (!(await closeLiveOk([k]))) return;
