@@ -241,6 +241,7 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appJs).toContain('if (e.key === "c" || e.key === "C") { e.preventDefault(); ACTIONS.capture(); }');
   expect(appJs).toContain('e.pointerType === "touch"');
   expect(appJs).toContain("getBoundingClientRect");
+  expect(appJs).toContain('<textarea class="orch-sticky-input" spellcheck="false"');
   expect(appCss).toContain("touch-action: pan-y");
   const html = readFileSync(`${ROOT}/index.html`, "utf8");
   expect(html).toContain('id="ui-btn"');
