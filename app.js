@@ -1861,6 +1861,19 @@ const segDist = (px, py, ax, ay, bx, by) => {
   const dx = bx - ax, dy = by - ay, t = dx || dy ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy))) : 0;
   return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 };
+// Every shape whose path (sampled along each segment) or box touches the canvas-space area; selects them (plus `keep`).
+function sketchPickIn(x0, y0, x1, y1, keep = []) {
+  if (!sketchApi) return [];
+  const inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  const touched = (el) => {
+    if (el.containerId || el.locked) return false;
+    if (!el.points) { const bx = sketchBox(el); return bx.x <= x1 && bx.x + bx.w >= x0 && bx.y <= y1 && bx.y + bx.h >= y0; }
+    return el.points.some((p, j) => { const q = el.points[j - 1] || p; return [0, .25, .5, .75, 1].some((t) => inside(el.x + q[0] + (p[0] - q[0]) * t, el.y + q[1] + (p[1] - q[1]) * t)); });
+  };
+  const ids = [...new Set([...keep, ...sketchApi.getSceneElements().filter(touched).map((el) => el.id)])];
+  sketchApi.updateScene({ appState: { selectedElementIds: Object.fromEntries(ids.map((id) => [id, true])) } });
+  return ids;
+}
 const sketchSelected = () => Object.keys(sketchApi?.getAppState().selectedElementIds || {});
 const sketchSelect = (id) => sketchApi?.updateScene({ appState: { selectedElementIds: id ? { [id]: true } : {} } });
 // Change the selected shapes (their labels too) and what's drawn next; undoable with Ctrl+Z.
@@ -1930,25 +1943,30 @@ function bindSketchClicks(canvas) {
     if (!sketchOn || e.button !== 0 || sketchToolNow !== "selection" || !e.target.closest?.(".orch-sketch") || sketchHit(e.clientX, e.clientY)) return;
     e.preventDefault(); e.stopImmediatePropagation();
     const r = canvas.getBoundingClientRect(), at = (ev) => [(ev.clientX - r.left - orchPanX) / orchZoom, (ev.clientY - r.top - orchPanY) / orchZoom], a = at(e);
-    const keep = e.shiftKey ? new Set(sketchSelected()) : new Set(); // Shift adds to what was selected
+    const keep = e.shiftKey ? sketchSelected() : []; // Shift adds to what was selected
     canvas.insertAdjacentHTML("beforeend", '<div class="orch-sketch-box" id="orch-sketch-box"></div>');
     const boxEl = canvas.querySelector("#orch-sketch-box");
     const pick = (ev) => {
       const b = at(ev), x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
       Object.assign(boxEl.style, { left: `${x0 * orchZoom + orchPanX}px`, top: `${y0 * orchZoom + orchPanY}px`, width: `${(x1 - x0) * orchZoom}px`, height: `${(y1 - y0) * orchZoom}px` });
-      const inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
-      const touched = (el) => {
-        if (el.containerId || el.locked) return false;
-        if (!el.points) { const bx = sketchBox(el); return bx.x <= x1 && bx.x + bx.w >= x0 && bx.y <= y1 && bx.y + bx.h >= y0; }
-        // along each segment, a few samples: a long straight line crossing the box counts too
-        return el.points.some((p, j) => { const q = el.points[j - 1] || p; return [0, .25, .5, .75, 1].some((t) => inside(el.x + q[0] + (p[0] - q[0]) * t, el.y + q[1] + (p[1] - q[1]) * t)); });
-      };
-      const ids = new Set([...keep, ...sketchApi.getSceneElements().filter(touched).map((el) => el.id)]);
-      sketchApi.updateScene({ appState: { selectedElementIds: Object.fromEntries([...ids].map((id) => [id, true])) } });
+      sketchPickIn(x0, y0, x1, y1, keep);
     };
     pick(e);
     addEventListener("pointermove", pick);
     addEventListener("pointerup", () => { removeEventListener("pointermove", pick); boxEl.remove(); $("#orch-sketch .excalidraw")?.focus(); }, { once: true });
+  }, true);
+  // Drawing off: the canvas's own selection box (for cards) also picks the sketch it touches, live; on release, if it
+  // caught any of it, drawing turns on with that selected (to move, recolor or delete it).
+  canvas.addEventListener("pointerdown", (e) => {
+    if (sketchOn || !sketchApi || e.button !== 0 || e.altKey || orchTool !== "select" || isSpacePressed || !onCanvasBg(e.target, canvas) || orchMode !== "free" || orchMax) return;
+    const r = canvas.getBoundingClientRect(), at = (ev) => [(ev.clientX - r.left - orchPanX) / orchZoom, (ev.clientY - r.top - orchPanY) / orchZoom], a = at(e);
+    let ids = [];
+    const pick = (ev) => { const b = at(ev); if (Math.abs(b[0] - a[0]) * orchZoom > 4 || Math.abs(b[1] - a[1]) * orchZoom > 4) ids = sketchPickIn(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])); };
+    addEventListener("pointermove", pick);
+    addEventListener("pointerup", () => {
+      removeEventListener("pointermove", pick);
+      if (ids.length) setSketch(true, "selection").then(() => sketchApi?.updateScene({ appState: { selectedElementIds: Object.fromEntries(ids.map((id) => [id, true])) } }));
+    }, { once: true });
   }, true);
   canvas.addEventListener("contextmenu", (e) => {
     if (!e.target.closest?.(".orch-sketch.on")) return;
