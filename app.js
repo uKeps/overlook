@@ -1924,6 +1924,24 @@ function bindSketchClicks(canvas) {
       setSketch(false);
     }
   }, true);
+  // A selection box picks whatever it touches, not only what fits inside it (Excalidraw's own rule): on release, the
+  // selection becomes every shape with a point of its path, or its box, in the dragged area.
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!sketchOn || e.button !== 0 || sketchToolNow !== "selection" || !e.target.closest?.(".orch-sketch") || sketchHit(e.clientX, e.clientY)) return;
+    const r = canvas.getBoundingClientRect(), at = (ev) => [(ev.clientX - r.left - orchPanX) / orchZoom, (ev.clientY - r.top - orchPanY) / orchZoom], a = at(e);
+    addEventListener("pointerup", (u) => {
+      const b = at(u), x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+      if ((x1 - x0) * orchZoom < 4 && (y1 - y0) * orchZoom < 4) return; // a click, not a box
+      const inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+      const touched = (el) => {
+        if (el.containerId || el.locked) return false;
+        if (!el.points) { const bx = sketchBox(el); return bx.x <= x1 && bx.x + bx.w >= x0 && bx.y <= y1 && bx.y + bx.h >= y0; }
+        // along each segment, a few samples: a long straight line crossing the box counts too
+        return el.points.some((p, j) => { const q = el.points[j - 1] || p; return [0, .25, .5, .75, 1].some((t) => inside(el.x + q[0] + (p[0] - q[0]) * t, el.y + q[1] + (p[1] - q[1]) * t)); });
+      };
+      setTimeout(() => sketchApi?.updateScene({ appState: { selectedElementIds: Object.fromEntries(sketchApi.getSceneElements().filter(touched).map((el) => [el.id, true])) } }), 0);
+    }, { once: true });
+  }, true);
   canvas.addEventListener("contextmenu", (e) => {
     if (!e.target.closest?.(".orch-sketch.on")) return;
     e.preventDefault(); e.stopPropagation();
