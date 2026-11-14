@@ -27,7 +27,7 @@ const I = {
   book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5V21h16"/>',
   tv: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/>',
-  reload: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', play: '<path d="m7 4 13 8-13 8z"/>',
+  reload: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>', play: '<path d="m7 4 13 8-13 8z"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   gap: '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 4 8M8 12h4"/><path d="m3 3 18 18"/>',
   pin: '<path d="M12 17v5M8 3h8l-1.5 7 3.5 3.5H6L9.5 10z"/>', fold: '<path d="m6 9 6 6 6-6"/>',
@@ -1244,6 +1244,7 @@ function syncWires(force) {
     if (p?.kind === "sticky") add({ text: p.text || "" });
     if (p?.kind === "note") add({ path: p.id });
     if (p?.kind === "terminal") add({ term: p.id });
+    if (p?.kind === "browser") add({ browser: p.id, url: p.url || "" });
   }
   const sketch = sketchText(sketchEls), body = JSON.stringify({ wires, names, ctx, sketch });
   if (body === wiresSent && !force) return;
@@ -1256,7 +1257,7 @@ const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{
 let saveT = 0;
 const saveCanvasSoon = () => { clearTimeout(saveT); saveT = setTimeout(saveCanvas, 250); };
 function saveCanvas() {
-  syncWires();
+  syncWires(); sweepBrowsers();
   try {
     localStorage.setItem(CANVAS_BG_KEY, orchBg);
     localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio }));
@@ -2013,10 +2014,123 @@ async function sketchFromMermaid(src, parent) {
   return "";
 }
 
+// The browser card: a real headless browser on the server (browser.ts) whose screen streams in as JPEG frames over
+// /ws/browser; the card's mouse, wheel and keys go back as input. Agents wired to it drive the same page.
+const brs = new Map(); // card id -> { ws, ro }
+function addBrowser(at) {
+  const p = { kind: "browser", id: `br${++orchSeq}`, url: "about:blank" };
+  if (!addAt(p, at)) return;
+  saveCanvas();
+  setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-br-url`)?.focus(), 120);
+}
+// What was typed in the address bar: an address (scheme optional, localhost:port too) or a search.
+const brUrl = (v) => {
+  v = v.trim();
+  if (/^(https?:\/\/|about:blank$)/i.test(v)) return v;
+  if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(v)) return `http://${v}`;
+  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(v)) return `https://${v}`;
+  return `https://duckduckgo.com/?q=${encodeURIComponent(v)}`;
+};
+function mountBrowser(feed, p) {
+  brs.get(p.id)?.ws.close(); brs.get(p.id)?.ro.disconnect();
+  feed.innerHTML = `<div class="orch-br">
+      <div class="orch-br-bar">
+        <button type="button" class="btn orch-icon-btn" data-br="back" title="Back" aria-label="Back">${icon("l", 14)}</button>
+        <button type="button" class="btn orch-icon-btn" data-br="fwd" title="Forward" aria-label="Forward">${icon("r", 14)}</button>
+        <button type="button" class="btn orch-icon-btn" data-br="reload" title="Reload" aria-label="Reload">${icon("reload", 13)}</button>
+        <input class="orch-br-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address" placeholder="Search or type an address" value="${esc(p.url && p.url !== "about:blank" ? p.url : "")}">
+      </div>
+      <div class="orch-br-view" tabindex="0"><canvas></canvas><p class="orch-br-msg">Starting the browser…</p></div>
+    </div>`;
+  const view = feed.querySelector(".orch-br-view"), cv = view.querySelector("canvas"), g = cv.getContext("2d"), msg = view.querySelector(".orch-br-msg");
+  const urlIn = feed.querySelector(".orch-br-url");
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/browser?id=${encodeURIComponent(p.id)}&url=${encodeURIComponent(p.url || "about:blank")}`);
+  ws.binaryType = "arraybuffer";
+  const queue = [], out = (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); else if (ws.readyState === 0) queue.push(m); };
+  let size = [0, 0], drawing = false, next = null;
+  // Frames come faster than they can be drawn on a slow machine: only the newest waits, the rest are skipped.
+  const draw = async (buf) => {
+    if (drawing) { next = buf; return; }
+    drawing = true;
+    try {
+      const bmp = await createImageBitmap(new Blob([buf], { type: "image/jpeg" }));
+      if (cv.width !== bmp.width || cv.height !== bmp.height) { cv.width = bmp.width; cv.height = bmp.height; }
+      g.drawImage(bmp, 0, 0); bmp.close(); msg.hidden = true;
+    } catch {}
+    drawing = false;
+    if (next) { const n = next; next = null; draw(n); }
+  };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data !== "string") return draw(ev.data);
+    const m = JSON.parse(ev.data);
+    if (m.t === "nav") {
+      const changed = p.url !== m.url || p.title !== m.title;
+      p.url = m.url; p.title = m.title;
+      if (document.activeElement !== urlIn) urlIn.value = m.url === "about:blank" ? "" : m.url;
+      const t = feed.closest(".orch-pane")?.querySelector(".win-title b");
+      if (t) t.textContent = paneLabel(p);
+      if (changed) { saveCanvasSoon(); syncWires(); }
+    } else if (m.t === "error") { msg.hidden = false; msg.textContent = `The browser couldn't start: ${m.why}`; }
+  };
+  ws.onclose = (e) => { if (e.code !== 1000 && brs.get(p.id)?.ws === ws) { msg.hidden = false; if (!msg.textContent.startsWith("The browser couldn't")) msg.textContent = "Disconnected. Reload the page to reconnect."; } };
+  // The page is laid out at the card's own size (CSS pixels, before the canvas zoom), so it reads like a window.
+  const ro = new ResizeObserver(() => {
+    const w = view.clientWidth, h = view.clientHeight;
+    if (w && h && (w !== size[0] || h !== size[1])) { size = [w, h]; out({ t: "size", w, h }); }
+  });
+  ws.onopen = () => { size = [0, 0]; ro.observe(view); for (const m of queue.splice(0)) out(m); };
+  brs.set(p.id, { ws, ro });
+  const mods = (e) => (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+  const at = (e) => { const r = cv.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) / r.width * (cv.width || size[0])), y: Math.round((e.clientY - r.top) / r.height * (cv.height || size[1])) }; };
+  const BTN = ["left", "middle", "right"];
+  let held = "none", moveRaf = 0, lastMove = null;
+  view.addEventListener("pointerdown", (e) => {
+    view.focus({ preventScroll: true });
+    held = BTN[e.button] || "none";
+    try { view.setPointerCapture(e.pointerId); } catch {}
+    out({ t: "mouse", e: "mousePressed", ...at(e), b: held, bs: e.buttons, n: e.detail || 1, m: mods(e) });
+    e.preventDefault();
+  });
+  view.addEventListener("pointermove", (e) => {
+    lastMove = e;
+    if (!moveRaf) moveRaf = requestAnimationFrame(() => { moveRaf = 0; const ev = lastMove; out({ t: "mouse", e: "mouseMoved", ...at(ev), b: held, bs: ev.buttons, n: 0, m: mods(ev) }); });
+  });
+  view.addEventListener("pointerup", (e) => { out({ t: "mouse", e: "mouseReleased", ...at(e), b: BTN[e.button] || "none", bs: e.buttons, n: e.detail || 1, m: mods(e) }); held = "none"; });
+  view.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); }); // the page's own menu, not the card's
+  // The wheel scrolls the page; Ctrl/Alt + wheel (or a pinch) stays the canvas's zoom.
+  view.addEventListener("wheel", (e) => {
+    if (e.ctrlKey || e.altKey) return;
+    e.preventDefault(); e.stopPropagation();
+    const k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
+    out({ t: "wheel", ...at(e), dx: e.deltaX * k, dy: e.deltaY * k, m: mods(e) });
+  }, { passive: false });
+  // Keys typed into the page stay there (the canvas's own shortcuts on Ctrl+Alt still work); Ctrl+V pastes the
+  // clipboard of this machine, which the headless browser can't read itself.
+  const key = (e, up) => {
+    if (e.ctrlKey && e.altKey) return;
+    e.preventDefault(); e.stopPropagation();
+    if (!up && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") { navigator.clipboard?.readText().then((text) => text && out({ t: "text", text })).catch(() => toast("The browser didn't allow reading the clipboard")); return; }
+    out({ t: "key", e: up ? "up" : "down", key: e.key, code: e.code, m: mods(e) });
+  };
+  view.addEventListener("keydown", (e) => key(e, false));
+  view.addEventListener("keyup", (e) => key(e, true));
+  urlIn.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { const u = brUrl(urlIn.value); if (u) { out({ t: "go", url: u }); view.focus({ preventScroll: true }); } }
+    if (e.key === "Escape") { urlIn.value = p.url === "about:blank" ? "" : p.url || ""; view.focus({ preventScroll: true }); }
+  });
+  urlIn.addEventListener("focus", () => urlIn.select());
+  feed.querySelector(".orch-br-bar").addEventListener("click", (e) => { const b = e.target.closest("[data-br]"); if (b) { out({ t: b.dataset.br }); view.focus({ preventScroll: true }); } });
+}
+// A closed browser card lets its socket go (the server closes the tab after a while unwatched).
+function sweepBrowsers() {
+  for (const [id, b] of brs) if (!orchPanes.some((p) => p.kind === "browser" && p.id === id)) { b.ws.close(1000); b.ro.disconnect(); brs.delete(id); }
+}
+
 function ensurePaneRect(p, idx = 0) {
   // A terminal opens at about a Ghostty window's size (~95 columns: a fastfetch greeting fits on one line).
-  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
-  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
+  p.w ??= (p.kind === "browser" ? 960 : p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
+  p.h ??= (p.kind === "browser" ? 640 : p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
   if (typeof p.x !== "number") {
     // A new card opens where you're looking (the middle of the visible canvas), stepped down-right off any card there.
     const r = orchMode === "free" ? $("#orch-canvas")?.getBoundingClientRect() : null;
@@ -2136,6 +2250,7 @@ async function takeSpawns() {
       continue;
     }
     const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
+      : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url }
       : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
     if (parent && typeof parent.x === "number") {
       ensurePaneRect(p);
@@ -2921,7 +3036,7 @@ function agentsBody() {
   const all = fleetItems();
   const counts = { all: all.length };
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "browser" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   // Agents run in terminals (like Maestri): a task or session card turns into its own TUI as soon as nothing else
   // drives it; only a session running elsewhere (another terminal, a waiting background job) stays a read-only card.
   for (const p of [...orchPanes]) if (p.kind === "task" || p.kind === "agent") {
@@ -3203,7 +3318,7 @@ function paintHud(hud, isFree) {
   const sep = '<span class="orch-hud-sep"></span>', isFull = document.body.classList.contains("canvas-full");
   const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
   const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
-    + b("draw-card", "agents", "New agent: drag where it goes (Ctrl+Alt+N)", 'data-kind="agent"', drawing?.kind === "agent") + b("draw-card", "terminal", "New terminal: drag where it goes (Ctrl+Alt+T)", 'data-kind="terminal"', drawing?.kind === "terminal") + b("draw-card", "notes", "New note: drag where it goes", 'data-kind="sticky"', drawing?.kind === "sticky") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
+    + b("draw-card", "agents", "New agent: drag where it goes (Ctrl+Alt+N)", 'data-kind="agent"', drawing?.kind === "agent") + b("draw-card", "terminal", "New terminal: drag where it goes (Ctrl+Alt+T)", 'data-kind="terminal"', drawing?.kind === "terminal") + b("draw-card", "notes", "New note: drag where it goes", 'data-kind="sticky"', drawing?.kind === "sticky") + b("draw-card", "globe", "New browser: drag where it goes", 'data-kind="browser"', drawing?.kind === "browser") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
     + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
@@ -3330,6 +3445,7 @@ const agentItems = () => [...(S.runners || []).filter((r) => r.ready && r.tui).m
 const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));
 const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
   : p.kind === "sticky" ? (p.text || "").trim().split("\n")[0].slice(0, 40) || "Note"
+  : p.kind === "browser" ? p.title || (p.url && p.url !== "about:blank" ? p.url.replace(/^https?:\/\/(www\.)?/, "").split(/[/?#]/)[0] : "") || "Browser"
   : p.kind === "note" ? D.notes.find((n) => n.path === p.id)?.title || p.id
   : p.kind === "task" ? String(S.tasks?.find((t) => t.id === p.id)?.prompt || "Task").slice(0, 40)
   : S.background?.find((b) => b.key === p.id)?.title || "Session");
@@ -3377,7 +3493,7 @@ function drawCard(kind, agent) {
     layer.onpointermove = (ev) => show(el, box(a, canvasPt(ev.clientX, ev.clientY)));
     layer.onpointerup = (ev) => {
       layer.onpointermove = layer.onpointerup = null;
-      const d = ensurePaneRect({ kind: kind === "sticky" ? "sticky" : "terminal", x: 0 });
+      const d = ensurePaneRect({ kind: kind === "sticky" || kind === "browser" ? kind : "terminal", x: 0 });
       const r = Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > 4 ? box(a, canvasPt(ev.clientX, ev.clientY)) : { x: a.x, y: a.y, w: d.w, h: d.h };
       show(el, r);
       drawn(kind, agent, r, ev.shiftKey);
@@ -3386,6 +3502,7 @@ function drawCard(kind, agent) {
 }
 function drawn(kind, agent, at, skip) {
   if (kind === "sticky") { endDraw(); return addSticky(at); }
+  if (kind === "browser") { endDraw(); return addBrowser(at); }
   const opts = [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => [r.id, r.name, "agents"]), ["", "Shell", "terminal"]];
   let last = "";
   try { last = localStorage.getItem(LAST_NEW) || ""; } catch {}
@@ -3462,12 +3579,14 @@ addEventListener("hashchange", () => endDraw());
 let canvasClip = null;
 function paneSpec(p) {
   if (p.kind === "sticky") return { kind: "sticky", text: p.text || "", w: p.w, h: p.h };
+  if (p.kind === "browser") return { kind: "browser", url: p.url || "", w: p.w, h: p.h };
   if (p.kind === "terminal") return { kind: "terminal", shell: p.shell || "", cwd: p.cwd || "", agent: p.run?.agent || "", fontSize: p.fontSize, w: p.w, h: p.h };
   return null;
 }
 function placeSpec(s, at) {
   if (!s) return;
   const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
+    : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url }
     : { kind: "terminal", id: `term_${Date.now()}`, shell: s.shell, cwd: s.cwd, ...(S.runners?.find((r) => r.id === s.agent)?.tui ? { run: newTuiRun(s.agent) } : {}) };
   Object.assign(p, { w: s.w, h: s.h }, s.fontSize ? { fontSize: s.fontSize } : {});
   if (addPane(p, at?.x, at?.y)) { saveCanvas(); focusPane(paneKey(p), !!at); }
@@ -3521,6 +3640,7 @@ function canvasMenu(cx, cy) {
     { label: "New agent", ic: "agents", sub: agentItems() },
     { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => drawCard("terminal") },
     { label: "New note", ic: "notes", run: () => drawCard("sticky") },
+    { label: "New browser", ic: "globe", run: () => drawCard("browser") },
     { label: "Draw on the canvas", ic: "edit", run: () => setSketch(true) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
@@ -3657,7 +3777,7 @@ async function orchPaint(force) {
       // The card can be rekeyed in place (new tile -> task), so handlers read its key at event time.
       card.addEventListener("pointerdown", (e) => {
         const key = card.dataset.key;
-        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot")) return;
+        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot, .orch-br-view")) return;
         // Selection (for Delete / multi-move) only exists on the free canvas.
         if (orchMode !== "free" || orchMax) orchSelected.clear();
         else if (e.shiftKey || e.metaKey || e.ctrlKey) {
@@ -3720,7 +3840,7 @@ async function orchPaint(force) {
     // Between terminals a wire is a hand-off (overlook send), so a terminal's message line only shows when a note or a
     // sticky is wired into it, to bring their text along.
     const ctxIn = orchLinks.filter((l) => l.b === key && !l.a.startsWith("terminal:")).length;
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || p.kind === "browser" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;
@@ -3735,6 +3855,17 @@ async function orchPaint(force) {
       const feed = card.querySelector(".orch-feed");
       feed.innerHTML = `<div class="orch-note-view prose">${n.html}</div>`;
       if (form) form.style.display = "none";
+      return;
+    }
+    if (p.kind === "browser") {
+      const sig = `browser|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      if (!force && orchSigs.get(key) === sig) return;
+      orchSigs.set(key, sig);
+      card.querySelector(".orch-head").innerHTML = winHead(key, paneLabel(p), "", paneBtns);
+      card.querySelector(".orch-needs").innerHTML = "";
+      if (form) form.style.display = "none";
+      const feed = card.querySelector(".orch-feed");
+      if (!feed.querySelector(".orch-br")) mountBrowser(feed, p);
       return;
     }
     if (p.kind === "sticky") {

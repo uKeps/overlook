@@ -1,6 +1,7 @@
 // Agents Overlook can put to work on the vault. CLI agents (claude, agy, codex...) are spawned in the vault folder;
 // API agents (Anthropic, or any OpenAI-compatible endpoint) work through four tools jailed to the vault's notes.
 // Tasks persist to cache/tasks.json (last 50 tasks). On startup, unfinished tasks are marked ended.
+import { safeUrl, tabInfo, agentDo } from "./browser";
 import { resolve, dirname, relative, isAbsolute, sep, join, basename } from "node:path";
 import { realpathSync, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
@@ -699,14 +700,14 @@ export function screenText(t: Pty, max = 60) {
 // A wire between two terminal cards on the canvas lets the programs in them talk, both ways: `overlook send <card> "…"`
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
-export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Whatever the user wires to your card (notes, terminals) is context for your work: it reaches you as a message starting with [Overlook: …], and `overlook context` prints it again. `overlook write <note> \"text\"` replaces a wired note's text (`--append` adds to it): use it to keep a shared plan, progress or decisions there. The user can sketch on the canvas: `overlook sketch` prints what's drawn (texts, shapes, arrows); `overlook draw` takes a Mermaid diagram (args or stdin) and draws it beside your card, when a picture explains better than text.";
+export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Whatever the user wires to your card (notes, terminals) is context for your work: it reaches you as a message starting with [Overlook: …], and `overlook context` prints it again. `overlook write <note> \"text\"` replaces a wired note's text (`--append` adds to it): use it to keep a shared plan, progress or decisions there. The user can sketch on the canvas: `overlook sketch` prints what's drawn (texts, shapes, arrows); `overlook draw` takes a Mermaid diagram (args or stdin) and draws it beside your card, when a picture explains better than text. `overlook browser open <url>` opens a browser card the user also sees (then read, shot, click, type, key), to check a web page or app.";
 // claude also gets the wired notes through hooks: all of them when a conversation starts, resumes, is cleared or compacted
 // (its context lost them), then only new or changed ones with each prompt (nothing when none changed).
 const hook = (command: string) => [{ hooks: [{ type: "command", command, timeout: 5 }] }];
 export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("overlook context --all"), UserPromptSubmit: hook("overlook context --new") } });
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
-type Ctx = { key: string; name: string; text?: string; path?: string; term?: string };
+type Ctx = { key: string; name: string; text?: string; path?: string; term?: string; browser?: string; url?: string };
 const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; ctx: Map<string, Ctx[]>; sketch: string; at: number }>(), sent = new Map<string, number[]>();
 export const handoffs: { from: string; to: string; at: number }[] = [];
 const pair = (a: string, b: string) => [a, b].sort().join("|");
@@ -716,7 +717,8 @@ export function setWires(client: unknown, list: unknown, titles: unknown, ctx?: 
   const c = { wires: new Set<string>(), names: new Map<string, string>(), ctx: new Map<string, Ctx[]>(), sketch: typeof sketch === "string" ? sketch.slice(0, 8000) : "", at: Date.now() };
   if (ctx && typeof ctx === "object") for (const [id, items] of Object.entries(ctx)) if (Array.isArray(items))
     c.ctx.set(id, items.filter((i) => typeof i?.key === "string").slice(0, 8).map((i) => ({ key: i.key.slice(0, 120), name: String(i.name ?? "").slice(0, 80),
-      ...(typeof i.term === "string" ? { term: i.term } : typeof i.path === "string" ? { path: i.path } : { text: String(i.text ?? "").slice(0, 8000) }) })));
+      ...(typeof i.term === "string" ? { term: i.term } : typeof i.browser === "string" ? { browser: i.browser.slice(0, 80), url: safeUrl(i.url) }
+        : typeof i.path === "string" ? { path: i.path } : { text: String(i.text ?? "").slice(0, 8000) }) })));
   if (Array.isArray(list)) for (const w of list) if (Array.isArray(w) && typeof w[0] === "string" && typeof w[1] === "string") c.wires.add(pair(w[0], w[1]));
   if (titles && typeof titles === "object") for (const [k, v] of Object.entries(titles)) if (typeof v === "string") c.names.set(k, v.slice(0, 80));
   canvases.set(client, c);
@@ -790,6 +792,10 @@ function fgName(t: Pty) {
 const agentNames = () => new Set(loadAgents(import.meta.dir).map((a) => a.process).filter(Boolean) as string[]);
 // What an item says: a note's text, or for a terminal, who it is, its screen, and how to reach it.
 async function itemText(i: Ctx) {
+  if (i.browser !== undefined) {
+    const now = tabInfo(i.browser), at = now?.url || i.url;
+    return `A browser you can drive${at ? ` (now at ${at})` : ""}: overlook browser open <url> | read (the page's text) | shot (a screenshot file to look at) | click <css | text=… | x,y> | type <text> | key <Enter|Tab|…>. The user sees the same page.`;
+  }
   if (i.term !== undefined) {
     const p = ptys.get(i.term);
     if (!p) return "";
@@ -800,8 +806,8 @@ async function itemText(i: Ctx) {
   const f = i.path === undefined ? "" : vaultFile(i.path);
   return (i.path === undefined ? i.text ?? "" : f ? await Bun.file(f).text().catch(() => "") : "").trim().slice(0, 8000);
 }
-const heading = (i: Ctx) => i.term !== undefined ? `### Terminal "${i.name}" (card ${i.term})` : i.path ? `### Vault note "${i.name}" (${resolve(vaultRoot(), i.path)})` : `### Note "${i.name}"`;
-const stamp = (i: Ctx, text: string) => Bun.hash(i.term !== undefined ? "wired" : text);
+const heading = (i: Ctx) => i.browser !== undefined ? `### Browser "${i.name}" (card ${i.browser})` : i.term !== undefined ? `### Terminal "${i.name}" (card ${i.term})` : i.path ? `### Vault note "${i.name}" (${resolve(vaultRoot(), i.path)})` : `### Note "${i.name}"`;
+const stamp = (i: Ctx, text: string) => Bun.hash(i.term !== undefined || i.browser !== undefined ? "wired" : text);
 export const contextBlock = (items: { head: string; text: string }[]) => items.map((i) => `${i.head}\n${i.text}`).join("\n\n");
 // Gives a pane its wired items: all of them, or (fresh) only those it hasn't seen as they are now; marks them seen.
 async function give(id: string, fresh: boolean, only?: Set<string>) {
@@ -876,10 +882,27 @@ export async function ptyDraw(from: unknown, token: unknown, mermaid: unknown) {
   if (why === null) return { queued: true };
   return why ? why : { queued: false };
 }
+// `overlook browser …`: drives the browser card wired to the caller. With none, `open` puts one on the canvas, wired.
+export async function ptyBrowser(from: unknown, token: unknown, cmd: unknown, arg: unknown) {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  const c = String(cmd ?? ""), a = String(arg ?? "").trim().slice(0, 20_000), card = itemsOf(me.id).find((i) => i.browser !== undefined);
+  if (!card) {
+    if (c !== "open") return "no browser card is wired to this one: `overlook browser open <url>` puts one on the canvas";
+    const url = safeUrl(/^[\w.-]+\.[a-z]{2,}(\/|$)|^localhost(:|\/|$)/i.test(a) ? `${a.startsWith("localhost") ? "http" : "https"}://${a}` : a);
+    if (!url) return "open takes an http(s) address";
+    const now = Date.now(), s: Spawn = { id: `b_${now}_${Math.random().toString(36).slice(2, 6)}`, parent: me.id, kind: "browser", url, at: now, done: () => {} };
+    spawns.push(s);
+    const why = await new Promise<string | null>((res) => { s.done = res; setTimeout(() => res(null), SPAWN_WAIT); });
+    return why === null ? { text: "queued: the browser opens when the Overlook canvas shows this card" } : why ? why : { text: `opened a browser card at ${url}, wired to this card` };
+  }
+  try { return { text: await agentDo(card.browser!, card.url || "about:blank", c, a) }; }
+  catch (e: any) { return String(e?.message || e); }
+}
 export async function ptyWrite(from: unknown, token: unknown, to: unknown, text: unknown, append: boolean) {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
-  const notes = itemsOf(me.id).filter((i) => i.term === undefined), q = String(to ?? "").toLowerCase();
+  const notes = itemsOf(me.id).filter((i) => i.term === undefined && i.browser === undefined), q = String(to ?? "").toLowerCase();
   const hits = notes.filter((i) => i.key === to || i.name.toLowerCase().includes(q) || i.path?.toLowerCase().includes(q));
   if (!q || hits.length !== 1) return hits.length ? `"${to}" matches ${hits.length} notes: ${hits.map((i) => i.name).join(", ")}` : `no note wired to this card matches "${to}" (overlook context lists them)`;
   const n = hits[0], add = String(text ?? "").slice(0, 8000);
@@ -906,7 +929,7 @@ export async function ptyWrite(from: unknown, token: unknown, to: unknown, text:
 // cards live in the browser, so a request waits here until the canvas showing the caller takes it (it polls every 2 s),
 // adds the card and the wire, and says how it went on its next poll; the caller hears back within MAX_WAIT or is told
 // it's queued. An opened agent reports to its maestro by message (push), so the maestro needn't poll its screen.
-type Spawn = { id: string; parent: string; kind: "agent" | "shell" | "sticky" | "write" | "draw"; agent?: string; cwd?: string; prompt?: string; text?: string; target?: string; at: number; taken?: boolean; done: (why: string | null) => void };
+type Spawn = { id: string; parent: string; kind: "agent" | "shell" | "sticky" | "write" | "draw" | "browser"; url?: string; agent?: string; cwd?: string; prompt?: string; text?: string; target?: string; at: number; taken?: boolean; done: (why: string | null) => void };
 const spawns: Spawn[] = [], kids = new Map<string, string>(); // opened card -> the card that opened it
 const MAX_KIDS = 6, SPAWN_WAIT = 8000;
 const kidsOf = (id: string) => [...kids].filter(([k, p]) => p === id && ptys.get(k)?.code === undefined).length + spawns.filter((s) => s.parent === id && (s.kind === "agent" || s.kind === "shell")).length;

@@ -12,7 +12,8 @@ import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, 
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { attach, input, safeUrl } from "./browser";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, ptyBrowser, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -958,6 +959,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     if (p === "/api/pty/context") { const r = await ptyContext(b.from, b.token, !!b.fresh); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ items: r }); }
+    if (p === "/api/pty/browser") { const r = await ptyBrowser(b.from, b.token, b.cmd, b.arg); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/sketch") { const r = ptySketch(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/draw") { const r = await ptyDraw(b.from, b.token, b.text); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/write") { const r = await ptyWrite(b.from, b.token, b.to, b.text, !!b.append); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
@@ -1085,6 +1087,13 @@ Bun.serve({
     if (!hostOk(req.headers.get("host") ?? "", PORT) || (origin && !hostOk(origin.replace(/^https?:\/\//, ""), PORT)))
       return new Response("forbidden", { status: 403 });
     const url = new URL(req.url);
+    if (url.pathname === "/ws/browser") {
+      const id = url.searchParams.get("id") ?? "";
+      if (!sameOrigin(req)) return new Response("forbidden", { status: 403 });
+      if (!/^[\w-]{1,80}$/.test(id)) return new Response("bad id", { status: 400 });
+      if (server.upgrade(req, { data: { browser: id, url: safeUrl(url.searchParams.get("url")) || "about:blank" } })) return undefined;
+      return new Response("upgrade failed", { status: 400 });
+    }
     if (url.pathname === "/ws/pty") {
       const q = url.searchParams, id = q.get("id") ?? "";
       if (!sameOrigin(req)) return new Response("forbidden", { status: 403 });
@@ -1100,6 +1109,13 @@ Bun.serve({
     // A TUI flooding a slow socket (the phone over the tailnet) closes it instead of dropping frames; the pane reconnects and replays.
     backpressureLimit: 2 << 20, closeOnBackpressureLimit: true,
     open(ws: any) {
+      // A browser card: frames and the page's address out, its input in (browser.ts).
+      if (ws.data.browser) {
+        attach(ws.data.browser, ws.data.url, (m) => { try { ws.send(m); } catch {} })
+          .then((detach) => { if (ws.data.closed) detach(); else ws.data.detach = detach; })
+          .catch((e) => { try { ws.send(JSON.stringify({ t: "error", why: String(e?.message || e) })); ws.close(4002, "no browser"); } catch {} });
+        return;
+      }
       const { id, spec, cols, rows } = ws.data;
       // spec is null when the PTY was alive at upgrade: attach to it whatever its state since (exited ones show their end).
       // The `overlook` command (bin/) on the PATH, and where to reach this server, for the pane's hand-offs.
@@ -1120,6 +1136,7 @@ Bun.serve({
       if (getPty(id) === t && spec === null) resizePty(t, cols, rows);
     },
     message(ws: any, m: string | Buffer) {
+      if (ws.data.browser) { input(ws.data.browser, String(m)).catch(() => {}); return; }
       const t = getPty(ws.data.id), s = String(m);
       if (!t || t.code !== undefined) return;
       // "\0" + JSON is a resize from the pane; everything else is keystrokes.
@@ -1127,6 +1144,7 @@ Bun.serve({
       else { t.typed = Date.now(); t.proc.terminal?.write(s); }
     },
     close(ws: any) {
+      if (ws.data.browser) { ws.data.closed = true; ws.data.detach?.(); return; }
       const t = getPty(ws.data.id);
       t?.subs.delete(ws.data.sub); t?.ends.delete(ws.data.end);
       if (t && t.code !== undefined && !t.subs.size) closePty(t.id); // exited and unwatched
