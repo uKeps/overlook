@@ -41,6 +41,9 @@ const I = {
   max: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  rect: '<rect x="4" y="5" width="16" height="14" rx="2"/>', circle: '<circle cx="12" cy="12" r="8"/>',
+  arrowR: '<path d="M5 19 19 5M10 5h9v9"/>', front: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/>',
+  back: '<rect x="4" y="4" width="12" height="12" rx="2"/><path d="M20 8v11a1 1 0 0 1-1 1H8"/>', eraser: '<path d="m7 21-4-4a2 2 0 0 1 0-3L14 3a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3L11 21z"/><path d="M7 21h14M9 9l6 6"/>',
   trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v7M10 10.5V6a2 2 0 0 0-4 0v8a7 7 0 0 0 14 0v-4a2 2 0 0 0-4 0"/>',
   select: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M19 21a2 2 0 0 0 2-2M9 3h2M13 3h2M9 21h2M13 21h2M3 9v2M3 13v2M21 9v2M21 13v2"/>',
@@ -1241,10 +1244,10 @@ function syncWires(force) {
     if (p?.kind === "note") add({ path: p.id });
     if (p?.kind === "terminal") add({ term: p.id });
   }
-  const body = JSON.stringify({ wires, names, ctx });
+  const sketch = sketchText(sketchEls), body = JSON.stringify({ wires, names, ctx, sketch });
   if (body === wiresSent && !force) return;
   wiresSent = body; wiresAt = Date.now();
-  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx }).catch(() => { wiresSent = ""; });
+  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx, sketch }).catch(() => { wiresSent = ""; });
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
 const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());
@@ -1571,10 +1574,27 @@ async function deleteSelectedPanes() {
 
 // `start`: the popover is opening here (an empty field, Recent shown while you stay in this folder).
 async function loadCwdBrowser(path = cwdBrowse, start = false) {
-  cwdBrowse = path || "~/dev";
-  cwdData = await api(`/api/dirs?path=${encodeURIComponent(cwdBrowse)}`).catch(() => null);
-  if (start) { cwdStart = cwdData?.short ?? ""; cwdQuery = ""; cwdIdx = 0; const inp = $("#cwd-q"); if (inp) inp.value = ""; }
+  const d = await api(`/api/dirs?path=${encodeURIComponent(path || "~/dev")}`).catch(() => null);
+  if (d || !cwdData) { cwdBrowse = path || "~/dev"; cwdData = d; } // a path that isn't there keeps you where you are
+  if (start) { cwdPath.key = null; cwdStart = cwdData?.short ?? ""; cwdQuery = ""; cwdIdx = 0; const inp = $("#cwd-q"); if (inp) inp.value = ""; }
   paintCwdPop();
+}
+// A typed path completes like a shell: "~/dev/pla" lists ~/dev (fetched live) filtered by "pla".
+// cwdSplit: [the folder to list, what Tab keeps before the name, the partial name].
+const cwdSplit = (v) => { const i = v.lastIndexOf("/"); return i < 0 ? [v, `${v}/`, ""] : [v.slice(0, i) || "/", v.slice(0, i + 1), v.slice(i + 1)]; };
+const isCwdPath = (v) => /^[~/]/.test(v);
+let cwdPath = { key: null, data: null }, cwdPathT = 0;
+function cwdPathLoad() {
+  const v = cwdQuery.trim();
+  if (!isCwdPath(v)) return;
+  const [d] = cwdSplit(v);
+  clearTimeout(cwdPathT);
+  if (d === cwdPath.key) return;
+  cwdPathT = setTimeout(async () => {
+    const data = await api(`/api/dirs?path=${encodeURIComponent(d)}`).catch(() => null);
+    if (cwdSplit(cwdQuery.trim())[0] !== d) return; // typed on meanwhile
+    cwdPath = { key: d, data }; cwdIdx = 0; paintCwdPop();
+  }, 120);
 }
 let lastCwdBtn = null;
 // The popover opens under the button that asked for it (or above it, near the bottom of the screen).
@@ -1610,14 +1630,24 @@ function paintCwdPop() {
   if (!cwdOpen) cwdLaunch = null;
   if (!cwdOpen || !cwdData) return;
   requestAnimationFrame(() => placeCwdPop(lastCwdBtn));
-  const q = fold(cwdQuery.trim()), hit = (...t) => !q || t.some((x) => fold(x).includes(q));
+  // "planeit" finds plane-it-frontend: case, accents and separators don't count.
+  const norm = (x) => fold(x).replace(/[^\p{L}\p{N}]/gu, ""), q = norm(cwdQuery.trim()), hit = (...t) => !q || t.some((x) => norm(x).includes(q));
   const base = (c) => c.split("/").filter(Boolean).pop() || c, dir = (c) => c.replace(/\/[^/]+\/?$/, "");
   const atStart = cwdData.short === cwdStart;
   const recent = atStart ? [...new Set([...recentCwds(), ...[...(S.agents || []), ...(S.background || []), ...(S.tasks || [])].map((x) => shortCwd(x.cwd))])].filter((c) => c && c !== "~" && c !== cwdData.short && hit(c)).slice(0, 5) : [];
-  cwdItems = [
+  const pv = isCwdPath(cwdQuery.trim()) && cwdSplit(cwdQuery.trim()), pd = pv && cwdPath.key === pv[0] ? cwdPath.data : undefined;
+  if (pv) {
+    const [, pre, part] = pv, pq = norm(part), rank = (n) => (n === part) * 2 + n.startsWith(part); // exact, then prefix, then the rest
+    cwdItems = !pd ? [] : [
+      ...(!part ? [{ ic: "check", name: "This folder", sub: pd.short, path: pd.short }] : []),
+      ...pd.dirs.filter((d) => !pq || norm(d.name).includes(pq)).sort((a, b) => rank(b.name) - rank(a.name))
+        .map((d) => ({ ic: "folder", name: d.name, path: d.short, nav: d.path, fill: `${pre}${d.name}/` })),
+    ];
+  } else cwdItems = [
     ...(!atStart && !q ? [{ ic: "check", name: "This folder", sub: cwdData.short, path: cwdData.short }] : []),
-    ...recent.map((c) => ({ ic: "clock", name: base(c), sub: dir(c), path: c })),
+    ...recent.map((c) => ({ ic: "clock", name: base(c), sub: dir(c), path: c, nav: c })),
     ...(cwdData.dirs || []).filter((d) => !recent.includes(d.short) && hit(d.name)).map((d) => ({ ic: "folder", name: d.name, path: d.short, nav: d.path })),
+    ...(q ? (cwdData.deep || []).filter((d) => !recent.includes(d.short) && hit(d.name)).slice(0, 30).map((d) => ({ ic: "folder", name: d.name, sub: dir(d.short), path: d.short, nav: d.path })) : []),
     ...(hit("vault", D.vault || "") ? [{ ic: "book", name: "Vault", sub: D.vault, path: "" }] : []),
   ];
   cwdIdx = Math.min(cwdIdx, Math.max(0, cwdItems.length - 1));
@@ -1626,7 +1656,7 @@ function paintCwdPop() {
       <div class="cwd-list" id="cwd-list" role="listbox"></div>
       <div class="cwd-foot" id="cwd-foot"></div>`;
     const inp = pop.querySelector("#cwd-q");
-    inp.oninput = () => { cwdQuery = inp.value; cwdIdx = 0; paintCwdPop(); };
+    inp.oninput = () => { cwdQuery = inp.value; cwdIdx = 0; cwdPathLoad(); paintCwdPop(); };
     inp.onkeydown = (e) => {
       const it = cwdItems[cwdIdx], v = inp.value.trim();
       if (e.key === "Escape") { e.preventDefault(); cwdOpen = false; paintCwdPop(); }
@@ -1636,9 +1666,11 @@ function paintCwdPop() {
         paintCwdPop(); $("#cwd-list .on")?.scrollIntoView({ block: "nearest" });
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (v.startsWith("/") || v.startsWith("~")) cwdGo(v);
-        else if (it) pickCwd(it.path);
-      } else if (e.key === "Tab" && it?.nav) { e.preventDefault(); cwdGo(it.nav); }
+        if (it) pickCwd(it.path);
+        else if (isCwdPath(v)) cwdGo(v); // the list hasn't loaded yet
+      } else if (e.key === "Tab" && it?.fill) { e.preventDefault(); inp.value = it.fill; inp.oninput(); }
+      else if (e.key === "Tab" && it?.nav && !isCwdPath(v)) { e.preventDefault(); cwdGo(it.nav); }
+      else if (e.key === "Tab") e.preventDefault();
       else if (e.key === "Backspace" && !inp.value && cwdData.parent) { e.preventDefault(); cwdGo(cwdData.parent); }
     };
   }
@@ -1646,8 +1678,8 @@ function paintCwdPop() {
   $("#cwd-list").innerHTML = cwdItems.map((it, i) => `<div class="cwd-row ${i === cwdIdx ? "on" : ""}" role="option" aria-selected="${i === cwdIdx}">
       <button type="button" class="cwd-open" data-act="cwd-pick" data-path="${esc(it.path)}" title="${esc(it.path || D.vault)}">${icon(it.ic, 15)}<b>${esc(it.name)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ""}</button>
       ${it.nav ? `<button type="button" class="cwd-in" data-act="cwd-nav" data-path="${esc(it.nav)}" title="Go inside (Tab)" aria-label="Go inside ${esc(it.name)}">${icon("r", 14)}</button>` : ""}
-    </div>`).join("") || `<p class="cwd-empty">Nothing matches "${esc(cwdQuery)}". Type a path, like ~/projects, and press Enter.</p>`;
-  $("#cwd-foot").innerHTML = `${cwdData.parent ? `<button type="button" class="cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Up (Backspace)" aria-label="Parent folder">${icon("l", 13)}</button>` : ""}<span class="cwd-where">${esc(cwdData.short)}</span><span class="cwd-keys">↵ open · Tab inside · Esc</span>`;
+    </div>`).join("") || `<p class="cwd-empty">${!pv ? `Nothing matches "${esc(cwdQuery)}". Type a path, like ~/projects.` : pd === undefined ? "…" : pd === null ? `${esc(pv[0])} doesn't exist` : `Nothing in ${esc(pd.short)} matches "${esc(pv[2])}"`}</p>`;
+  $("#cwd-foot").innerHTML = `${cwdData.parent ? `<button type="button" class="cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Up (Backspace)" aria-label="Parent folder">${icon("l", 13)}</button>` : ""}<span class="cwd-where">${esc(pv ? pd?.short ?? pv[0] : cwdData.short)}</span><span class="cwd-keys">↵ open · Tab ${pv ? "complete" : "inside"} · Esc</span>`;
 }
 function cwdGo(path) {
   cwdQuery = ""; cwdIdx = 0;
@@ -1678,6 +1710,315 @@ async function askAgentCwd(r, at, from) {
   await loadCwdBrowser(orchCwd.replace(/\/[^/]+\/?$/, "") || "~/dev", true); // the folder around the last one: its siblings
   placeCwdPop(from);
   $("#cwd-q")?.focus();
+}
+
+const mdCache = new Map();
+async function stickyShow(view, ta, text = "") {
+  const empty = !text.trim();
+  view.hidden = empty; ta.hidden = !empty;
+  if (empty) return;
+  if (!mdCache.has(text)) {
+    const html = (await api("/api/md", { text }).catch(() => null))?.html;
+    if (html == null) { view.hidden = true; ta.hidden = false; return; } // server down: plain text still works
+    if (mdCache.size > 200) mdCache.clear();
+    mdCache.set(text, html);
+  }
+  if (document.activeElement !== ta) { view.innerHTML = mdCache.get(text); view.querySelectorAll("a[href^='http']").forEach((a) => { a.target = "_blank"; a.rel = "noopener"; }); }
+}
+
+// The real Excalidraw, bundled by the server on first use (/vendor/excalidraw.js).
+let excalidrawLib = null;
+const loadExcalidraw = () => (excalidrawLib ??= (async () => {
+  window.EXCALIDRAW_ASSET_PATH = `${location.origin}/vendor/excalidraw/`;
+  document.head.insertAdjacentHTML("beforeend", `<link rel="stylesheet" href="/vendor/excalidraw/index.css">`);
+  return import("/vendor/excalidraw.js");
+})().catch((e) => { excalidrawLib = null; throw e; }));
+// What the sketch says, for an agent (overlook sketch): its texts, and which labelled shapes the arrows join.
+function sketchText(els) {
+  const byId = new Map(els.map((x) => [x.id, x]));
+  const label = (x) => x && (x.type === "text" ? x.text : els.find((y) => y.type === "text" && y.containerId === x.id)?.text || x.type);
+  const lines = els.filter((x) => x.type === "text" && !x.containerId).map((x) => `- ${x.text.replace(/\n/g, " ")}`);
+  for (const x of els) if (x.type === "rectangle" || x.type === "ellipse" || x.type === "diamond") { const t = label(x); if (t !== x.type) lines.push(`- [${x.type}] ${t.replace(/\n/g, " ")}`); }
+  for (const x of els) if (x.type === "arrow" && (x.startBinding || x.endBinding)) {
+    lines.push(`- ${label(byId.get(x.startBinding?.elementId)) || "?"} → ${label(byId.get(x.endBinding?.elementId)) || "?"}`.replace(/\n/g, " "));
+  }
+  // What has no words (strokes, empty shapes) still says where the user marked: by the card it's on or nearest to.
+  const where = new Map();
+  for (const x of els) {
+    if (x.type === "text" || x.type === "arrow" || x.containerId || (label(x) !== x.type && x.type !== "freedraw")) continue;
+    const cx = x.x + (x.width || 0) / 2, cy = x.y + (x.height || 0) / 2;
+    const near = orchPanes.filter((p) => typeof p.x === "number").map((p) => ({ p, d: Math.hypot(Math.max(p.x - cx, 0, cx - p.x - p.w), Math.max(p.y - cy, 0, cy - p.y - p.h)) })).sort((a, b) => a.d - b.d)[0];
+    const at = near && near.d < 200 ? `${near.d === 0 ? "on" : "next to"} card "${paneLabel(near.p)}"` : "on the open canvas";
+    const kind = x.type === "freedraw" ? "freehand stroke" : `empty ${x.type}`, k = `${kind}|${at}`;
+    where.set(k, (where.get(k) || 0) + 1);
+  }
+  for (const [k, n] of where) { const [kind, at] = k.split("|"); lines.push(`- ${n} ${kind}${n > 1 ? "s" : ""} ${at}`); }
+  return lines.join("\n");
+}
+
+// The sketch layer (Maestri's "draw your reasoning"): one Excalidraw over the whole canvas, moving with its pan and
+// zoom. Off, it only shows the drawing and lets every click through; on (the pencil, or D), it takes the pointer, with a
+// small toolbar of ours instead of Excalidraw's own UI. The scene has its own storage key.
+// Colors are Excalidraw's own palette: its dark theme inverts the canvas (swatches get the same filter, so they match).
+const SKETCH_KEY = "overlook.sketch";
+const SKETCH_COLORS = [["#1e1e1e", "White"], ["#e03131", "Red"], ["#9c36b5", "Violet"], ["#1971c2", "Blue"], ["#2f9e44", "Green"]];
+const SKETCH_FILLS = [["#ffc9c9", "Red"], ["#ffec99", "Yellow"], ["#a5d8ff", "Blue"], ["#b2f2bb", "Green"]];
+let sketchEls = (() => { try { return JSON.parse(localStorage.getItem(SKETCH_KEY) || "[]"); } catch { return []; } })();
+let sketchApi = null, sketchOn = false, sketchColor = SKETCH_COLORS[0][0], sketchToolNow = "freedraw";
+const sketchBox = (e) => { const xs = e.points ? e.points.map((p) => e.x + p[0]) : [e.x, e.x + e.width], ys = e.points ? e.points.map((p) => e.y + p[1]) : [e.y, e.y + e.height]; return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }; };
+const sketchView = () => ({ scrollX: orchPanX / orchZoom, scrollY: orchPanY / orchZoom, zoom: { value: orchZoom } });
+const sameView = (a, b) => Math.abs(a.scrollX - b.scrollX) < 0.05 && Math.abs(a.scrollY - b.scrollY) < 0.05 && Math.abs(a.zoom.value - b.zoom.value) < 1e-4;
+function syncSketchView() {
+  if (!sketchApi) return;
+  const v = sketchView();
+  if (!sameView(sketchApi.getAppState(), v)) sketchApi.updateScene({ appState: v });
+}
+// The canvas DOM is rebuilt on every visit: a fresh layer each time, Excalidraw only once there's something to show.
+function addSketchLayer(canvas) {
+  sketchApi = null;
+  canvas.querySelector("#orch-plane").insertAdjacentHTML("afterend", `<div class="orch-sketch ${sketchOn ? "on" : ""}" id="orch-sketch"></div><div class="cv-island orch-sketchbar" id="orch-sketchbar" role="toolbar" aria-label="Drawing tools" ${sketchOn ? "" : "hidden"}></div>`);
+  if (sketchOn) paintSketchBar();
+  if (sketchOn || sketchEls.length) mountSketch();
+}
+async function mountSketch() {
+  const el = $("#orch-sketch");
+  if (!el || el.dataset.mounted) return;
+  el.dataset.mounted = "1";
+  const lib = await loadExcalidraw().catch(() => null);
+  if (!lib) { el.dataset.mounted = ""; toast("Couldn't load the drawing tools"); return; }
+  let t = 0, last = sketchEls.map((x) => `${x.id}:${x.version}`).join();
+  lib.mount(el, {
+    theme: "dark",
+    initialData: { elements: sketchEls, appState: { theme: "dark", viewBackgroundColor: "transparent", currentItemStrokeColor: sketchColor, ...sketchView() } },
+    excalidrawAPI: (a) => { sketchApi = a; },
+    onChange: (els, st) => {
+      const selId = Object.keys(st.selectedElementIds || {})[0], selColor = selId && els.find((x) => x.id === selId)?.strokeColor;
+      if (sketchOn && (st.activeTool?.type !== sketchToolNow || (selColor && selColor !== sketchColor))) { if (selColor) sketchColor = selColor; paintSketchBar(st.activeTool?.type); }
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
+        if (sig === last) return;
+        last = sig; sketchEls = live;
+        try { localStorage.setItem(SKETCH_KEY, JSON.stringify(live)); } catch {}
+        syncWires(); drawMap();
+      }, 400);
+    },
+    // Panning or zooming inside the drawing moves the canvas with it.
+    onScrollChange: (scrollX, scrollY, zoom) => {
+      if (!sketchOn || sameView({ scrollX, scrollY, zoom }, sketchView())) return;
+      orchZoom = zoom.value; orchPanX = scrollX * zoom.value; orchPanY = scrollY * zoom.value;
+      applyCanvasTransform(); saveCanvasSoon();
+    },
+  });
+  new ResizeObserver(() => sketchApi?.refresh()).observe(el);
+}
+async function setSketch(on, tool = "freedraw") {
+  if (orchMode !== "free" || orchMax) { if (on) toast("Drawing works on the free canvas"); return; }
+  sketchOn = on;
+  $("#orch-sketch")?.classList.toggle("on", on);
+  const bar = $("#orch-sketchbar");
+  if (bar) bar.hidden = !on;
+  paintHud($("#orch-hud"), true);
+  if (!on) { sketchApi?.updateScene({ appState: { selectedElementIds: {}, editingTextElement: null } }); sketchApi?.setActiveTool({ type: "selection" }); return; }
+  paintSketchBar();
+  await mountSketch();
+  for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
+  sketchApi?.setActiveTool({ type: tool }); // the pen from the toolbar or D; the selection when a shape was clicked
+  paintSketchBar(tool);
+  sketchApi?.refresh();
+  $("#orch-sketch .excalidraw")?.focus(); // its keys (Delete, Ctrl+Z, tool letters) work only while it has the focus
+}
+const SKETCH_TOOLS = [["selection", "select", "Select and move (V)"], ["freedraw", "edit", "Pen (P)"], ["rectangle", "rect", "Box (R)"], ["ellipse", "circle", "Ellipse (O)"],
+  ["arrow", "arrowR", "Arrow (A): drag from one shape to another and it sticks"], ["text", "type", "Text (T)"], ["eraser", "eraser", "Eraser (E)"]];
+function paintSketchBar(tool) {
+  if (tool) sketchToolNow = tool;
+  const bar = $("#orch-sketchbar");
+  if (!bar) return;
+  bar.innerHTML = SKETCH_TOOLS.map(([t, ic, tip]) => `<button type="button" class="hud-btn ${t === sketchToolNow ? "on" : ""}" data-act="sketch-tool" data-tool="${t}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 16)}</button>`).join("")
+    + '<span class="orch-hud-sep"></span>'
+    + SKETCH_COLORS.map(([c, n]) => `<button type="button" class="hud-btn sketch-c ${c === sketchColor ? "on" : ""}" data-act="sketch-color" data-c="${c}" title="${n}" aria-label="Color ${n}"><i style="background:${c}"></i></button>`).join("")
+    + `<span class="orch-hud-sep"></span><button type="button" class="hud-btn" data-act="orch-sketch" title="Done (Esc)" aria-label="Stop drawing">${icon("x", 16)}</button>`;
+}
+// The topmost shape under a screen point (its box plus a few px; `edge`: only near its outline), or null. A label
+// inside a box counts as the box. ponytail: boxes ignore rotation; Excalidraw's own hit test if that ever matters.
+function sketchHit(cx, cy, edge = false) {
+  const lay = $("#orch-sketch");
+  if (!sketchApi || !lay) return null;
+  const r = lay.getBoundingClientRect(), x = (cx - r.left - orchPanX) / orchZoom, y = (cy - r.top - orchPanY) / orchZoom, pad = 8 / orchZoom;
+  const els = sketchApi.getSceneElements();
+  for (let i = els.length - 1; i >= 0; i--) {
+    const e = els[i], xs = e.points ? e.points.map((p) => e.x + p[0]) : [e.x, e.x + e.width], ys = e.points ? e.points.map((p) => e.y + p[1]) : [e.y, e.y + e.height];
+    const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+    if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+    // A stroke, line or arrow is hit on its path, not its box (so a scribble over a card doesn't swallow the card).
+    if (e.points && e.points.length > 1 && !e.points.some((p, j) => j && segDist(x, y, e.x + e.points[j - 1][0], e.y + e.points[j - 1][1], e.x + p[0], e.y + p[1]) < pad)) continue;
+    if (edge && !e.points && x > x0 + 2 * pad && x < x1 - 2 * pad && y > y0 + 2 * pad && y < y1 - 2 * pad) continue;
+    return e.containerId ? els.find((c) => c.id === e.containerId) || e : e;
+  }
+  return null;
+}
+const segDist = (px, py, ax, ay, bx, by) => {
+  const dx = bx - ax, dy = by - ay, t = dx || dy ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy))) : 0;
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+};
+// Every shape whose path (sampled along each segment) or box touches the canvas-space area; selects them (plus `keep`).
+function sketchPickIn(x0, y0, x1, y1, keep = []) {
+  if (!sketchApi) return [];
+  const inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  const touched = (el) => {
+    if (el.containerId || el.locked) return false;
+    if (!el.points) { const bx = sketchBox(el); return bx.x <= x1 && bx.x + bx.w >= x0 && bx.y <= y1 && bx.y + bx.h >= y0; }
+    return el.points.some((p, j) => { const q = el.points[j - 1] || p; return [0, .25, .5, .75, 1].some((t) => inside(el.x + q[0] + (p[0] - q[0]) * t, el.y + q[1] + (p[1] - q[1]) * t)); });
+  };
+  const ids = [...new Set([...keep, ...sketchApi.getSceneElements().filter(touched).map((el) => el.id)])];
+  sketchApi.updateScene({ appState: { selectedElementIds: Object.fromEntries(ids.map((id) => [id, true])) } });
+  return ids;
+}
+const sketchSelected = () => Object.keys(sketchApi?.getAppState().selectedElementIds || {});
+const sketchSelect = (id) => sketchApi?.updateScene({ appState: { selectedElementIds: id ? { [id]: true } : {} } });
+// Change the selected shapes (their labels too) and what's drawn next; undoable with Ctrl+Z.
+function sketchPaint(patch) {
+  const sel = new Set(sketchSelected());
+  if (patch.strokeColor) sketchColor = patch.strokeColor;
+  const next = { strokeColor: "currentItemStrokeColor", backgroundColor: "currentItemBackgroundColor", strokeWidth: "currentItemStrokeWidth", fillStyle: "currentItemFillStyle" };
+  sketchApi?.updateScene({
+    appState: Object.fromEntries(Object.entries(patch).filter(([k]) => next[k]).map(([k, v]) => [next[k], v])),
+    elements: sketchApi.getSceneElements().map((e) => sel.has(e.id) || sel.has(e.containerId) ? { ...e, ...(e.type === "text" ? { strokeColor: patch.strokeColor ?? e.strokeColor } : patch), version: e.version + 1, versionNonce: (Math.random() * 2 ** 31) | 0, updated: Date.now() } : e),
+    captureUpdate: "IMMEDIATELY",
+  });
+  paintSketchBar();
+}
+// Excalidraw's own actions (duplicate, layer order, delete) through their shortcuts, so links and labels stay intact.
+const sketchKey = (key, code, mods = {}) => $("#orch-sketch .excalidraw")?.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true, ...mods }));
+function sketchMenu(cx, cy) {
+  const hit = sketchHit(cx, cy);
+  if (hit && !sketchSelected().includes(hit.id)) sketchSelect(hit.id);
+  const n = sketchSelected().length;
+  const sw = (list, key, extra = {}) => list.map(([c, name]) => ({ label: name, dot: c, run: () => sketchPaint({ [key]: c, ...extra }) }));
+  ctxMenu(cx, cy, n ? [
+    { label: "Color", ic: "edit", sub: sw(SKETCH_COLORS, "strokeColor") },
+    { label: "Fill", ic: "rect", sub: [{ label: "None", ic: "x", run: () => sketchPaint({ backgroundColor: "transparent" }) }, ...sw(SKETCH_FILLS, "backgroundColor", { fillStyle: "solid" })] },
+    { label: "Thickness", ic: "type", sub: [["Thin", 1], ["Medium", 2], ["Bold", 4]].map(([l, w]) => ({ label: l, run: () => sketchPaint({ strokeWidth: w }) })) },
+    "-",
+    { label: "Duplicate", ic: "copy", kbd: "Ctrl+D", run: () => sketchKey("d", "KeyD", { ctrlKey: true }) },
+    { label: "Bring to front", ic: "front", run: () => sketchKey("]", "BracketRight", { ctrlKey: true, shiftKey: true }) },
+    { label: "Send to back", ic: "back", run: () => sketchKey("[", "BracketLeft", { ctrlKey: true, shiftKey: true }) },
+    "-",
+    { label: n > 1 ? `Delete ${n}` : "Delete", ic: "trash", kbd: "Del", danger: true, run: () => sketchKey("Delete", "Delete") },
+  ] : [
+    { label: "Select all", ic: "select", kbd: "Ctrl+A", off: !sketchEls.length, run: () => sketchApi?.updateScene({ appState: { selectedElementIds: Object.fromEntries(sketchApi.getSceneElements().map((e) => [e.id, true])) } }) },
+    { label: "Stop drawing", ic: "x", kbd: "Esc", run: () => setSketch(false) },
+  ]);
+}
+// Clicks around the sketch: a shape clicked while drawing is off opens it for editing (selected); while drawing with the
+// selection tool, a click on a card (not on a shape) leaves drawing so the next click reaches the card. Right-click on
+// the sketch gets Overlook's menu instead of Excalidraw's long one.
+function bindSketchClicks(canvas) {
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || orchMode !== "free" || orchMax) return;
+    if (e.altKey && !sketchOn && onCanvasBg(e.target, canvas)) { e.preventDefault(); e.stopImmediatePropagation(); quickInk(e, canvas); return; }
+    if (!sketchApi) return;
+    const onCard = !!e.target.closest(".orch-pane"), hit = sketchHit(e.clientX, e.clientY, onCard);
+    if (!sketchOn && hit && (onCard ? !e.target.closest("button, .orch-port, .orch-resize") : onCanvasBg(e.target, canvas))) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      // The same press goes on to Excalidraw once drawing is on, so press-and-drag moves the shape in one gesture.
+      let up = false;
+      addEventListener("pointerup", () => { up = true; }, { once: true });
+      const opts = { clientX: e.clientX, clientY: e.clientY, button: 0, buttons: 1, pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: true, bubbles: true, cancelable: true };
+      setSketch(true, "selection").then(() => {
+        const cv = $("#orch-sketch canvas.interactive");
+        if (!cv) return sketchSelect(hit.id);
+        cv.dispatchEvent(new PointerEvent("pointerdown", opts));
+        if (up) cv.dispatchEvent(new PointerEvent("pointerup", { ...opts, buttons: 0 })); // already released: a click
+        if (!sketchSelected().includes(hit.id)) sketchSelect(hit.id);
+      });
+    } else if (sketchOn && sketchToolNow === "selection" && !hit && document.elementsFromPoint(e.clientX, e.clientY).some((el) => el.closest(".orch-pane"))) {
+      e.preventDefault(); e.stopPropagation();
+      setSketch(false);
+    }
+  }, true);
+  // The selection box on the sketch is ours, not Excalidraw's (which selects only what fits entirely inside): it picks
+  // every shape with a point of its path, or its box, in the area, live as it's dragged. Excalidraw never sees the press.
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!sketchOn || e.button !== 0 || sketchToolNow !== "selection" || !e.target.closest?.(".orch-sketch") || sketchHit(e.clientX, e.clientY)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const r = canvas.getBoundingClientRect(), at = (ev) => [(ev.clientX - r.left - orchPanX) / orchZoom, (ev.clientY - r.top - orchPanY) / orchZoom], a = at(e);
+    const keep = e.shiftKey ? sketchSelected() : []; // Shift adds to what was selected
+    canvas.insertAdjacentHTML("beforeend", '<div class="orch-sketch-box" id="orch-sketch-box"></div>');
+    const boxEl = canvas.querySelector("#orch-sketch-box");
+    const pick = (ev) => {
+      const b = at(ev), x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+      Object.assign(boxEl.style, { left: `${x0 * orchZoom + orchPanX}px`, top: `${y0 * orchZoom + orchPanY}px`, width: `${(x1 - x0) * orchZoom}px`, height: `${(y1 - y0) * orchZoom}px` });
+      sketchPickIn(x0, y0, x1, y1, keep);
+    };
+    pick(e);
+    addEventListener("pointermove", pick);
+    addEventListener("pointerup", () => { removeEventListener("pointermove", pick); boxEl.remove(); $("#orch-sketch .excalidraw")?.focus(); }, { once: true });
+  }, true);
+  // Drawing off: the canvas's own selection box (for cards) also picks the sketch it touches, live; on release, if it
+  // caught any of it, drawing turns on with that selected (to move, recolor or delete it).
+  canvas.addEventListener("pointerdown", (e) => {
+    if (sketchOn || !sketchApi || e.button !== 0 || e.altKey || orchTool !== "select" || isSpacePressed || !onCanvasBg(e.target, canvas) || orchMode !== "free" || orchMax) return;
+    const r = canvas.getBoundingClientRect(), at = (ev) => [(ev.clientX - r.left - orchPanX) / orchZoom, (ev.clientY - r.top - orchPanY) / orchZoom], a = at(e);
+    let ids = [];
+    const pick = (ev) => { const b = at(ev); if (Math.abs(b[0] - a[0]) * orchZoom > 4 || Math.abs(b[1] - a[1]) * orchZoom > 4) ids = sketchPickIn(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])); };
+    addEventListener("pointermove", pick);
+    addEventListener("pointerup", () => {
+      removeEventListener("pointermove", pick);
+      if (ids.length) setSketch(true, "selection").then(() => sketchApi?.updateScene({ appState: { selectedElementIds: Object.fromEntries(ids.map((id) => [id, true])) } }));
+    }, { once: true });
+  }, true);
+  canvas.addEventListener("contextmenu", (e) => {
+    if (!e.target.closest?.(".orch-sketch.on")) return;
+    e.preventDefault(); e.stopPropagation();
+    sketchMenu(e.clientX, e.clientY);
+  }, true);
+}
+// Esc leaves drawing, before anything else sees it: not while a label is being typed (Esc ends that first) or a menu is open.
+window.addEventListener("keydown", (e) => {
+  if (!sketchOn || e.key !== "Escape" || ctxEl || sketchApi?.getAppState().editingTextElement || document.querySelector("dialog[open]")) return;
+  e.preventDefault(); e.stopPropagation();
+  setSketch(false);
+}, true);
+// Alt + drag on the empty canvas: a quick freehand stroke without entering drawing (shown live, then added to the sketch).
+function quickInk(e, canvas) {
+  const r = canvas.getBoundingClientRect(), pts = [[e.clientX - r.left, e.clientY - r.top]];
+  canvas.insertAdjacentHTML("beforeend", `<svg class="orch-ink" id="orch-ink"><polyline points="" /></svg>`);
+  const line = canvas.querySelector("#orch-ink polyline");
+  line.style.stroke = sketchColor; // the svg has the sketch's dark-theme filter, so it looks as it will once added
+  const move = (ev) => { pts.push([ev.clientX - r.left, ev.clientY - r.top]); line.setAttribute("points", pts.join(" ")); };
+  const up = async () => {
+    removeEventListener("pointermove", move); removeEventListener("pointerup", up);
+    if (pts.length > 2) {
+      const sc = pts.map(([x, y]) => [(x - orchPanX) / orchZoom, (y - orchPanY) / orchZoom]), [x, y] = sc[0];
+      const rel = sc.map(([a, b]) => [a - x, b - y]), xs = rel.map((p) => p[0]), ys = rel.map((p) => p[1]);
+      await mountSketch();
+      for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((res) => setTimeout(res, 100));
+      const lib = await loadExcalidraw().catch(() => null);
+      if (sketchApi && lib) {
+        const [el] = lib.restoreElements([{ type: "freedraw", id: `ink${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, x, y, points: rel, pressures: [], simulatePressure: true,
+          width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), strokeColor: sketchColor, strokeWidth: 2 }], null);
+        sketchApi.updateScene({ elements: [...sketchApi.getSceneElements(), el], captureUpdate: "IMMEDIATELY" });
+      }
+    }
+    $("#orch-ink")?.remove();
+  };
+  addEventListener("pointermove", move); addEventListener("pointerup", up);
+}
+// An agent's `overlook draw`: Mermaid becomes shapes, placed right of the agent's card.
+async function sketchFromMermaid(src, parent) {
+  if (!$("#orch-sketch")) return "the canvas isn't showing";
+  await mountSketch();
+  for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
+  const lib = await loadExcalidraw().catch(() => null);
+  if (!sketchApi || !lib) return "the drawing tools didn't load";
+  let els;
+  try { els = await lib.fromMermaid(src); } catch (e) { return `Mermaid: ${String(e?.message || e).slice(0, 160)}`; }
+  const x0 = (parent?.x ?? 0) + (parent?.w ?? 0) + 60, y0 = parent?.y ?? 0;
+  const minX = Math.min(...els.map((e) => e.x)), minY = Math.min(...els.map((e) => e.y));
+  for (const e of els) { e.x += x0 - minX; e.y += y0 - minY; }
+  sketchApi.updateScene({ elements: [...sketchApi.getSceneElements(), ...els] });
+  return "";
 }
 
 function ensurePaneRect(p, idx = 0) {
@@ -1729,6 +2070,8 @@ function applyCanvasTransform() {
   const free = orchMode === "free" && !orchMax;
   if (plane) plane.style.transform = free && orchPanes.length ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
   plane?.style.setProperty("--z", orchZoom);
+  const sk = $("#orch-sketch");
+  if (sk) { sk.hidden = !free; syncSketchView(); }
   // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
   // low zoom levels (>16px on-screen period) free of moiré shimmer or dot crowding.
   if (canvas) {
@@ -1794,6 +2137,10 @@ async function takeSpawns() {
       spawnDone.push({ id: s.id, ...(note ? {} : { why: "that note is no longer on the canvas" }) });
       continue;
     }
+    if (s.kind === "draw") {
+      sketchFromMermaid(s.text, parent).then((why) => spawnDone.push({ id: s.id, ...(why ? { why } : {}) }));
+      continue;
+    }
     const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
       : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
     if (parent && typeof parent.x === "number") {
@@ -1837,7 +2184,7 @@ function drawMap() {
   if (!on) { mapXf = null; return; }
   const svg = box.querySelector("svg"), W = svg.clientWidth, H = svg.clientHeight;
   if (!W || !H) return;
-  const all = [...orchPanes.filter((p) => typeof p.x === "number"), mapView()];
+  const all = [...orchPanes.filter((p) => typeof p.x === "number"), mapView(), ...sketchEls.map(sketchBox)];
   const x0 = Math.min(...all.map((p) => p.x)), y0 = Math.min(...all.map((p) => p.y));
   const x1 = Math.max(...all.map((p) => p.x + p.w)), y1 = Math.max(...all.map((p) => p.y + p.h));
   const pad = Math.max(x1 - x0, y1 - y0) * .08, k = Math.min(W / (x1 - x0 + 2 * pad), H / (y1 - y0 + 2 * pad));
@@ -1863,8 +2210,14 @@ function paintMap() {
     const [x, y, w, h] = box(p.x, p.y, p.w, p.collapsed ? 34 : p.h);
     return `<rect class="mb m-${p.kind}${paneKey(p) === orchActive ? " on" : ""}" data-key="${esc(paneKey(p))}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(4, w / 4, h / 4).toFixed(1)}"><title>${esc(paneLabel(p))}</title></rect>`;
   }).join("");
+  const ink = sketchEls.map((e) => {
+    if (e.points) return `<polyline class="map-ink" points="${e.points.map((p) => [(e.x + p[0]) * k + ox, (e.y + p[1]) * k + oy].map((n) => n.toFixed(1)).join(",")).join(" ")}"/>`;
+    if (e.type === "text") return "";
+    const [x, y, w, h] = box(e.x, e.y, e.width, e.height);
+    return `<${e.type === "ellipse" ? `ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}"` : `rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1"`} class="map-ink"/>`;
+  }).join("");
   const [fx, fy, fw, fh] = box(v.x, v.y, v.w, v.h);
-  svg.innerHTML = `${blocks}<path class="map-dim" fill-rule="evenodd" d="M-2 -2H${W + 2}V${H + 2}H-2Z M${fx} ${fy}h${fw}v${fh}h${-fw}Z"/>`
+  svg.innerHTML = `${ink}${blocks}<path class="map-dim" fill-rule="evenodd" d="M-2 -2H${W + 2}V${H + 2}H-2Z M${fx} ${fy}h${fw}v${fh}h${-fw}Z"/>`
     + `<rect class="map-frame" x="${fx}" y="${fy}" width="${fw}" height="${fh}" rx="4"/>`;
 }
 function bindMap(box) {
@@ -2265,7 +2618,7 @@ window.addEventListener("keydown", (e) => {
 // Space held = pan; bound once (the canvas element is rebuilt on every visit to #/agents).
 let isSpacePressed = false;
 window.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && !e.target.closest("input, textarea, select, [contenteditable]") && !isSpacePressed) {
+  if (e.code === "Space" && !e.target.closest("input, textarea, select, [contenteditable], .orch-sketch") && !isSpacePressed) {
     isSpacePressed = true;
     if (orchMode === "free" && !orchMax) $("#orch-canvas")?.classList.add("space-pan");
   }
@@ -2388,7 +2741,7 @@ function bindCanvasInteractions(canvas) {
   // Right-click: a card's menu, or the canvas's (free canvas: opened on release, as right-drag pans). Text fields keep the
   // browser's own menu (spelling, paste).
   canvas.addEventListener("contextmenu", (e) => {
-    if (e.target.closest("textarea:not(.xterm-helper-textarea), input")) return;
+    if (e.target.closest("textarea:not(.xterm-helper-textarea), input, .orch-sketch")) return; // Excalidraw has its own menu
     e.preventDefault();
     const card = e.target.closest(".orch-pane");
     if (card) paneMenu(card.dataset.key, e.clientX, e.clientY);
@@ -2617,6 +2970,8 @@ function agentsBody() {
         </div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
+    addSketchLayer($("#orch-canvas"));
+    bindSketchClicks($("#orch-canvas"));
     magnify($(".cv-tl"), 0, true); magnify($("#orch-hud"), 10); magnify($("#orch-hud-br"), -10);
     bindMap($("#orch-map"));
     hoverMenu($('.cv-tl [data-act="cv-menu"]'), mainMenu);
@@ -2854,7 +3209,7 @@ function paintHud(hud, isFree) {
   const sep = '<span class="orch-hud-sep"></span>', isFull = document.body.classList.contains("canvas-full");
   const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
   const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
-    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note")
+    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
     + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
@@ -2895,7 +3250,7 @@ function ctxBuild(items) {
     if (it === "-") { if (box.lastChild && !box.lastChild.classList.contains("ctx-sep")) box.insertAdjacentHTML("beforeend", '<div class="ctx-sep" role="separator"></div>'); continue; }
     const b = document.createElement("button");
     b.type = "button"; b.className = `ctx-item${it.danger ? " danger" : ""}`; b.disabled = !!it.off; b.setAttribute("role", "menuitem");
-    b.innerHTML = `<span class="ctx-ic">${it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
+    b.innerHTML = `<span class="ctx-ic">${it.dot ? `<i class="ctx-dot" style="background:${esc(it.dot)}"></i>` : it.sw ? `<span class="bg-sw" data-sw="${esc(it.sw)}"></span>` : it.ic ? icon(it.ic, 15) : ""}</span><span class="ctx-lbl">${esc(it.label)}</span>${it.on ? `<span class="ctx-on">${icon("check", 14)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.sub ? `<span class="ctx-more">${icon("r", 13)}</span>` : ""}`;
     if (!it.sub) {
       b.onclick = (e) => { e.stopPropagation(); ctxClose(); it.run?.(e); };
       box.appendChild(b);
@@ -3059,6 +3414,7 @@ function canvasMenu(cx, cy) {
     { label: "New agent", ic: "agents", sub: agentItems(at, { x: cx, y: cy }) },
     { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => newTermPane(undefined, at) },
     { label: "New note", ic: "notes", run: () => addSticky(at) },
+    { label: "Draw on the canvas", ic: "edit", run: () => setSketch(true) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
     "-",
@@ -3281,13 +3637,19 @@ async function orchPaint(force) {
       card.querySelector(".orch-head").innerHTML = winHead(key, "Note", "", paneBtns);
       card.querySelector(".orch-needs").innerHTML = "";
       const feed = card.querySelector(".orch-feed");
+      // Read as markdown; a click (not on a link) edits the text, leaving the field shows it rendered again.
       let ta = feed.querySelector(".orch-sticky-input");
       if (!ta) {
-        feed.innerHTML = `<div class="orch-sticky-wrap"><textarea class="orch-sticky-input" spellcheck="false" placeholder="Write a note… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
+        feed.innerHTML = `<div class="orch-sticky-wrap"><div class="orch-sticky-view prose" title="Click to edit"></div><textarea class="orch-sticky-input" spellcheck="false" placeholder="Write a note (markdown)… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
         ta = feed.querySelector(".orch-sticky-input");
+        const view = feed.querySelector(".orch-sticky-view");
         ta.oninput = () => { p.text = ta.value; saveCanvasSoon(); };
+        ta.onblur = () => stickyShow(view, ta, p.text);
+        view.onclick = (e) => { if (e.target.closest("a")) return; view.hidden = true; ta.hidden = false; ta.focus(); };
+        stickyShow(view, ta, p.text);
       } else if (document.activeElement !== ta) {
         ta.value = p.text || "";
+        stickyShow(feed.querySelector(".orch-sticky-view"), ta, p.text);
       }
       if (form) form.style.display = "none";
       return;
@@ -4301,6 +4663,9 @@ const ACTIONS = {
     }
   },
   "orch-add-sticky": () => addSticky(),
+  "orch-sketch": () => setSketch(!sketchOn),
+  "sketch-tool": (el) => { sketchApi?.setActiveTool({ type: el.dataset.tool }); paintSketchBar(el.dataset.tool); },
+  "sketch-color": (el) => sketchPaint({ strokeColor: el.dataset.c }),
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
@@ -4505,7 +4870,7 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax && !document.querySelector("dialog[open]")) {
-    if (!e.target.closest("input, textarea, select, [contenteditable]")) {
+    if (!sketchOn && !e.target.closest("input, textarea, select, [contenteditable]")) {
       e.preventDefault();
       deleteSelectedPanes();
       return;
@@ -4522,6 +4887,8 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
+  if (sketchOn) return; // letters are Excalidraw's tools (Esc is handled first, below bindSketchClicks)
+  if (pg === "agents" && (e.key === "d" || e.key === "D") && orchMode === "free" && !orchMax) { e.preventDefault(); setSketch(true); return; }
   // A shows or hides Sessions; hiding also takes the focus out of it (a clicked row or the log keeps it open otherwise).
   if (pg === "agents" && (e.key === "a" || e.key === "A")) {
     e.preventDefault();

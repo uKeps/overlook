@@ -12,7 +12,7 @@ import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, 
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -273,9 +273,7 @@ async function note(path: string) {
     .replace(/\[\[([^\]|#^]+)[^\]|]*(?:\|([^\]]+))?\]\]/g, (_, a, b) => `[${b ?? a}](#/w/${encodeURIComponent(a.trim().split("/").pop()!)})`);
   const name = basename(path, ".md");
   return {
-    // Notes are written by agents that read the web: raw HTML shows as text, and a link keeps only a safe scheme.
-    ...n, html: Bun.markdown.html(md, { noHtmlBlocks: true, noHtmlSpans: true })
-      .replace(/href="([^"]*)"/g, (m, u) => /^[^/?#]*:/.test(u) && !/^(https?|mailto|obsidian):/i.test(u) ? 'href="#"' : m),
+    ...n, html: mdHtml(md),
     backlinks: ns.filter((x) => x.links.includes(name)).map(({ path, title }) => ({ path, title })),
   };
 }
@@ -883,6 +881,10 @@ for (const sig of ["SIGINT", "SIGTERM"] as const)
 startScheduler(ROOT, import.meta.dir);
 startPinterest(`${TAILNET ? `https://${TAILNET}` : `http://127.0.0.1:${PORT}`}/auth/pinterest/callback`); // Tailscale HTTPS redirect
 
+let excalidrawJs: Promise<string> | null = null;
+// Notes are written by agents that read the web: raw HTML shows as text, and a link keeps only a safe scheme.
+const mdHtml = (md: string) => Bun.markdown.html(md, { noHtmlBlocks: true, noHtmlSpans: true })
+  .replace(/href="([^"]*)"/g, (m, u) => /^[^/?#]*:/.test(u) && !/^(https?|mailto|obsidian):/i.test(u) ? 'href="#"' : m);
 async function handle(req: Request, port: number) {
   const url = new URL(req.url);
   const p = url.pathname;
@@ -892,6 +894,7 @@ async function handle(req: Request, port: number) {
       return new Response("forbidden", { status: 403 });
     let b: any;
     try { b = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
+    if (p === "/api/md") return json({ html: mdHtml(String(b.text ?? "").slice(0, 100_000)) }); // a canvas note, read view
     if (p === "/api/trash") return json(typeof b.path === "string" && (await trash(b.path)) && { ok: true });
     if (p === "/api/review") return json(typeof b.path === "string" && (await review(b.path, !!b.remembered)));
     if (p === "/api/capture" && typeof b.text === "string" && b.text.trim()) { await capture(b.text.slice(0, 2000)); return json({ ok: true }); }
@@ -950,11 +953,13 @@ async function handle(req: Request, port: number) {
     }
     // Agent hand-off: the canvas sends its wires; a pane (from + its token) lists, reads and messages the panes wired to it.
     // Wires are the permission to talk, so only Overlook's own page may set them (Origin = this host), not a program in a pane.
-    if (p === "/api/canvas/wires") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : setWires(b.client, b.wires, b.names, b.ctx) ? json({ ok: true }) : new Response("bad client", { status: 400 });
+    if (p === "/api/canvas/wires") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : setWires(b.client, b.wires, b.names, b.ctx, b.sketch) ? json({ ok: true }) : new Response("bad client", { status: 400 });
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
     if (p === "/api/pty/context") { const r = await ptyContext(b.from, b.token, !!b.fresh); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ items: r }); }
+    if (p === "/api/pty/sketch") { const r = ptySketch(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
+    if (p === "/api/pty/draw") { const r = await ptyDraw(b.from, b.token, b.text); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/write") { const r = await ptyWrite(b.from, b.token, b.to, b.text, !!b.append); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/spawn") { const r = await ptySpawn(b.from, b.token, b, loadAgents(import.meta.dir).filter(tuiOk).map((a) => a.id)); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     // The canvas takes the cards its agents asked for; like wires, only Overlook's own page may.
@@ -1035,6 +1040,27 @@ async function handle(req: Request, port: number) {
   const XTERM: Record<string, [string, string]> = {
     "/vendor/xterm.mjs": ["@xterm/xterm/lib/xterm.mjs", "text/javascript"], "/vendor/xterm.css": ["@xterm/xterm/css/xterm.css", "text/css"],
   };
+  // Excalidraw (MIT) for drawing cards: React + Excalidraw bundled in memory on first use (Bun.build, well under a
+  // second), its stylesheet and fonts straight from node_modules. Nothing loads from the internet.
+  if (p === "/vendor/excalidraw.js") {
+    excalidrawJs ??= Bun.build({
+      entrypoints: [`${import.meta.dir}/excalidraw.entry.js`], target: "browser", format: "esm", minify: true,
+      define: { "process.env.NODE_ENV": '"production"', "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" },
+    }).then((r) => { if (!r.success) throw new Error(r.logs.join("\n")); return r.outputs[0].text(); });
+    // Revalidated on every load (a 304 when unchanged): a cached copy must not outlive an update of the bundle.
+    try {
+      const js = await excalidrawJs, tag = `"${Bun.hash(js).toString(36)}"`;
+      if (req.headers.get("if-none-match") === tag) return new Response(null, { status: 304, headers: { etag: tag } });
+      return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", etag: tag } });
+    }
+    catch (e) { excalidrawJs = null; return new Response(String(e), { status: 500 }); }
+  }
+  if (p.startsWith("/vendor/excalidraw/")) {
+    const rel = p.slice(19);
+    if (!/^[\w./-]+$/.test(rel) || rel.includes("..")) return new Response("404", { status: 404 });
+    const f = Bun.file(`${import.meta.dir}/node_modules/@excalidraw/excalidraw/dist/prod/${rel}`);
+    return (await f.exists()) ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 });
+  }
   if (XTERM[p]) return new Response(Bun.file(`${import.meta.dir}/node_modules/${XTERM[p][0]}`), { headers: { "content-type": `${XTERM[p][1]}; charset=utf-8`, "cache-control": "max-age=86400" } });
   if (p.startsWith("/avatar/")) { const f = /^[\w-]+$/.test(p.slice(8)) ? avatarPath(p.slice(8)) : null; return f ? new Response(Bun.file(f), { headers: { "cache-control": "max-age=31536000" } }) : new Response("404", { status: 404 }); }
   if (p.startsWith("/pin/")) { const f = await imageFile(p.slice(5), url.searchParams.has("amb") ? "amb" : url.searchParams.has("thumb") ? "thumb" : ""); return f ? new Response(f, { headers: { "cache-control": "max-age=86400" } }) : new Response("404", { status: 404 }); }
