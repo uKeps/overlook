@@ -1742,6 +1742,17 @@ function sketchText(els) {
   for (const x of els) if (x.type === "arrow" && (x.startBinding || x.endBinding)) {
     lines.push(`- ${label(byId.get(x.startBinding?.elementId)) || "?"} → ${label(byId.get(x.endBinding?.elementId)) || "?"}`.replace(/\n/g, " "));
   }
+  // What has no words (strokes, empty shapes) still says where the user marked: by the card it's on or nearest to.
+  const where = new Map();
+  for (const x of els) {
+    if (x.type === "text" || x.type === "arrow" || x.containerId || (label(x) !== x.type && x.type !== "freedraw")) continue;
+    const cx = x.x + (x.width || 0) / 2, cy = x.y + (x.height || 0) / 2;
+    const near = orchPanes.filter((p) => typeof p.x === "number").map((p) => ({ p, d: Math.hypot(Math.max(p.x - cx, 0, cx - p.x - p.w), Math.max(p.y - cy, 0, cy - p.y - p.h)) })).sort((a, b) => a.d - b.d)[0];
+    const at = near && near.d < 200 ? `${near.d === 0 ? "on" : "next to"} card "${paneLabel(near.p)}"` : "on the open canvas";
+    const kind = x.type === "freedraw" ? "freehand stroke" : `empty ${x.type}`, k = `${kind}|${at}`;
+    where.set(k, (where.get(k) || 0) + 1);
+  }
+  for (const [k, n] of where) { const [kind, at] = k.split("|"); lines.push(`- ${n} ${kind}${n > 1 ? "s" : ""} ${at}`); }
   return lines.join("\n");
 }
 

@@ -1047,7 +1047,12 @@ async function handle(req: Request, port: number) {
       entrypoints: [`${import.meta.dir}/excalidraw.entry.js`], target: "browser", format: "esm", minify: true,
       define: { "process.env.NODE_ENV": '"production"', "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" },
     }).then((r) => { if (!r.success) throw new Error(r.logs.join("\n")); return r.outputs[0].text(); });
-    try { return new Response(await excalidrawJs, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "max-age=3600" } }); }
+    // Revalidated on every load (a 304 when unchanged): a cached copy must not outlive an update of the bundle.
+    try {
+      const js = await excalidrawJs, tag = `"${Bun.hash(js).toString(36)}"`;
+      if (req.headers.get("if-none-match") === tag) return new Response(null, { status: 304, headers: { etag: tag } });
+      return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", etag: tag } });
+    }
     catch (e) { excalidrawJs = null; return new Response(String(e), { status: 500 }); }
   }
   if (p.startsWith("/vendor/excalidraw/")) {
