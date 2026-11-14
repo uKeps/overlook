@@ -1765,6 +1765,7 @@ const SKETCH_COLORS = [["#1e1e1e", "White"], ["#e03131", "Red"], ["#9c36b5", "Vi
 const SKETCH_FILLS = [["#ffc9c9", "Red"], ["#ffec99", "Yellow"], ["#a5d8ff", "Blue"], ["#b2f2bb", "Green"]];
 let sketchEls = (() => { try { return JSON.parse(localStorage.getItem(SKETCH_KEY) || "[]"); } catch { return []; } })();
 let sketchApi = null, sketchOn = false, sketchColor = SKETCH_COLORS[0][0], sketchToolNow = "freedraw";
+const sketchBox = (e) => { const xs = e.points ? e.points.map((p) => e.x + p[0]) : [e.x, e.x + e.width], ys = e.points ? e.points.map((p) => e.y + p[1]) : [e.y, e.y + e.height]; return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }; };
 const sketchView = () => ({ scrollX: orchPanX / orchZoom, scrollY: orchPanY / orchZoom, zoom: { value: orchZoom } });
 const sameView = (a, b) => Math.abs(a.scrollX - b.scrollX) < 0.05 && Math.abs(a.scrollY - b.scrollY) < 0.05 && Math.abs(a.zoom.value - b.zoom.value) < 1e-4;
 function syncSketchView() {
@@ -1799,7 +1800,7 @@ async function mountSketch() {
         if (sig === last) return;
         last = sig; sketchEls = live;
         try { localStorage.setItem(SKETCH_KEY, JSON.stringify(live)); } catch {}
-        syncWires();
+        syncWires(); drawMap();
       }, 400);
     },
     // Panning or zooming inside the drawing moves the canvas with it.
@@ -1894,7 +1895,9 @@ function sketchMenu(cx, cy) {
 // the sketch gets Overlook's menu instead of Excalidraw's long one.
 function bindSketchClicks(canvas) {
   canvas.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || orchMode !== "free" || orchMax || !sketchApi) return;
+    if (e.button !== 0 || orchMode !== "free" || orchMax) return;
+    if (e.altKey && !sketchOn && onCanvasBg(e.target, canvas)) { e.preventDefault(); e.stopPropagation(); quickInk(e, canvas); return; }
+    if (!sketchApi) return;
     const onCard = !!e.target.closest(".orch-pane"), hit = sketchHit(e.clientX, e.clientY, onCard);
     if (!sketchOn && hit && (onCard ? !e.target.closest("button, input, textarea, .orch-head, .orch-port, .orch-resize") : onCanvasBg(e.target, canvas))) {
       e.preventDefault(); e.stopPropagation();
@@ -1909,6 +1912,37 @@ function bindSketchClicks(canvas) {
     e.preventDefault(); e.stopPropagation();
     sketchMenu(e.clientX, e.clientY);
   }, true);
+}
+// Esc leaves drawing, before anything else sees it: not while a label is being typed (Esc ends that first) or a menu is open.
+window.addEventListener("keydown", (e) => {
+  if (!sketchOn || e.key !== "Escape" || ctxEl || sketchApi?.getAppState().editingTextElement || document.querySelector("dialog[open]")) return;
+  e.preventDefault(); e.stopPropagation();
+  setSketch(false);
+}, true);
+// Alt + drag on the empty canvas: a quick freehand stroke without entering drawing (shown live, then added to the sketch).
+function quickInk(e, canvas) {
+  const r = canvas.getBoundingClientRect(), pts = [[e.clientX - r.left, e.clientY - r.top]];
+  canvas.insertAdjacentHTML("beforeend", `<svg class="orch-ink" id="orch-ink"><polyline points="" /></svg>`);
+  const line = canvas.querySelector("#orch-ink polyline");
+  line.style.stroke = sketchColor; // the svg has the sketch's dark-theme filter, so it looks as it will once added
+  const move = (ev) => { pts.push([ev.clientX - r.left, ev.clientY - r.top]); line.setAttribute("points", pts.join(" ")); };
+  const up = async () => {
+    removeEventListener("pointermove", move); removeEventListener("pointerup", up);
+    if (pts.length > 2) {
+      const sc = pts.map(([x, y]) => [(x - orchPanX) / orchZoom, (y - orchPanY) / orchZoom]), [x, y] = sc[0];
+      const rel = sc.map(([a, b]) => [a - x, b - y]), xs = rel.map((p) => p[0]), ys = rel.map((p) => p[1]);
+      await mountSketch();
+      for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((res) => setTimeout(res, 100));
+      const lib = await loadExcalidraw().catch(() => null);
+      if (sketchApi && lib) {
+        const [el] = lib.restoreElements([{ type: "freedraw", id: `ink${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, x, y, points: rel, pressures: [], simulatePressure: true,
+          width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), strokeColor: sketchColor, strokeWidth: 2 }], null);
+        sketchApi.updateScene({ elements: [...sketchApi.getSceneElements(), el], captureUpdate: "IMMEDIATELY" });
+      }
+    }
+    $("#orch-ink")?.remove();
+  };
+  addEventListener("pointermove", move); addEventListener("pointerup", up);
 }
 // An agent's `overlook draw`: Mermaid becomes shapes, placed right of the agent's card.
 async function sketchFromMermaid(src, parent) {
@@ -2089,7 +2123,7 @@ function drawMap() {
   if (!on) { mapXf = null; return; }
   const svg = box.querySelector("svg"), W = svg.clientWidth, H = svg.clientHeight;
   if (!W || !H) return;
-  const all = [...orchPanes.filter((p) => typeof p.x === "number"), mapView()];
+  const all = [...orchPanes.filter((p) => typeof p.x === "number"), mapView(), ...sketchEls.map(sketchBox)];
   const x0 = Math.min(...all.map((p) => p.x)), y0 = Math.min(...all.map((p) => p.y));
   const x1 = Math.max(...all.map((p) => p.x + p.w)), y1 = Math.max(...all.map((p) => p.y + p.h));
   const pad = Math.max(x1 - x0, y1 - y0) * .08, k = Math.min(W / (x1 - x0 + 2 * pad), H / (y1 - y0 + 2 * pad));
@@ -2115,8 +2149,14 @@ function paintMap() {
     const [x, y, w, h] = box(p.x, p.y, p.w, p.collapsed ? 34 : p.h);
     return `<rect class="mb m-${p.kind}${paneKey(p) === orchActive ? " on" : ""}" data-key="${esc(paneKey(p))}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(4, w / 4, h / 4).toFixed(1)}"><title>${esc(paneLabel(p))}</title></rect>`;
   }).join("");
+  const ink = sketchEls.map((e) => {
+    if (e.points) return `<polyline class="map-ink" points="${e.points.map((p) => [(e.x + p[0]) * k + ox, (e.y + p[1]) * k + oy].map((n) => n.toFixed(1)).join(",")).join(" ")}"/>`;
+    if (e.type === "text") return "";
+    const [x, y, w, h] = box(e.x, e.y, e.width, e.height);
+    return `<${e.type === "ellipse" ? `ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}"` : `rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1"`} class="map-ink"/>`;
+  }).join("");
   const [fx, fy, fw, fh] = box(v.x, v.y, v.w, v.h);
-  svg.innerHTML = `${blocks}<path class="map-dim" fill-rule="evenodd" d="M-2 -2H${W + 2}V${H + 2}H-2Z M${fx} ${fy}h${fw}v${fh}h${-fw}Z"/>`
+  svg.innerHTML = `${ink}${blocks}<path class="map-dim" fill-rule="evenodd" d="M-2 -2H${W + 2}V${H + 2}H-2Z M${fx} ${fy}h${fw}v${fh}h${-fw}Z"/>`
     + `<rect class="map-frame" x="${fx}" y="${fy}" width="${fw}" height="${fh}" rx="4"/>`;
 }
 function bindMap(box) {
@@ -4786,7 +4826,7 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
   const { pg } = route();
-  if (sketchOn) { if (e.key === "Escape" && pg === "agents") { e.preventDefault(); setSketch(false); } return; } // letters are Excalidraw's tools
+  if (sketchOn) return; // letters are Excalidraw's tools (Esc is handled first, below bindSketchClicks)
   if (pg === "agents" && (e.key === "d" || e.key === "D") && orchMode === "free" && !orchMax) { e.preventDefault(); setSketch(true); return; }
   // A shows or hides Sessions; hiding also takes the focus out of it (a clicked row or the log keeps it open otherwise).
   if (pg === "agents" && (e.key === "a" || e.key === "A")) {

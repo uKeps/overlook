@@ -2,7 +2,8 @@
 // layer, and the Mermaid converter that turns an agent's `overlook draw` into shapes.
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { Excalidraw, convertToExcalidrawElements } from "@excalidraw/excalidraw";
+import { Excalidraw, convertToExcalidrawElements, restoreElements } from "@excalidraw/excalidraw";
+export { restoreElements }; // fills in a hand-built element (the canvas's Alt quick ink)
 import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
 export function mount(el, props) {
   const root = createRoot(el);
