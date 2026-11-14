@@ -21,6 +21,8 @@ const I = {
   agents: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1.5M15 13v1.5"/>',
   services: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   spark: '<path d="M12 3l1.9 5.6 5.6 1.9-5.6 1.9L12 18l-1.9-5.6-5.6-1.9 5.6-1.9z"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>', phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
+  minus: '<path d="M5 12h14"/>',
   l: '<path d="m15 18-6-6 6-6"/>', r: '<path d="m9 18 6-6-6-6"/>', ext: '<path d="M7 17 17 7M9 7h8v8"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/>',
   bolt: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
@@ -2031,23 +2033,101 @@ const brUrl = (v) => {
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(v)) return `https://${v}`;
   return `https://duckduckgo.com/?q=${encodeURIComponent(v)}`;
 };
+// The card's title bar: the page's icon (a globe until it loads, or when it has none) and its title.
+function brHead(p) {
+  const t = $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .win-title`);
+  if (!t || t.classList.contains("editing")) return;
+  t.querySelector("b").textContent = paneLabel(p);
+  let f = t.querySelector(".win-fav");
+  if (!f) { f = document.createElement("span"); f.className = "win-fav"; t.prepend(f); }
+  if (f.dataset.src === (p.icon || "")) return;
+  f.dataset.src = p.icon || "";
+  f.innerHTML = icon("globe", 13);
+  if (!p.icon) return;
+  const img = new Image(14, 14), src = p.icon;
+  img.alt = ""; img.referrerPolicy = "no-referrer";
+  img.onload = () => { if (f.dataset.src === src) f.replaceChildren(img); };
+  img.src = src;
+}
+const BR_ZOOM = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2], BR_PHONE = 390;
 function mountBrowser(feed, p) {
   brs.get(p.id)?.ws.close(); brs.get(p.id)?.ro.disconnect();
   feed.innerHTML = `<div class="orch-br">
       <div class="orch-br-bar">
-        <button type="button" class="btn orch-icon-btn" data-br="back" title="Back" aria-label="Back">${icon("l", 14)}</button>
-        <button type="button" class="btn orch-icon-btn" data-br="fwd" title="Forward" aria-label="Forward">${icon("r", 14)}</button>
-        <button type="button" class="btn orch-icon-btn" data-br="reload" title="Reload" aria-label="Reload">${icon("reload", 13)}</button>
-        <input class="orch-br-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address" placeholder="Search or type an address" value="${esc(p.url && p.url !== "about:blank" ? p.url : "")}">
+        <button type="button" class="orch-br-btn" data-br="back" title="Back" aria-label="Back" disabled>${icon("l", 15)}</button>
+        <button type="button" class="orch-br-btn" data-br="fwd" title="Forward" aria-label="Forward" disabled>${icon("r", 15)}</button>
+        <button type="button" class="orch-br-btn" data-br="reload" title="Reload" aria-label="Reload">${icon("reload", 13)}</button>
+        <label class="orch-br-addr"><input class="orch-br-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address" placeholder="Search or type an address"><span class="orch-br-disp" aria-hidden="true"></span></label>
+        <button type="button" class="orch-br-zoom" data-brz="reset" title="Back to 100% (Ctrl+0)" hidden></button>
+        <button type="button" class="orch-br-btn" data-brz="menu" title="Page width and zoom" aria-label="Page width and zoom"></button>
+        <i class="orch-br-load" aria-hidden="true"></i>
       </div>
-      <div class="orch-br-view" tabindex="0"><canvas></canvas><p class="orch-br-msg">Starting the browser…</p></div>
+      <div class="orch-br-view" tabindex="0"><canvas></canvas><div class="orch-br-msg"></div></div>
     </div>`;
   const view = feed.querySelector(".orch-br-view"), cv = view.querySelector("canvas"), g = cv.getContext("2d"), msg = view.querySelector(".orch-br-msg");
-  const urlIn = feed.querySelector(".orch-br-url");
+  const bar = feed.querySelector(".orch-br-bar"), urlIn = feed.querySelector(".orch-br-url"), disp = feed.querySelector(".orch-br-disp");
+  const [backB, fwdB] = ["back", "fwd"].map((k) => bar.querySelector(`[data-br="${k}"]`)), zoomB = bar.querySelector('[data-brz="reset"]'), menuB = bar.querySelector('[data-brz="menu"]');
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/browser?id=${encodeURIComponent(p.id)}&url=${encodeURIComponent(p.url || "about:blank")}`);
   ws.binaryType = "arraybuffer";
   const queue = [], out = (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); else if (ws.readyState === 0) queue.push(m); };
-  let size = [0, 0], drawing = false, next = null;
+  // What covers the page: nothing once frames come, a calm note while starting, on a blank page, or when cut off.
+  let live = false, down = "", why = "";
+  const state = () => {
+    const s = down || (!live ? "start" : p.url === "about:blank" || !p.url ? "blank" : "");
+    if (view.dataset.s === s && s !== "err") return;
+    view.dataset.s = s;
+    const [title, sub, act] = { start: ["Starting the browser"], blank: ["Type an address or a search above"],
+      off: ["Disconnected", "Lost the connection to Overlook.", "Reconnect"], err: ["The browser couldn't start", why, "Try again"] }[s] || [];
+    if (title) msg.innerHTML = `${icon("globe", 20)}<b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}${act ? `<button type="button" class="btn orch-br-retry">${esc(act)}</button>` : ""}`;
+  };
+  // The address bar shows the host up front and the rest faint; the field itself (full address) shows on focus.
+  const showUrl = () => {
+    const u = p.url === "about:blank" ? "" : p.url || "", m = /^https?:\/\/(?:www\.)?([^/?#]*)(.*)$/i.exec(u);
+    if (document.activeElement !== urlIn) urlIn.value = u;
+    disp.innerHTML = m ? `<b>${esc(m[1])}</b>${m[2] && m[2] !== "/" ? `<span>${esc(m[2])}</span>` : ""}` : esc(u);
+  };
+  // Page width and zoom live on the card (saved with the canvas); the page is laid out at the card's size over the zoom.
+  let vp = [0, 0], sent = "";
+  const fit = () => {
+    const w = view.clientWidth, h = view.clientHeight, z = p.zoom || 1;
+    if (!w || !h) return;
+    const vw = Math.round(p.mobile ? Math.min(BR_PHONE, w / z) : w / z), vh = Math.round(h / z);
+    cv.style.width = p.mobile ? `${vw * z}px` : "";
+    view.classList.toggle("phone", !!p.mobile);
+    vp = [vw, vh];
+    const sig = `${vw}x${vh}@${z}${!!p.mobile}`;
+    if (sig !== sent) { sent = sig; out({ t: "size", w: vw, h: vh, z, mobile: !!p.mobile }); }
+  };
+  const tools = () => {
+    const z = p.zoom || 1;
+    zoomB.hidden = z === 1; zoomB.textContent = `${Math.round(z * 100)}%`;
+    menuB.innerHTML = icon(p.mobile ? "phone" : "monitor", 14);
+    menuB.classList.toggle("on", !!p.mobile || z !== 1);
+  };
+  const setView = (o) => {
+    Object.assign(p, o);
+    if (p.zoom === 1) delete p.zoom;
+    if (!p.mobile) delete p.mobile;
+    tools(); fit(); saveCanvasSoon();
+  };
+  const zoomBy = (d) => {
+    const i = BR_ZOOM.indexOf(p.zoom || 1);
+    setView({ zoom: BR_ZOOM[Math.max(0, Math.min(BR_ZOOM.length - 1, (i < 0 ? 5 : i) + d))] });
+  };
+  const menu = () => [
+    { label: "Desktop width", ic: "monitor", on: !p.mobile, run: () => setView({ mobile: false }) },
+    { label: `Mobile width (${BR_PHONE}px)`, ic: "phone", on: !!p.mobile, run: () => setView({ mobile: true }) },
+    "-",
+    { label: "Zoom in", ic: "plus", kbd: "Ctrl+=", off: (p.zoom || 1) >= BR_ZOOM.at(-1), run: () => zoomBy(1) },
+    { label: "Zoom out", ic: "minus", kbd: "Ctrl+-", off: (p.zoom || 1) <= BR_ZOOM[0], run: () => zoomBy(-1) },
+    { label: `Actual size (${Math.round((p.zoom || 1) * 100)}%)`, ic: "search", kbd: "Ctrl+0", off: !p.zoom, run: () => setView({ zoom: 1 }) },
+  ];
+  // The thin line under the bar: creeps while the page loads, fills and fades when it's done.
+  const loading = (on) => {
+    if (on) { bar.classList.remove("loading", "loaded"); void bar.offsetWidth; bar.classList.add("loading"); }
+    else if (bar.classList.contains("loading")) { bar.classList.remove("loading"); bar.classList.add("loaded"); }
+  };
+  let drawing = false, next = null;
   // Frames come faster than they can be drawn on a slow machine: only the newest waits, the rest are skipped.
   const draw = async (buf) => {
     if (drawing) { next = buf; return; }
@@ -2055,7 +2135,8 @@ function mountBrowser(feed, p) {
     try {
       const bmp = await createImageBitmap(new Blob([buf], { type: "image/jpeg" }));
       if (cv.width !== bmp.width || cv.height !== bmp.height) { cv.width = bmp.width; cv.height = bmp.height; }
-      g.drawImage(bmp, 0, 0); bmp.close(); msg.hidden = true;
+      g.drawImage(bmp, 0, 0); bmp.close();
+      if (!live) { live = true; view.classList.add("framed"); state(); }
     } catch {}
     drawing = false;
     if (next) { const n = next; next = null; draw(n); }
@@ -2064,27 +2145,31 @@ function mountBrowser(feed, p) {
     if (typeof ev.data !== "string") return draw(ev.data);
     const m = JSON.parse(ev.data);
     if (m.t === "nav") {
-      const changed = p.url !== m.url || p.title !== m.title;
-      p.url = m.url; p.title = m.title;
-      if (document.activeElement !== urlIn) urlIn.value = m.url === "about:blank" ? "" : m.url;
-      const t = feed.closest(".orch-pane")?.querySelector(".win-title b");
-      if (t) t.textContent = paneLabel(p);
+      const changed = p.url !== m.url || p.title !== m.title || (p.icon || "") !== (m.icon || "");
+      p.url = m.url; p.title = m.title; p.icon = m.icon || undefined;
+      backB.disabled = !m.back; fwdB.disabled = !m.fwd;
+      showUrl(); brHead(p); state();
       if (changed) { saveCanvasSoon(); syncWires(); }
-    } else if (m.t === "error") { msg.hidden = false; msg.textContent = `The browser couldn't start: ${m.why}`; }
+    } else if (m.t === "load") loading(m.on);
+    else if (m.t === "gone") { down = "off"; loading(false); state(); }
+    else if (m.t === "error") { down = "err"; why = m.why; state(); }
   };
-  ws.onclose = (e) => { if (e.code !== 1000 && brs.get(p.id)?.ws === ws) { msg.hidden = false; if (!msg.textContent.startsWith("The browser couldn't")) msg.textContent = "Disconnected. Reload the page to reconnect."; } };
-  // The page is laid out at the card's own size (CSS pixels, before the canvas zoom), so it reads like a window.
-  const ro = new ResizeObserver(() => {
-    const w = view.clientWidth, h = view.clientHeight;
-    if (w && h && (w !== size[0] || h !== size[1])) { size = [w, h]; out({ t: "size", w, h }); }
-  });
-  ws.onopen = () => { size = [0, 0]; ro.observe(view); for (const m of queue.splice(0)) out(m); };
+  ws.onclose = (e) => { if (e.code !== 1000 && brs.get(p.id)?.ws === ws && !down) { down = "off"; loading(false); state(); } };
+  const ro = new ResizeObserver(fit);
+  ws.onopen = () => { sent = ""; ro.observe(view); for (const m of queue.splice(0)) out(m); };
   brs.set(p.id, { ws, ro });
+  tools(); showUrl(); state();
   const mods = (e) => (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
-  const at = (e) => { const r = cv.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) / r.width * (cv.width || size[0])), y: Math.round((e.clientY - r.top) / r.height * (cv.height || size[1])) }; };
+  // Where the pointer is in the page's CSS pixels.
+  const at = (e) => { const r = cv.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) / r.width * vp[0]), y: Math.round((e.clientY - r.top) / r.height * vp[1]) }; };
   const BTN = ["left", "middle", "right"];
   let held = "none", moveRaf = 0, lastMove = null;
+  msg.addEventListener("click", (e) => {
+    if (e.target.closest(".orch-br-retry")) return mountBrowser(feed, p);
+    if (view.dataset.s === "blank") urlIn.focus();
+  });
   view.addEventListener("pointerdown", (e) => {
+    if (view.dataset.s) return; // the note over the page takes the click
     view.focus({ preventScroll: true });
     held = BTN[e.button] || "none";
     try { view.setPointerCapture(e.pointerId); } catch {}
@@ -2092,23 +2177,26 @@ function mountBrowser(feed, p) {
     e.preventDefault();
   });
   view.addEventListener("pointermove", (e) => {
+    if (view.dataset.s) return;
     lastMove = e;
     if (!moveRaf) moveRaf = requestAnimationFrame(() => { moveRaf = 0; const ev = lastMove; out({ t: "mouse", e: "mouseMoved", ...at(ev), b: held, bs: ev.buttons, n: 0, m: mods(ev) }); });
   });
-  view.addEventListener("pointerup", (e) => { out({ t: "mouse", e: "mouseReleased", ...at(e), b: BTN[e.button] || "none", bs: e.buttons, n: e.detail || 1, m: mods(e) }); held = "none"; });
+  view.addEventListener("pointerup", (e) => { if (held === "none" && view.dataset.s) return; out({ t: "mouse", e: "mouseReleased", ...at(e), b: BTN[e.button] || "none", bs: e.buttons, n: e.detail || 1, m: mods(e) }); held = "none"; });
   view.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); }); // the page's own menu, not the card's
   // The wheel scrolls the page; Ctrl/Alt + wheel (or a pinch) stays the canvas's zoom.
   view.addEventListener("wheel", (e) => {
-    if (e.ctrlKey || e.altKey) return;
+    if (e.ctrlKey || e.altKey || view.dataset.s) return;
     e.preventDefault(); e.stopPropagation();
     const k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
     out({ t: "wheel", ...at(e), dx: e.deltaX * k, dy: e.deltaY * k, m: mods(e) });
   }, { passive: false });
   // Keys typed into the page stay there (the canvas's own shortcuts on Ctrl+Alt still work); Ctrl+V pastes the
-  // clipboard of this machine, which the headless browser can't read itself.
+  // clipboard of this machine, which the headless browser can't read itself; Ctrl+= / Ctrl+- / Ctrl+0 zoom the page.
   const key = (e, up) => {
     if (e.ctrlKey && e.altKey) return;
     e.preventDefault(); e.stopPropagation();
+    const zk = (e.ctrlKey || e.metaKey) && { "=": 1, "+": 1, "-": -1, "_": -1, "0": 0 }[e.key];
+    if (zk !== undefined && zk !== false) { if (!up) zk ? zoomBy(zk) : setView({ zoom: 1 }); return; }
     if (!up && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") { navigator.clipboard?.readText().then((text) => text && out({ t: "text", text })).catch(() => toast("The browser didn't allow reading the clipboard")); return; }
     out({ t: "key", e: up ? "up" : "down", key: e.key, code: e.code, m: mods(e) });
   };
@@ -2116,11 +2204,19 @@ function mountBrowser(feed, p) {
   view.addEventListener("keyup", (e) => key(e, true));
   urlIn.addEventListener("keydown", (e) => {
     e.stopPropagation();
-    if (e.key === "Enter") { const u = brUrl(urlIn.value); if (u) { out({ t: "go", url: u }); view.focus({ preventScroll: true }); } }
+    if (e.key === "Enter") { const u = brUrl(urlIn.value); if (u) { out({ t: "go", url: u }); loading(true); view.focus({ preventScroll: true }); } }
     if (e.key === "Escape") { urlIn.value = p.url === "about:blank" ? "" : p.url || ""; view.focus({ preventScroll: true }); }
   });
   urlIn.addEventListener("focus", () => urlIn.select());
-  feed.querySelector(".orch-br-bar").addEventListener("click", (e) => { const b = e.target.closest("[data-br]"); if (b) { out({ t: b.dataset.br }); view.focus({ preventScroll: true }); } });
+  urlIn.addEventListener("blur", showUrl);
+  bar.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-br], [data-brz]");
+    if (!b) return;
+    if (b.dataset.brz === "menu") return ctxAt(b, menu());
+    if (b.dataset.brz === "reset") setView({ zoom: 1 });
+    else { out({ t: b.dataset.br }); if (b.dataset.br === "reload") loading(true); }
+    view.focus({ preventScroll: true });
+  });
 }
 // A closed browser card lets its socket go (the server closes the tab after a while unwatched).
 function sweepBrowsers() {
@@ -3658,14 +3754,14 @@ addEventListener("hashchange", () => endDraw());
 let canvasClip = null;
 function paneSpec(p) {
   if (p.kind === "sticky") return { kind: "sticky", text: p.text || "", name: p.name, tone: p.tone, size: p.size, w: p.w, h: p.h };
-  if (p.kind === "browser") return { kind: "browser", url: p.url || "", w: p.w, h: p.h };
+  if (p.kind === "browser") return { kind: "browser", url: p.url || "", zoom: p.zoom, mobile: p.mobile, w: p.w, h: p.h };
   if (p.kind === "terminal") return { kind: "terminal", shell: p.shell || "", cwd: p.cwd || "", agent: p.run?.agent || "", fontSize: p.fontSize, w: p.w, h: p.h };
   return null;
 }
 function placeSpec(s, at) {
   if (!s) return;
   const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
-    : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url }
+    : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url, ...(s.zoom ? { zoom: s.zoom } : {}), ...(s.mobile ? { mobile: true } : {}) }
     : { kind: "terminal", id: `term_${Date.now()}`, shell: s.shell, cwd: s.cwd, ...(S.runners?.find((r) => r.id === s.agent)?.tui ? { run: newTuiRun(s.agent) } : {}) };
   Object.assign(p, { w: s.w, h: s.h }, s.fontSize ? { fontSize: s.fontSize } : {});
   if (s.kind === "sticky") for (const k of ["name", "tone", "size"]) if (s[k]) p[k] = s[k];
@@ -3946,6 +4042,7 @@ async function orchPaint(force) {
       if (!force && orchSigs.get(key) === sig) return;
       orchSigs.set(key, sig);
       card.querySelector(".orch-head").innerHTML = winHead(key, paneLabel(p), "", paneBtns);
+      brHead(p);
       card.querySelector(".orch-needs").innerHTML = "";
       if (form) form.style.display = "none";
       const feed = card.querySelector(".orch-feed");
