@@ -1280,6 +1280,11 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   color: var(--ink);
 }
 .orch-sticky-input:focus { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.orch-sticky-view { flex: 1; overflow-y: auto; padding: 10px 12px; font: 400 13px/1.55 var(--body); cursor: text; }
+.orch-sticky-view > * + * { margin-top: 8px; }
+.orch-sticky-view h1, .orch-sticky-view h2, .orch-sticky-view h3 { font: 700 15px var(--display); margin-top: 12px; }
+.orch-sticky-view ul, .orch-sticky-view ol { padding-left: 18px; }
+.orch-sticky-view[hidden], .orch-sticky-input[hidden] { display: none; }
 
 /* ---------- The canvas chrome: small islands floating over it (Maestri-style) ----------
    ☰ top left (pages, search, layout), the tools top centre, the view bottom right; everything else is a right-click. */
@@ -2406,3 +2411,8 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .gm-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-top: 8px; font-size: 13px; }
 .gm-chain a { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 8px; color: var(--ink); background: color-mix(in srgb, var(--c) 14%, transparent); }
 .gm-chain span { color: var(--faint); }
+
+/* Drawing card: Excalidraw fills it; the inner box is counter-scaled against the canvas zoom (fitDrawings). */
+.orch-draw { position: relative; height: 100%; overflow: hidden; }
+.orch-draw-in { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-origin: 0 0; }
+.orch-feed:has(> .orch-draw) { padding: 0; }

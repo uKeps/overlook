@@ -1238,6 +1238,7 @@ function syncWires(force) {
   for (const l of orchLinks) for (const [t, o] of [[l.a, l.b], [l.b, l.a]]) {
     const p = term(t) && orchPanes.find((x) => paneKey(x) === o), add = (item) => (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), ...item });
     if (p?.kind === "sticky") add({ text: p.text || "" });
+    if (p?.kind === "drawing") add({ text: drawingText(p) });
     if (p?.kind === "note") add({ path: p.id });
     if (p?.kind === "terminal") add({ term: p.id });
   }
@@ -1571,10 +1572,27 @@ async function deleteSelectedPanes() {
 
 // `start`: the popover is opening here (an empty field, Recent shown while you stay in this folder).
 async function loadCwdBrowser(path = cwdBrowse, start = false) {
-  cwdBrowse = path || "~/dev";
-  cwdData = await api(`/api/dirs?path=${encodeURIComponent(cwdBrowse)}`).catch(() => null);
-  if (start) { cwdStart = cwdData?.short ?? ""; cwdQuery = ""; cwdIdx = 0; const inp = $("#cwd-q"); if (inp) inp.value = ""; }
+  const d = await api(`/api/dirs?path=${encodeURIComponent(path || "~/dev")}`).catch(() => null);
+  if (d || !cwdData) { cwdBrowse = path || "~/dev"; cwdData = d; } // a path that isn't there keeps you where you are
+  if (start) { cwdPath.key = null; cwdStart = cwdData?.short ?? ""; cwdQuery = ""; cwdIdx = 0; const inp = $("#cwd-q"); if (inp) inp.value = ""; }
   paintCwdPop();
+}
+// A typed path completes like a shell: "~/dev/pla" lists ~/dev (fetched live) filtered by "pla".
+// cwdSplit: [the folder to list, what Tab keeps before the name, the partial name].
+const cwdSplit = (v) => { const i = v.lastIndexOf("/"); return i < 0 ? [v, `${v}/`, ""] : [v.slice(0, i) || "/", v.slice(0, i + 1), v.slice(i + 1)]; };
+const isCwdPath = (v) => /^[~/]/.test(v);
+let cwdPath = { key: null, data: null }, cwdPathT = 0;
+function cwdPathLoad() {
+  const v = cwdQuery.trim();
+  if (!isCwdPath(v)) return;
+  const [d] = cwdSplit(v);
+  clearTimeout(cwdPathT);
+  if (d === cwdPath.key) return;
+  cwdPathT = setTimeout(async () => {
+    const data = await api(`/api/dirs?path=${encodeURIComponent(d)}`).catch(() => null);
+    if (cwdSplit(cwdQuery.trim())[0] !== d) return; // typed on meanwhile
+    cwdPath = { key: d, data }; cwdIdx = 0; paintCwdPop();
+  }, 120);
 }
 let lastCwdBtn = null;
 // The popover opens under the button that asked for it (or above it, near the bottom of the screen).
@@ -1610,14 +1628,24 @@ function paintCwdPop() {
   if (!cwdOpen) cwdLaunch = null;
   if (!cwdOpen || !cwdData) return;
   requestAnimationFrame(() => placeCwdPop(lastCwdBtn));
-  const q = fold(cwdQuery.trim()), hit = (...t) => !q || t.some((x) => fold(x).includes(q));
+  // "planeit" finds plane-it-frontend: case, accents and separators don't count.
+  const norm = (x) => fold(x).replace(/[^\p{L}\p{N}]/gu, ""), q = norm(cwdQuery.trim()), hit = (...t) => !q || t.some((x) => norm(x).includes(q));
   const base = (c) => c.split("/").filter(Boolean).pop() || c, dir = (c) => c.replace(/\/[^/]+\/?$/, "");
   const atStart = cwdData.short === cwdStart;
   const recent = atStart ? [...new Set([...recentCwds(), ...[...(S.agents || []), ...(S.background || []), ...(S.tasks || [])].map((x) => shortCwd(x.cwd))])].filter((c) => c && c !== "~" && c !== cwdData.short && hit(c)).slice(0, 5) : [];
-  cwdItems = [
+  const pv = isCwdPath(cwdQuery.trim()) && cwdSplit(cwdQuery.trim()), pd = pv && cwdPath.key === pv[0] ? cwdPath.data : undefined;
+  if (pv) {
+    const [, pre, part] = pv, pq = norm(part), rank = (n) => (n === part) * 2 + n.startsWith(part); // exact, then prefix, then the rest
+    cwdItems = !pd ? [] : [
+      ...(!part ? [{ ic: "check", name: "This folder", sub: pd.short, path: pd.short }] : []),
+      ...pd.dirs.filter((d) => !pq || norm(d.name).includes(pq)).sort((a, b) => rank(b.name) - rank(a.name))
+        .map((d) => ({ ic: "folder", name: d.name, path: d.short, nav: d.path, fill: `${pre}${d.name}/` })),
+    ];
+  } else cwdItems = [
     ...(!atStart && !q ? [{ ic: "check", name: "This folder", sub: cwdData.short, path: cwdData.short }] : []),
-    ...recent.map((c) => ({ ic: "clock", name: base(c), sub: dir(c), path: c })),
+    ...recent.map((c) => ({ ic: "clock", name: base(c), sub: dir(c), path: c, nav: c })),
     ...(cwdData.dirs || []).filter((d) => !recent.includes(d.short) && hit(d.name)).map((d) => ({ ic: "folder", name: d.name, path: d.short, nav: d.path })),
+    ...(q ? (cwdData.deep || []).filter((d) => !recent.includes(d.short) && hit(d.name)).slice(0, 30).map((d) => ({ ic: "folder", name: d.name, sub: dir(d.short), path: d.short, nav: d.path })) : []),
     ...(hit("vault", D.vault || "") ? [{ ic: "book", name: "Vault", sub: D.vault, path: "" }] : []),
   ];
   cwdIdx = Math.min(cwdIdx, Math.max(0, cwdItems.length - 1));
@@ -1626,7 +1654,7 @@ function paintCwdPop() {
       <div class="cwd-list" id="cwd-list" role="listbox"></div>
       <div class="cwd-foot" id="cwd-foot"></div>`;
     const inp = pop.querySelector("#cwd-q");
-    inp.oninput = () => { cwdQuery = inp.value; cwdIdx = 0; paintCwdPop(); };
+    inp.oninput = () => { cwdQuery = inp.value; cwdIdx = 0; cwdPathLoad(); paintCwdPop(); };
     inp.onkeydown = (e) => {
       const it = cwdItems[cwdIdx], v = inp.value.trim();
       if (e.key === "Escape") { e.preventDefault(); cwdOpen = false; paintCwdPop(); }
@@ -1636,9 +1664,11 @@ function paintCwdPop() {
         paintCwdPop(); $("#cwd-list .on")?.scrollIntoView({ block: "nearest" });
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (v.startsWith("/") || v.startsWith("~")) cwdGo(v);
-        else if (it) pickCwd(it.path);
-      } else if (e.key === "Tab" && it?.nav) { e.preventDefault(); cwdGo(it.nav); }
+        if (it) pickCwd(it.path);
+        else if (isCwdPath(v)) cwdGo(v); // the list hasn't loaded yet
+      } else if (e.key === "Tab" && it?.fill) { e.preventDefault(); inp.value = it.fill; inp.oninput(); }
+      else if (e.key === "Tab" && it?.nav && !isCwdPath(v)) { e.preventDefault(); cwdGo(it.nav); }
+      else if (e.key === "Tab") e.preventDefault();
       else if (e.key === "Backspace" && !inp.value && cwdData.parent) { e.preventDefault(); cwdGo(cwdData.parent); }
     };
   }
@@ -1646,8 +1676,8 @@ function paintCwdPop() {
   $("#cwd-list").innerHTML = cwdItems.map((it, i) => `<div class="cwd-row ${i === cwdIdx ? "on" : ""}" role="option" aria-selected="${i === cwdIdx}">
       <button type="button" class="cwd-open" data-act="cwd-pick" data-path="${esc(it.path)}" title="${esc(it.path || D.vault)}">${icon(it.ic, 15)}<b>${esc(it.name)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ""}</button>
       ${it.nav ? `<button type="button" class="cwd-in" data-act="cwd-nav" data-path="${esc(it.nav)}" title="Go inside (Tab)" aria-label="Go inside ${esc(it.name)}">${icon("r", 14)}</button>` : ""}
-    </div>`).join("") || `<p class="cwd-empty">Nothing matches "${esc(cwdQuery)}". Type a path, like ~/projects, and press Enter.</p>`;
-  $("#cwd-foot").innerHTML = `${cwdData.parent ? `<button type="button" class="cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Up (Backspace)" aria-label="Parent folder">${icon("l", 13)}</button>` : ""}<span class="cwd-where">${esc(cwdData.short)}</span><span class="cwd-keys">↵ open · Tab inside · Esc</span>`;
+    </div>`).join("") || `<p class="cwd-empty">${!pv ? `Nothing matches "${esc(cwdQuery)}". Type a path, like ~/projects.` : pd === undefined ? "…" : pd === null ? `${esc(pv[0])} doesn't exist` : `Nothing in ${esc(pd.short)} matches "${esc(pv[2])}"`}</p>`;
+  $("#cwd-foot").innerHTML = `${cwdData.parent ? `<button type="button" class="cwd-up" data-act="cwd-nav" data-path="${esc(cwdData.parent)}" title="Up (Backspace)" aria-label="Parent folder">${icon("l", 13)}</button>` : ""}<span class="cwd-where">${esc(pv ? pd?.short ?? pv[0] : cwdData.short)}</span><span class="cwd-keys">↵ open · Tab ${pv ? "complete" : "inside"} · Esc</span>`;
 }
 function cwdGo(path) {
   cwdQuery = ""; cwdIdx = 0;
@@ -1680,10 +1710,78 @@ async function askAgentCwd(r, at, from) {
   $("#cwd-q")?.focus();
 }
 
+const mdCache = new Map();
+async function stickyShow(view, ta, text = "") {
+  const empty = !text.trim();
+  view.hidden = empty; ta.hidden = !empty;
+  if (empty) return;
+  if (!mdCache.has(text)) {
+    const html = (await api("/api/md", { text }).catch(() => null))?.html;
+    if (html == null) { view.hidden = true; ta.hidden = false; return; } // server down: plain text still works
+    if (mdCache.size > 200) mdCache.clear();
+    mdCache.set(text, html);
+  }
+  if (document.activeElement !== ta) { view.innerHTML = mdCache.get(text); view.querySelectorAll("a[href^='http']").forEach((a) => { a.target = "_blank"; a.rel = "noopener"; }); }
+}
+
+// Drawing cards: the real Excalidraw, bundled by the server on first use; the scene lives in the card (canvas storage).
+let excalidrawLib = null;
+const drawApis = new Map();
+const loadExcalidraw = () => (excalidrawLib ??= (async () => {
+  window.EXCALIDRAW_ASSET_PATH = `${location.origin}/vendor/excalidraw/`;
+  document.head.insertAdjacentHTML("beforeend", `<link rel="stylesheet" href="/vendor/excalidraw/index.css">`);
+  return import("/vendor/excalidraw.js");
+})().catch((e) => { excalidrawLib = null; throw e; }));
+async function mountDrawing(el, p) {
+  const lib = await loadExcalidraw().catch(() => null);
+  if (!lib) { el.textContent = "Couldn't load Excalidraw (is the server up?)"; return; }
+  let t = 0, last = "";
+  const keep = (els) => {
+    const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
+    if (sig === last) return;
+    last = sig; p.elements = live; saveCanvasSoon(); syncWires();
+  };
+  // ponytail: the React root is never unmounted when the card closes; a leak per closed drawing until the page reloads.
+  lib.mount(el, {
+    theme: "dark",
+    initialData: { elements: p.elements || [], appState: { theme: "dark" }, scrollToContent: true },
+    UIOptions: { canvasActions: { loadScene: false, saveToActiveFile: false } },
+    excalidrawAPI: (a) => drawApis.set(p.id, a),
+    onChange: (els) => { clearTimeout(t); t = setTimeout(() => keep(els), 400); },
+  });
+  new ResizeObserver(() => fitDrawings()).observe(el.parentElement);
+  el.parentElement.addEventListener("pointerenter", () => drawApis.get(p.id)?.refresh());
+  fitDrawings();
+}
+// The canvas zooms with a CSS scale, which Excalidraw can't see: its pointer maths would land off the pointer. Its box is
+// counter-scaled so it always runs at 1:1 on screen; the card just shows more or less of the drawing.
+let drawRefreshT = 0;
+function fitDrawings() {
+  const boxes = document.querySelectorAll(".orch-draw");
+  if (!boxes.length) return;
+  for (const box of boxes) {
+    const el = box.firstElementChild, k = box.offsetWidth ? box.getBoundingClientRect().width / box.offsetWidth : 1;
+    if (el) Object.assign(el.style, { width: `${box.offsetWidth * k}px`, height: `${box.offsetHeight * k}px`, transform: `scale(${1 / k})` });
+  }
+  clearTimeout(drawRefreshT);
+  drawRefreshT = setTimeout(() => drawApis.forEach((a) => a.refresh?.()), 150); // offsets moved with the pan/zoom
+}
+// What a drawing says, for an agent wired to it: its texts, and which labelled shapes the arrows join.
+function drawingText(p) {
+  const els = p.elements || [], byId = new Map(els.map((x) => [x.id, x]));
+  const label = (x) => x && (x.type === "text" ? x.text : els.find((y) => y.type === "text" && y.containerId === x.id)?.text || x.type);
+  const lines = els.filter((x) => x.type === "text" && !x.containerId).map((x) => `- ${x.text.replace(/\n/g, " ")}`);
+  for (const x of els) if (x.type === "rectangle" || x.type === "ellipse" || x.type === "diamond") { const t = label(x); if (t !== x.type) lines.push(`- [${x.type}] ${t.replace(/\n/g, " ")}`); }
+  for (const x of els) if (x.type === "arrow" && (x.startBinding || x.endBinding)) {
+    lines.push(`- ${label(byId.get(x.startBinding?.elementId)) || "?"} → ${label(byId.get(x.endBinding?.elementId)) || "?"}`.replace(/\n/g, " "));
+  }
+  return lines.join("\n");
+}
+
 function ensurePaneRect(p, idx = 0) {
   // A terminal opens at about a Ghostty window's size (~95 columns: a fastfetch greeting fits on one line).
-  p.w ??= (p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
-  p.h ??= (p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
+  p.w ??= (p.kind === "drawing" ? 720 : p.kind === "sticky" ? 320 : p.kind === "note" ? 480 : p.kind === "terminal" ? 940 : 580);
+  p.h ??= (p.kind === "drawing" ? 480 : p.kind === "sticky" ? 220 : p.kind === "note" ? 440 : p.kind === "terminal" ? 600 : 430);
   if (typeof p.x !== "number") {
     // A new card opens where you're looking (the middle of the visible canvas), stepped down-right off any card there.
     const r = orchMode === "free" ? $("#orch-canvas")?.getBoundingClientRect() : null;
@@ -1729,6 +1827,7 @@ function applyCanvasTransform() {
   const free = orchMode === "free" && !orchMax;
   if (plane) plane.style.transform = free && orchPanes.length ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
   plane?.style.setProperty("--z", orchZoom);
+  fitDrawings();
   // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
   // low zoom levels (>16px on-screen period) free of moiré shimmer or dot crowding.
   if (canvas) {
@@ -2053,6 +2152,7 @@ async function linkedContext(key, budget) {
   if (budget < 300 || (!srcs.length && !orchLinks.some((l) => l.a === key || l.b === key))) return "";
   const parts = await Promise.all(srcs.map(async (p) => {
     if (p.kind === "sticky") return p.text?.trim() ? `### Sticky note\n${p.text.trim()}` : "";
+    if (p.kind === "drawing") return drawingText(p) ? `### Drawing\n${drawingText(p)}` : "";
     if (p.kind === "note") {
       const txt = p.ctx || htmlText((await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null))?.html || "");
       return txt ? `### Vault note: ${p.id}\n${txt}` : "";
@@ -2265,7 +2365,7 @@ window.addEventListener("keydown", (e) => {
 // Space held = pan; bound once (the canvas element is rebuilt on every visit to #/agents).
 let isSpacePressed = false;
 window.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && !e.target.closest("input, textarea, select, [contenteditable]") && !isSpacePressed) {
+  if (e.code === "Space" && !e.target.closest("input, textarea, select, [contenteditable], .orch-draw") && !isSpacePressed) {
     isSpacePressed = true;
     if (orchMode === "free" && !orchMax) $("#orch-canvas")?.classList.add("space-pan");
   }
@@ -2388,7 +2488,7 @@ function bindCanvasInteractions(canvas) {
   // Right-click: a card's menu, or the canvas's (free canvas: opened on release, as right-drag pans). Text fields keep the
   // browser's own menu (spelling, paste).
   canvas.addEventListener("contextmenu", (e) => {
-    if (e.target.closest("textarea:not(.xterm-helper-textarea), input")) return;
+    if (e.target.closest("textarea:not(.xterm-helper-textarea), input, .orch-draw-in")) return; // Excalidraw has its own menu
     e.preventDefault();
     const card = e.target.closest(".orch-pane");
     if (card) paneMenu(card.dataset.key, e.clientX, e.clientY);
@@ -2574,7 +2674,7 @@ function agentsBody() {
   const all = fleetItems();
   const counts = { all: all.length };
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
-  orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
+  orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "drawing" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   // Agents run in terminals (like Maestri): a task or session card turns into its own TUI as soon as nothing else
   // drives it; only a session running elsewhere (another terminal, a waiting background job) stays a read-only card.
   for (const p of [...orchPanes]) if (p.kind === "task" || p.kind === "agent") {
@@ -2854,7 +2954,7 @@ function paintHud(hud, isFree) {
   const sep = '<span class="orch-hud-sep"></span>', isFull = document.body.classList.contains("canvas-full");
   const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
   const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
-    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note")
+    + b("orch-new", "agents", "New agent (Ctrl+Alt+N)") + b("term-canvas", "terminal", "New terminal (Ctrl+Alt+T)") + b("orch-add-sticky", "notes", "New note") + b("orch-add-drawing", "edit", "New drawing")
     + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
@@ -2981,6 +3081,7 @@ const agentItems = (at, from) => [...(S.runners || []).filter((r) => r.ready && 
 const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));
 const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
   : p.kind === "sticky" ? (p.text || "").trim().split("\n")[0].slice(0, 40) || "Note"
+  : p.kind === "drawing" ? "Drawing"
   : p.kind === "note" ? D.notes.find((n) => n.path === p.id)?.title || p.id
   : p.kind === "task" ? String(S.tasks?.find((t) => t.id === p.id)?.prompt || "Task").slice(0, 40)
   : S.background?.find((b) => b.key === p.id)?.title || "Session");
@@ -2994,6 +3095,9 @@ function addSticky(at) {
   if (!addPane(p, at?.x, at?.y)) return;
   saveCanvas();
   setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-sticky-input`)?.focus(), 80);
+}
+function addDrawing(at) {
+  if (addPane({ kind: "drawing", id: String(++orchSeq), elements: [] }, at?.x, at?.y)) saveCanvas();
 }
 // Copy card / Duplicate: what it takes to make the card again. A terminal starts fresh in the same folder, an agent
 // starts a new session of the same agent; notes, tasks and sessions are one card each, so they have none.
@@ -3059,6 +3163,7 @@ function canvasMenu(cx, cy) {
     { label: "New agent", ic: "agents", sub: agentItems(at, { x: cx, y: cy }) },
     { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => newTermPane(undefined, at) },
     { label: "New note", ic: "notes", run: () => addSticky(at) },
+    { label: "New drawing", ic: "edit", run: () => addDrawing(at) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
     "-",
@@ -3194,7 +3299,7 @@ async function orchPaint(force) {
       // The card can be rekeyed in place (new tile -> task), so handlers read its key at event time.
       card.addEventListener("pointerdown", (e) => {
         const key = card.dataset.key;
-        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot")) return;
+        if (e.target.closest("button, a, select, input, textarea, .orch-resize, .orch-port, .dot, .orch-draw")) return;
         // Selection (for Delete / multi-move) only exists on the free canvas.
         if (orchMode !== "free" || orchMax) orchSelected.clear();
         else if (e.shiftKey || e.metaKey || e.ctrlKey) {
@@ -3256,7 +3361,7 @@ async function orchPaint(force) {
     // Between terminals a wire is a hand-off (overlook send), so a terminal's message line only shows when a note or a
     // sticky is wired into it, to bring their text along.
     const ctxIn = orchLinks.filter((l) => l.b === key && !l.a.startsWith("terminal:")).length;
-    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
+    if (form) form.style.display = (p.kind === "note" || p.kind === "sticky" || p.kind === "drawing" || (p.kind === "terminal" && !(p.run && ctxIn))) ? "none" : "";
     if (p.kind === "note") {
       const n = await api(`/api/note?path=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!n || !card.isConnected) return;
@@ -3273,6 +3378,20 @@ async function orchPaint(force) {
       if (form) form.style.display = "none";
       return;
     }
+    if (p.kind === "drawing") {
+      const sig = `drawing|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      if (!force && orchSigs.get(key) === sig) return;
+      orchSigs.set(key, sig);
+      card.querySelector(".orch-head").innerHTML = winHead(key, "Drawing", "", paneBtns);
+      card.querySelector(".orch-needs").innerHTML = "";
+      if (form) form.style.display = "none";
+      const feed = card.querySelector(".orch-feed");
+      if (!feed.querySelector(".orch-draw")) {
+        feed.innerHTML = `<div class="orch-draw"><div class="orch-draw-in"></div></div>`;
+        mountDrawing(feed.querySelector(".orch-draw-in"), p);
+      }
+      return;
+    }
     if (p.kind === "sticky") {
       p.w ??= 320; p.h ??= 220;
       const sig = `sticky|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
@@ -3281,13 +3400,19 @@ async function orchPaint(force) {
       card.querySelector(".orch-head").innerHTML = winHead(key, "Note", "", paneBtns);
       card.querySelector(".orch-needs").innerHTML = "";
       const feed = card.querySelector(".orch-feed");
+      // Read as markdown; a click (not on a link) edits the text, leaving the field shows it rendered again.
       let ta = feed.querySelector(".orch-sticky-input");
       if (!ta) {
-        feed.innerHTML = `<div class="orch-sticky-wrap"><textarea class="orch-sticky-input" placeholder="Write a note… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
+        feed.innerHTML = `<div class="orch-sticky-wrap"><div class="orch-sticky-view prose" title="Click to edit"></div><textarea class="orch-sticky-input" placeholder="Write a note (markdown)… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
         ta = feed.querySelector(".orch-sticky-input");
+        const view = feed.querySelector(".orch-sticky-view");
         ta.oninput = () => { p.text = ta.value; saveCanvasSoon(); };
+        ta.onblur = () => stickyShow(view, ta, p.text);
+        view.onclick = (e) => { if (e.target.closest("a")) return; view.hidden = true; ta.hidden = false; ta.focus(); };
+        stickyShow(view, ta, p.text);
       } else if (document.activeElement !== ta) {
         ta.value = p.text || "";
+        stickyShow(feed.querySelector(".orch-sticky-view"), ta, p.text);
       }
       if (form) form.style.display = "none";
       return;
@@ -4301,6 +4426,7 @@ const ACTIONS = {
     }
   },
   "orch-add-sticky": () => addSticky(),
+  "orch-add-drawing": () => addDrawing(),
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
@@ -4505,7 +4631,7 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (e.key === "Delete" && orchSelected.size > 0 && route().pg === "agents" && !orchMax && !document.querySelector("dialog[open]")) {
-    if (!e.target.closest("input, textarea, select, [contenteditable]")) {
+    if (!e.target.closest("input, textarea, select, [contenteditable], .orch-draw")) {
       e.preventDefault();
       deleteSelectedPanes();
       return;

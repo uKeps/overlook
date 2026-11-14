@@ -159,13 +159,26 @@ export function listDirs(root: string, raw?: string, hidden = false) {
       .sort((a, b) => Number(b.git) - Number(a.git) || a.name.localeCompare(b.name))
       .slice(0, 250);
   } catch {}
+  // One level further down, so a filter finds ~/dev/planeit from ~ without stepping in first.
+  const deep: { name: string; path: string; short: string }[] = [];
+  for (const d of dirs) {
+    if (d.name === "node_modules") continue;
+    try {
+      for (const e of readdirSync(d.path, { withFileTypes: true })) {
+        if (!e.isDirectory() || e.name.startsWith(".") || e.name === "node_modules") continue;
+        const p = join(d.path, e.name);
+        deep.push({ name: e.name, path: p, short: shortDir(p) });
+      }
+    } catch {}
+    if (deep.length > 3000) break; // ponytail: one level only, capped; a real index if deeper search is wanted
+  }
   const par = dirname(dir), parent = par !== dir && validCwd(root, par) ? par : null;
   const roots = [
     ["Vault", root], ["~", h], ["~/dev", `${h}/dev`], ["~/Documents", `${h}/Documents`],
     ["~/Downloads", `${h}/Downloads`], ["~/Desktop", `${h}/Desktop`],
     ["/mnt", "/mnt"], [`/run/media/${userInfo().username}`, `/run/media/${userInfo().username}`], ["/", "/"],
   ].filter(([, p]) => validCwd(root, p)).map(([label, p]) => ({ label, path: p, short: shortDir(p) }));
-  return { path: dir, short: shortDir(dir), parent, roots, dirs };
+  return { path: dir, short: shortDir(dir), parent, roots, dirs, deep };
 }
 // The agent and the model/effort it will run with, or why it can't run.
 function resolveRun(root: string, dir: string, agentId: string, opts: RunOpts) {
