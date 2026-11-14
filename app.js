@@ -3640,7 +3640,7 @@ async function orchPaint(force) {
       // Read as markdown; a click (not on a link) edits the text, leaving the field shows it rendered again.
       let ta = feed.querySelector(".orch-sticky-input");
       if (!ta) {
-        feed.innerHTML = `<div class="orch-sticky-wrap"><div class="orch-sticky-view prose" title="Click to edit"></div><textarea class="orch-sticky-input" placeholder="Write a note (markdown)… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
+        feed.innerHTML = `<div class="orch-sticky-wrap"><div class="orch-sticky-view prose" title="Click to edit"></div><textarea class="orch-sticky-input" spellcheck="false" placeholder="Write a note (markdown)… wire it into an agent and it becomes context">${esc(p.text || "")}</textarea></div>`;
         ta = feed.querySelector(".orch-sticky-input");
         const view = feed.querySelector(".orch-sticky-view");
         ta.oninput = () => { p.text = ta.value; saveCanvasSoon(); };
