@@ -12,7 +12,7 @@ import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, 
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContextItems, ptyContextGive, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -25,6 +25,7 @@ const TAILNET = (() => {
 const hostOk = (h: string, port: number) =>
   h === `127.0.0.1:${port}` || h === `localhost:${port}` || (!!TAILNET && (h === TAILNET || h.startsWith(`${TAILNET}:`)));
 let VAULT = basename(ROOT);
+setVaultRoot(() => ROOT); // wired vault notes are read from (and written to) the vault Overlook shows
 
 // Names the app reads from the vault. The UI is English; the vault follows one of these presets (VAULT_LANG).
 const LAYOUTS = {
@@ -953,13 +954,8 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
-    if (p === "/api/pty/context") {
-      const r = ptyContextItems(b.from, b.token);
-      if (typeof r === "string") return new Response(r, { status: 403 });
-      const known = r.items.some((i) => i.path) ? new Set((await notes()).map((n) => n.path)) : new Set<string>(); // known paths only: no ../
-      const items = await Promise.all(r.items.map(async (i) => ({ ...i, text: (i.path === undefined ? i.text ?? "" : known.has(i.path) ? await Bun.file(`${ROOT}/${i.path}`).text().catch(() => "") : "").trim().slice(0, 8000) })));
-      return json({ items: ptyContextGive(r.id, items.filter((i) => i.text), !!b.fresh) });
-    }
+    if (p === "/api/pty/context") { const r = await ptyContext(b.from, b.token, !!b.fresh); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ items: r }); }
+    if (p === "/api/pty/write") { const r = await ptyWrite(b.from, b.token, b.to, b.text, !!b.append); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/spawn") { const r = await ptySpawn(b.from, b.token, b, loadAgents(import.meta.dir).filter(tuiOk).map((a) => a.id)); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     // The canvas takes the cards its agents asked for; like wires, only Overlook's own page may.
     if (p === "/api/canvas/spawns") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : json({ spawns: takeSpawns(b.panes, b.done) });
@@ -1102,7 +1098,7 @@ Bun.serve({
       if (!t || t.code !== undefined) return;
       // "\0" + JSON is a resize from the pane; everything else is keystrokes.
       if (s.startsWith("\0")) { try { const r = JSON.parse(s.slice(1)); resizePty(t, dim(r.cols, 80), dim(r.rows, 24)); } catch {} }
-      else t.proc.terminal?.write(s);
+      else { t.typed = Date.now(); t.proc.terminal?.write(s); }
     },
     close(ws: any) {
       const t = getPty(ws.data.id);

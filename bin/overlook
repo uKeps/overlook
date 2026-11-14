@@ -8,11 +8,12 @@
 //   overlook note <text…>             put a note card on the canvas, wired to this one
 //   overlook context [--new|--all]   the notes wired to this card (claude's hooks: --new only new or changed ones, --all
 //                                    all of them; both print nothing when there is nothing)
+//   overlook write <note> [--append] <text…>   replace (or add to) the text of a note wired to this card
 //   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
 // <card> is a card id or part of its name, as `overlook peers` prints them.
 const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
 const [cmd, card, ...rest] = process.argv.slice(2);
-const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook spawn <agent> [--cwd dir] [task] | overlook note <text> | overlook context | overlook todo [task]";
+const usage = "usage: overlook peers | overlook send <card> <message> | overlook read <card> [lines] | overlook spawn <agent> [--cwd dir] [task] | overlook note <text> | overlook context | overlook write <note> [--append] <text> | overlook todo [task]";
 // To-dos work from any terminal on this machine (the canvas's variables aren't needed).
 if (cmd === "todo") {
   const base = url || `http://127.0.0.1:${process.env.PORT || 3333}`, text = [card, ...rest].filter(Boolean).join(" ").trim();
@@ -35,9 +36,9 @@ if (cmd === "context") {
   const fresh = card === "--new", hook = fresh || card === "--all";
   const r = url && from && token ? await fetch(url + "/api/pty/context", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, token, fresh }) }).catch(() => null) : null;
   const items: any[] = r?.ok ? (await r.json()).items : [];
-  if (items.length) console.log(`Notes the user wired to this card on the Overlook canvas, as context for the work${fresh ? " (new or changed since you last saw them)" : ""}:\n\n`
-    + items.map((i) => `### ${i.path ? `Vault note: ${i.path}` : `Note "${i.name}"`}\n${i.text}`).join("\n\n"));
-  else if (!hook) console.log(r?.ok ? "No notes are wired to this card." : "overlook: run this inside a terminal card on the Overlook canvas");
+  if (items.length) console.log(`What the user wired to this card on the Overlook canvas, as context for the work${fresh ? " (new or changed since you last saw them)" : ""}:\n\n`
+    + items.map((i) => `${i.head}\n${i.text}`).join("\n\n"));
+  else if (!hook) console.log(r?.ok ? "Nothing is wired to this card." : "overlook: run this inside a terminal card on the Overlook canvas");
   process.exit(0);
 }
 if (!url || !from || !token) { console.error("overlook: run this inside a terminal card on the Overlook canvas"); process.exit(2); }
@@ -65,4 +66,8 @@ if (cmd === "peers") {
 } else if (cmd === "note" && card) {
   const r = await call("/api/pty/spawn", { note: [card, ...rest].join(" ") });
   console.log(r.queued ? "queued, it shows when the Overlook canvas is showing this card" : "note added");
+} else if (cmd === "write" && card) {
+  const append = rest[0] === "--append", words = append ? rest.slice(1) : rest;
+  const r = await call("/api/pty/write", { to: card, append, text: words.length ? words.join(" ") : await Bun.stdin.text() });
+  console.log(`wrote to "${r.name}"`);
 } else { console.error(usage); process.exit(2); }

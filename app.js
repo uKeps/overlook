@@ -1228,12 +1228,14 @@ function syncWires(force) {
   const term = (k) => (k.startsWith("terminal:") ? k.slice(9) : "");
   const wires = orchLinks.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
   const names = Object.fromEntries(orchPanes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
-  // Sticky and vault notes wired to a terminal (either way round) are context for the agent in it (`overlook context`).
+  // Whatever is wired to a terminal (either way round: notes, vault notes, other terminals) is context for the agent in
+  // it; the server hands it over (deliverWired in tasks.ts).
   const ctx = {};
   for (const l of orchLinks) for (const [t, o] of [[l.a, l.b], [l.b, l.a]]) {
-    const p = term(t) && orchPanes.find((x) => paneKey(x) === o);
-    if (p?.kind === "sticky") (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), text: p.text || "" });
-    if (p?.kind === "note") (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), path: p.id });
+    const p = term(t) && orchPanes.find((x) => paneKey(x) === o), add = (item) => (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), ...item });
+    if (p?.kind === "sticky") add({ text: p.text || "" });
+    if (p?.kind === "note") add({ path: p.id });
+    if (p?.kind === "terminal") add({ term: p.id });
   }
   const body = JSON.stringify({ wires, names, ctx });
   if (body === wiresSent && !force) return;
@@ -1751,6 +1753,13 @@ async function takeSpawns() {
   const active = orchActive;
   for (const s of r.spawns) {
     const parent = orchPanes.find((p) => p.kind === "terminal" && p.id === s.parent);
+    // An agent wrote into a sticky wired to it (overlook write): the text changes in place.
+    if (s.kind === "write") {
+      const note = orchPanes.find((p) => p.kind === "sticky" && paneKey(p) === s.target);
+      if (note) note.text = s.text;
+      spawnDone.push({ id: s.id, ...(note ? {} : { why: "that note is no longer on the canvas" }) });
+      continue;
+    }
     const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
       : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
     if (parent && typeof parent.x === "number") {
@@ -1930,15 +1939,22 @@ function drawLinks(tmp) {
     const len = Math.hypot(t.x - s.x, t.y - s.y) || 1, k = clamp(len * .3, 40, 120);
     let px = -(t.y - s.y) / len, py = (t.x - s.x) / len;
     if (py < -.05 || (Math.abs(py) <= .05 && px < 0)) { px = -px; py = -py; }
-    const sag = clamp(len * .22, 14, 140), f = (n) => Math.round(n);
-    return { s, t, d: `M${f(s.x)},${f(s.y)} C${f(s.x + s.nx * k + px * sag)},${f(s.y + s.ny * k + py * sag)} ${f(t.x + t.nx * k + px * sag)},${f(t.y + t.ny * k + py * sag)} ${f(t.x)},${f(t.y)}` };
+    const sag = clamp(len * .22, 14, 140);
+    return { len, pts: [s, { x: s.x + s.nx * k + px * sag, y: s.y + s.ny * k + py * sag }, { x: t.x + t.nx * k + px * sag, y: t.y + t.ny * k + py * sag }, t] };
+  };
+  const bez = (p) => { const f = (n) => Math.round(n * 10) / 10; return `M${f(p[0].x)},${f(p[0].y)} C${p.slice(1).map((q) => `${f(q.x)},${f(q.y)}`).join(" ")}`; };
+  // Excalidraw's hand-drawn line (what rough.js does for a curve): the same curve twice, each pass nudged a little, the
+  // nudges seeded by the wire so it doesn't wobble on every repaint.
+  const sketch = (pts, len, key) => {
+    let seed = [...key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 2147483647, 7) || 1;
+    const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1, j = clamp(len / 35, 3, 8);
+    return [0, 1].map(() => bez(pts.map((q, n) => { const m = n === 0 || n === 3 ? 2 : j; return { x: q.x + r() * m, y: q.y + r() * m }; })));
   };
   const wires = orchLinks.map((l) => route(box(byKey.get(l.a)), box(byKey.get(l.b))));
-  hits.innerHTML = wires.map(({ d }, i) => `<path class="hit" d="${d}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path>`).join("");
-  svg.innerHTML = wires.map(({ s, t, d }, i) => {
-      const hot = hotWires.has([orchLinks[i].a, orchLinks[i].b].sort().join("|"));
-      return `<g data-i="${i}" class="${hot ? "hot" : ""}"><path class="ln" d="${d}"/>`
-        + `<circle class="port" cx="${Math.round(s.x)}" cy="${Math.round(s.y)}" r="3"/><circle class="port" cx="${Math.round(t.x)}" cy="${Math.round(t.y)}" r="3"/></g>`;
+  hits.innerHTML = wires.map(({ pts }, i) => `<path class="hit" d="${bez(pts)}" data-act="link-del" data-i="${i}"><title>Click to remove this link</title></path>`).join("");
+  svg.innerHTML = wires.map(({ pts, len }, i) => {
+      const k = [orchLinks[i].a, orchLinks[i].b].sort().join("|"), hot = hotWires.has(k);
+      return `<g data-i="${i}" class="${hot ? "hot" : ""}">${sketch(pts, len, k).map((d) => `<path class="ln" d="${d}"/>`).join("")}</g>`;
     }).join("")
     + (tmp ? `<path class="ln tmp" d="${curve(...tmp)}"/>` : "");
 }

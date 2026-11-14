@@ -536,6 +536,7 @@ export function spawnTerminal(termId?: string, shellId?: string, targetCwd?: str
 type Pty = {
   id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number;
   token: string; screen?: InstanceType<typeof Headless>; ser?: InstanceType<typeof SerializeAddon>; size: string; resizing?: Timer;
+  typed?: number; // when the user last typed into it (wired context isn't typed in over a half-written prompt)
 };
 const ptys = new Map<string, Pty>();
 const TAIL = 512_000;
@@ -685,14 +686,14 @@ export function screenText(t: Pty, max = 60) {
 // A wire between two terminal cards on the canvas lets the programs in them talk, both ways: `overlook send <card> "…"`
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
-export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Notes the user wires to your card are context for your work: `overlook context` prints them.";
+export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Whatever the user wires to your card (notes, terminals) is context for your work: it reaches you as a message starting with [Overlook: …], and `overlook context` prints it again. `overlook write <note> \"text\"` replaces a wired note's text (`--append` adds to it): use it to keep a shared plan, progress or decisions there.";
 // claude also gets the wired notes through hooks: all of them when a conversation starts, resumes, is cleared or compacted
 // (its context lost them), then only new or changed ones with each prompt (nothing when none changed).
 const hook = (command: string) => [{ hooks: [{ type: "command", command, timeout: 5 }] }];
 export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("overlook context --all"), UserPromptSubmit: hook("overlook context --new") } });
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
-type Ctx = { key: string; name: string; text?: string; path?: string };
+type Ctx = { key: string; name: string; text?: string; path?: string; term?: string };
 const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; ctx: Map<string, Ctx[]>; at: number }>(), sent = new Map<string, number[]>();
 export const handoffs: { from: string; to: string; at: number }[] = [];
 const pair = (a: string, b: string) => [a, b].sort().join("|");
@@ -702,7 +703,7 @@ export function setWires(client: unknown, list: unknown, titles: unknown, ctx?: 
   const c = { wires: new Set<string>(), names: new Map<string, string>(), ctx: new Map<string, Ctx[]>(), at: Date.now() };
   if (ctx && typeof ctx === "object") for (const [id, items] of Object.entries(ctx)) if (Array.isArray(items))
     c.ctx.set(id, items.filter((i) => typeof i?.key === "string").slice(0, 8).map((i) => ({ key: i.key.slice(0, 120), name: String(i.name ?? "").slice(0, 80),
-      ...(typeof i.path === "string" ? { path: i.path } : { text: String(i.text ?? "").slice(0, 8000) }) })));
+      ...(typeof i.term === "string" ? { term: i.term } : typeof i.path === "string" ? { path: i.path } : { text: String(i.text ?? "").slice(0, 8000) }) })));
   if (Array.isArray(list)) for (const w of list) if (Array.isArray(w) && typeof w[0] === "string" && typeof w[1] === "string") c.wires.add(pair(w[0], w[1]));
   if (titles && typeof titles === "object") for (const [k, v] of Object.entries(titles)) if (typeof v === "string") c.names.set(k, v.slice(0, 80));
   canvases.set(client, c);
@@ -754,32 +755,128 @@ export function ptySend(from: unknown, token: unknown, to: unknown, text: unknow
   if (handoffs.length > 50) handoffs.shift();
   return true;
 }
-// Notes wired to a pane (stickies, vault notes) are context for its agent: `overlook context` prints them, and claude's
-// hook runs `overlook context --new` on every prompt, which gives only what changed since it last got them (so an
-// unchanged note costs no tokens). The wire flows on the canvas when a note reaches the agent.
+// Whatever the user wires to a pane is context for the agent in it: sticky notes, vault notes, other terminals. It reaches
+// any agent right away: the server types it in as a message once the agent is the pane's foreground program and the
+// user hasn't typed there for a few seconds (deliverWired, every 4 s). claude also has hooks: `overlook context --all`
+// when a conversation starts, resumes, is cleared or compacted, `--new` before each prompt. Each note goes once, and
+// again only when it changes (a hash per pane); a terminal goes once per wire (its screen changes all the time:
+// `overlook read` shows it again). The wire flows on the canvas when something reaches the agent.
+let vaultRoot = () => "";
+export const setVaultRoot = (f: () => string) => { vaultRoot = f; };
 const seenCtx = new Map<string, Map<string, number | bigint>>();
-export function ptyContextItems(from: unknown, token: unknown) {
-  const me = callerOf(from, token);
-  if (!me) return "unknown pane or token";
-  const all = live().flatMap((c) => c.ctx.get(me.id) ?? []);
-  return { id: me.id, items: all.filter((x, i) => all.findIndex((y) => y.key === x.key) === i) };
+const itemsOf = (id: string) => { const all = live().flatMap((c) => c.ctx.get(id) ?? []); return all.filter((x, i) => all.findIndex((y) => y.key === x.key) === i); };
+// A vault note by its path in the vault: a .md file inside it, nothing else (no ../).
+const vaultFile = (path: string) => {
+  const root = vaultRoot(), f = resolve(root, path);
+  return root && f.startsWith(root + sep) && f.endsWith(".md") && existsSync(f) ? f : "";
+};
+// The program in the pane's foreground (its terminal's foreground process group), e.g. "claude", or the shell itself.
+function fgName(t: Pty) {
+  try { const pg = readProc(`/proc/${t.proc.pid}/stat`, "utf8").split(") ")[1].split(" ")[5]; return readProc(`/proc/${pg}/comm`, "utf8").trim(); } catch { return ""; }
 }
-export function ptyContextGive(id: string, items: (Ctx & { text: string })[], fresh: boolean) {
+const agentNames = () => new Set(loadAgents(import.meta.dir).map((a) => a.process).filter(Boolean) as string[]);
+// What an item says: a note's text, or for a terminal, who it is, its screen, and how to reach it.
+async function itemText(i: Ctx) {
+  if (i.term !== undefined) {
+    const p = ptys.get(i.term);
+    if (!p) return "";
+    const agent = p.code === undefined && agentNames().has(fgName(p));
+    return agent ? `An agent (${fgName(p)}) runs there: talk to it with overlook send ${p.id} "...", see its screen with overlook read ${p.id}.`
+      : `Its screen now (overlook read ${p.id} shows it again; overlook send ${p.id} "..." types a command into it):\n${screenText(p, 30)}`;
+  }
+  const f = i.path === undefined ? "" : vaultFile(i.path);
+  return (i.path === undefined ? i.text ?? "" : f ? await Bun.file(f).text().catch(() => "") : "").trim().slice(0, 8000);
+}
+const heading = (i: Ctx) => i.term !== undefined ? `### Terminal "${i.name}" (card ${i.term})` : i.path ? `### Vault note "${i.name}" (${resolve(vaultRoot(), i.path)})` : `### Note "${i.name}"`;
+const stamp = (i: Ctx, text: string) => Bun.hash(i.term !== undefined ? "wired" : text);
+export const contextBlock = (items: { head: string; text: string }[]) => items.map((i) => `${i.head}\n${i.text}`).join("\n\n");
+// Gives a pane its wired items: all of them, or (fresh) only those it hasn't seen as they are now; marks them seen.
+async function give(id: string, fresh: boolean, only?: Set<string>) {
   const seen = seenCtx.get(id) ?? new Map<string, number | bigint>(), now = Date.now();
   seenCtx.set(id, seen);
-  const out = fresh ? items.filter((i) => seen.get(i.key) !== Bun.hash(i.text)) : items;
-  for (const i of out) { seen.set(i.key, Bun.hash(i.text)); handoffs.push({ from: i.key, to: id, at: now }); }
+  const items = itemsOf(id);
+  if (live().length) for (const k of seen.keys()) if (!items.some((i) => i.key === k)) seen.delete(k); // unwired: wiring it again gives it again
+  const out: { head: string; text: string; name: string; path?: string }[] = [];
+  for (const i of items) {
+    if (only && !only.has(i.key)) continue;
+    const text = await itemText(i);
+    if (!text || (fresh && seen.get(i.key) === stamp(i, text))) continue;
+    seen.set(i.key, stamp(i, text));
+    handoffs.push({ from: i.key, to: id, at: now });
+    out.push({ head: heading(i), text, name: i.name, ...(i.path ? { path: i.path } : {}) });
+  }
   handoffs.splice(0, Math.max(0, handoffs.length - 50));
-  return out.map(({ name, path, text }) => ({ name, path, text }));
+  return out;
+}
+export async function ptyContext(from: unknown, token: unknown, fresh: boolean) {
+  const me = callerOf(from, token);
+  return me ? give(me.id, fresh) : "unknown pane or token";
+}
+// A note being typed changes every keystroke: it goes once it has rested (SETTLE), not half-written.
+const changed = new Map<string, { h: number | bigint; at: number }>(), SETTLE = 3000, QUIET = 8000;
+let delivering = false;
+async function deliverWired() {
+  if (delivering) return;
+  delivering = true;
+  try {
+    const now = Date.now(), names = agentNames();
+    for (const t of ptys.values()) {
+      const items = itemsOf(t.id);
+      if (!items.length || t.code !== undefined || now - (t.typed ?? 0) < QUIET || !names.has(fgName(t))) continue;
+      const seen = seenCtx.get(t.id), pending = new Set<string>();
+      for (const i of items) {
+        const text = await itemText(i), h = stamp(i, text), c = changed.get(`${t.id}|${i.key}`);
+        if (c?.h !== h) changed.set(`${t.id}|${i.key}`, { h, at: now });
+        if (text && seen?.get(i.key) !== h && now - (c?.h === h ? c.at : now) >= SETTLE) pending.add(i.key);
+      }
+      if (!pending.size) continue;
+      const out = await give(t.id, true, pending);
+      if (out.length) typeIn(t, `[Overlook: the user wired this to your card on the canvas as context for your work. Read it; reply in one short line at most.]\n${contextBlock(out)}`);
+    }
+  } finally { delivering = false; }
+}
+setInterval(() => { deliverWired().catch(() => {}); }, 4000);
+// Types a message into a pane as one prompt (bracketed paste when the program asks for it), then Enter.
+function typeIn(p: Pty, msg: string) {
+  p.proc.terminal?.write(p.screen?.modes.bracketedPasteMode ? `\x1b[200~${msg}\x1b[201~` : msg.replace(/\n+/g, " "));
+  setTimeout(() => { if (p.code === undefined) p.proc.terminal?.write("\r"); }, 150);
+}
+// An agent writes into a note wired to its card: a vault note's file directly, a sticky through the canvas showing it
+// (like a spawn). The writer has then seen what it wrote; other agents wired to that note get the new text.
+export async function ptyWrite(from: unknown, token: unknown, to: unknown, text: unknown, append: boolean) {
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  const notes = itemsOf(me.id).filter((i) => i.term === undefined), q = String(to ?? "").toLowerCase();
+  const hits = notes.filter((i) => i.key === to || i.name.toLowerCase().includes(q) || i.path?.toLowerCase().includes(q));
+  if (!q || hits.length !== 1) return hits.length ? `"${to}" matches ${hits.length} notes: ${hits.map((i) => i.name).join(", ")}` : `no note wired to this card matches "${to}" (overlook context lists them)`;
+  const n = hits[0], add = String(text ?? "").slice(0, 8000);
+  if (!add.trim()) return "empty text";
+  const k = `${me.id}>write`, now = Date.now(), recent = (sent.get(k) ?? []).filter((x) => now - x < 60_000);
+  if (recent.length >= 20) return "rate limit: 20 writes a minute";
+  sent.set(k, [...recent, now]);
+  const old = await itemText(n), next = append && old ? `${old}\n${add}` : add;
+  if (n.path !== undefined) {
+    const f = vaultFile(n.path);
+    if (!f) return `${n.path} is not a note in the vault`;
+    await Bun.write(f, next.endsWith("\n") ? next : next + "\n");
+  } else {
+    const s: Spawn = { id: `w_${now}_${Math.random().toString(36).slice(2, 6)}`, parent: me.id, kind: "write", target: n.key, text: next, at: now, done: () => {} };
+    spawns.push(s);
+    const why = await new Promise<string | null>((res) => { s.done = res; setTimeout(() => res(null), SPAWN_WAIT); });
+    if (why === null) return "queued: it's written when the Overlook canvas shows this card";
+    if (why) return why;
+  }
+  (seenCtx.get(me.id) ?? seenCtx.set(me.id, new Map()).get(me.id)!).set(n.key, Bun.hash(next.trim()));
+  return { name: n.name };
 }
 // Spawning (the maestro): an agent in a card opens new cards wired to its own (`overlook spawn` / `overlook note`). The
 // cards live in the browser, so a request waits here until the canvas showing the caller takes it (it polls every 2 s),
 // adds the card and the wire, and says how it went on its next poll; the caller hears back within MAX_WAIT or is told
 // it's queued. An opened agent reports to its maestro by message (push), so the maestro needn't poll its screen.
-type Spawn = { id: string; parent: string; kind: "agent" | "shell" | "sticky"; agent?: string; cwd?: string; prompt?: string; text?: string; at: number; taken?: boolean; done: (why: string | null) => void };
+type Spawn = { id: string; parent: string; kind: "agent" | "shell" | "sticky" | "write"; agent?: string; cwd?: string; prompt?: string; text?: string; target?: string; at: number; taken?: boolean; done: (why: string | null) => void };
 const spawns: Spawn[] = [], kids = new Map<string, string>(); // opened card -> the card that opened it
 const MAX_KIDS = 6, SPAWN_WAIT = 8000;
-const kidsOf = (id: string) => [...kids].filter(([k, p]) => p === id && ptys.get(k)?.code === undefined).length + spawns.filter((s) => s.parent === id && s.kind !== "sticky").length;
+const kidsOf = (id: string) => [...kids].filter(([k, p]) => p === id && ptys.get(k)?.code === undefined).length + spawns.filter((s) => s.parent === id && (s.kind === "agent" || s.kind === "shell")).length;
 export async function ptySpawn(from: unknown, token: unknown, b: any, agents: string[]): Promise<{ id: string; queued?: boolean } | string> {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
@@ -810,7 +907,7 @@ export function takeSpawns(panes: unknown, done: unknown) {
     const i = spawns.findIndex((s) => s.taken && s.id === d?.id);
     if (i < 0) continue;
     const [s] = spawns.splice(i, 1), why = typeof d.why === "string" ? d.why.slice(0, 200) : "";
-    if (!why && s.kind !== "sticky") kids.set(s.id, s.parent);
+    if (!why && (s.kind === "agent" || s.kind === "shell")) kids.set(s.id, s.parent);
     s.done(why);
   }
   // Nobody showed the caller for 10 min, or a canvas took one and never answered: dropped.
