@@ -2383,3 +2383,139 @@ test("agent usage: the canvas status line keeps the newest limits, still prints 
   expect(r.ok).toBe(true);
   expect(Array.isArray((await r.json()).agents)).toBe(true);
 });
+
+test("canvas terminal clipboard: Ctrl+V/Ctrl+Shift+V paste once, ^V fallback, Ctrl+C/Ctrl+Shift+C copy & SIGINT", async () => {
+  const appJs = readFileSync(`${REPO}/app.js`, "utf8");
+  const code = appJs.match(/function bindTerminalKeys[\s\S]*?^}/m)?.[0];
+  expect(code).toBeTruthy();
+
+  const harness = (clipText: string | Error | undefined) => {
+    const pasteListeners: ((e: any) => void)[] = [];
+    const pasted: string[] = [], sent: string[] = [], copied: string[] = [], toasts: string[] = [];
+    let readCalls = 0;
+    let sel = "SEL", cleared = 0;
+    const st: any = {
+      el: { addEventListener: (t: string, fn: (e: any) => void) => { if (t === "paste") pasteListeners.push(fn); } },
+      term: {
+        attachCustomKeyEventHandler: (fn: (e: any) => boolean) => { st._kh = fn; },
+        paste: (t: string) => pasted.push(t),
+        getSelection: () => sel,
+        clearSelection: () => { sel = ""; cleared++; },
+        focus: () => {},
+      },
+    };
+    const nav = {
+      clipboard: clipText === undefined ? undefined : {
+        readText: async () => { readCalls++; if (clipText instanceof Error) throw clipText; return clipText; },
+        writeText: async (t: string) => { copied.push(t); },
+      },
+    };
+    const fn = new Function(
+      "st", "p", "orchMode", "orchMax", "orchSelected", "paneKey", "updateSelectionUI", "deleteSelectedPanes",
+      "termSend", "terms", "toast", "navigator",
+      `${code}; bindTerminalKeys(st, p); return (e) => st._kh(e);`
+    );
+    const onKey = fn(st, { id: "p1" }, "free", "", new Set(), () => "terminal:p1", () => {}, () => {},
+      (_s: any, d: string) => sent.push(d), new Map([["p1", st]]), (m: string) => toasts.push(m), nav);
+    const firePaste = (text: string) => {
+      const ev = {
+        clipboardData: { getData: (k: string) => (k === "text/plain" ? text : "") },
+        defaultPrevented: false, stopped: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.stopped = true; },
+      };
+      for (const l of pasteListeners) l(ev);
+      if (!ev.stopped && text) pasted.push(text); // simulates xterm's handlePasteEvent
+      return ev;
+    };
+    const kd = (codeKey: string, mods: Partial<{ ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean }> = {}) => ({
+      type: "keydown", code: codeKey, key: codeKey === "KeyV" ? (mods.shiftKey ? "V" : "v") : codeKey,
+      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false,
+      defaultPrevented: false, stopped: false,
+      preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; }, ...mods,
+    });
+    return { onKey, firePaste, kd, pasted, sent, copied, toasts, getReadCalls: () => readCalls, getSel: () => sel, setSel: (v: string) => { sel = v; }, getCleared: () => cleared };
+  };
+
+  // 1. Ctrl+Shift+V with native browser paste: pastes ONCE (readText fallback must not double-paste)
+  {
+    const h = harness("ONCE");
+    const e = h.kd("KeyV", { ctrlKey: true, shiftKey: true });
+    expect(h.onKey(e)).toBe(false);
+    expect(e.defaultPrevented).toBe(false);
+    const pe = h.firePaste("ONCE");
+    expect(pe.defaultPrevented).toBe(false);
+    await Bun.sleep(20);
+    expect(h.pasted).toEqual(["ONCE"]);
+    expect(h.getReadCalls()).toBe(0);
+    expect(h.sent).toEqual([]);
+  }
+
+  // 2. Ctrl+Shift+V when browser does NOT fire native paste: falls back to clipboard.readText once
+  {
+    const h = harness("FALLBACK");
+    expect(h.onKey(h.kd("KeyV", { ctrlKey: true, shiftKey: true }))).toBe(false);
+    await Bun.sleep(20);
+    expect(h.getReadCalls()).toBe(1);
+    expect(h.pasted).toEqual(["FALLBACK"]);
+  }
+
+  // 3. Ctrl+V (without Shift) with native browser paste (text): pastes ONCE without sending ^V
+  {
+    const h = harness("PLAIN");
+    expect(h.onKey(h.kd("KeyV", { ctrlKey: true }))).toBe(false);
+    h.firePaste("PLAIN");
+    await Bun.sleep(20);
+    expect(h.pasted).toEqual(["PLAIN"]);
+    expect(h.sent).toEqual([]);
+    expect(h.getReadCalls()).toBe(0);
+  }
+
+  // 4. Ctrl+V (without Shift) with non-text/image clipboard: cancels empty paste and forwards ^V (\x16)
+  {
+    const h = harness("");
+    expect(h.onKey(h.kd("KeyV", { ctrlKey: true }))).toBe(false);
+    const pe = h.firePaste("");
+    expect(pe.defaultPrevented).toBe(true);
+    await Bun.sleep(20);
+    expect(h.pasted).toEqual([]);
+    expect(h.sent).toEqual(["\x16"]);
+  }
+
+  // 5. Ctrl+V fallback when native paste doesn't fire and readText is denied/empty: forwards ^V (\x16)
+  {
+    const h = harness(new Error("denied"));
+    expect(h.onKey(h.kd("KeyV", { ctrlKey: true }))).toBe(false);
+    await Bun.sleep(20);
+    expect(h.sent).toEqual(["\x16"]);
+  }
+
+  // 6. Ctrl+Shift+C copies & prevents DevTools; Ctrl+C copies when selected and interrupts (\x03) when empty; modifiers pass through
+  {
+    const h = harness("X");
+    const csc = h.kd("KeyC", { ctrlKey: true, shiftKey: true });
+    expect(h.onKey(csc)).toBe(false);
+    expect([csc.defaultPrevented, csc.stopped]).toEqual([true, true]);
+    expect(h.getSel()).toBe("SEL");
+
+    const cc = h.kd("KeyC", { ctrlKey: true });
+    expect(h.onKey(cc)).toBe(false);
+    expect([cc.defaultPrevented, cc.stopped]).toEqual([true, true]);
+    expect(h.getSel()).toBe("");
+    expect(h.getCleared()).toBe(1);
+    await Bun.sleep(10);
+    expect(h.copied).toEqual(["SEL", "SEL"]);
+
+    const sigint = h.kd("KeyC", { ctrlKey: true });
+    expect(h.onKey(sigint)).toBe(true);
+    expect(sigint.defaultPrevented).toBe(false);
+
+    const emptyCsc = h.kd("KeyC", { ctrlKey: true, shiftKey: true });
+    expect(h.onKey(emptyCsc)).toBe(false);
+    expect(emptyCsc.defaultPrevented).toBe(true);
+    expect(h.copied).toEqual(["SEL", "SEL"]);
+
+    expect(h.onKey(h.kd("KeyV", { ctrlKey: true, altKey: true }))).toBe(true);
+    expect(h.onKey(h.kd("KeyV", { metaKey: true }))).toBe(true);
+  }
+});
