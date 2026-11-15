@@ -4,7 +4,7 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "1.6.0",
-    "@excalidraw/excalidraw": "0.18.0",
+    "@excalidraw/excalidraw": "0.18.1",
     "@excalidraw/mermaid-to-excalidraw": "1.1.2",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
