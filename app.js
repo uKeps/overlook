@@ -1417,6 +1417,80 @@ function reapTerms() {
   for (const id of [...terms.keys()]) if (!orchPanes.some((p) => p.kind === "terminal" && p.id === id)) termClose(id);
 }
 
+function bindTerminalKeys(st, p) {
+  // Ctrl+Shift+C always copies; Ctrl+C copies when text is selected, otherwise stays the shell's interrupt (\x03).
+  // Ctrl+V and Ctrl+Shift+V paste.
+  // Returning false from attachCustomKeyEventHandler skips xterm's ^V without calling preventDefault(), so the
+  // browser fires its own paste event once (no double paste alongside readText, no permission prompt, works over
+  // HTTP too). If no paste event fires (e.g. Ctrl+Shift+V in Firefox/macOS), setTimeout(0) falls back to readText().
+  // On Ctrl+V with no text (e.g. an image for Claude Code), forward ^V (\x16) to the PTY.
+  const copySel = (sel) => {
+    if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(sel).catch(() => {}); return; }
+    // Plain HTTP contexts (e.g. Tailnet) lack navigator.clipboard; execCommand works synchronously in keydown.
+    const ta = document.createElement("textarea");
+    ta.value = sel;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand?.("copy"); } catch {}
+    ta.remove();
+    st.term.focus?.();
+  };
+  let pasteSeq = 0, ctrlVPending = false;
+  st.el.addEventListener("paste", (e) => {
+    pasteSeq++;
+    const text = e.clipboardData?.getData("text/plain") || "";
+    const sendRaw = !text && ctrlVPending;
+    ctrlVPending = false;
+    if (!text) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (sendRaw) termSend(st, "\x16");
+    }
+  }, true);
+  st.term.attachCustomKeyEventHandler((e) => {
+    // Delete closes the card on the free canvas (after the confirm), even while typing in it: the shell loses forward-delete.
+    if (e.type === "keydown" && e.key === "Delete" && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && orchMode === "free" && !orchMax) {
+      const k = paneKey(p);
+      if (!orchSelected.has(k)) { orchSelected.clear(); orchSelected.add(k); updateSelectionUI(); }
+      deleteSelectedPanes();
+      return false;
+    }
+    if (e.type !== "keydown" || !e.ctrlKey || e.altKey || e.metaKey) return true;
+    if (e.code === "KeyC") {
+      const sel = st.term.getSelection();
+      if (!e.shiftKey && !sel) return true;
+      e.preventDefault();
+      e.stopPropagation();
+      if (sel) {
+        copySel(sel);
+        if (!e.shiftKey) st.term.clearSelection?.();
+      }
+      return false;
+    }
+    if (e.code === "KeyV") {
+      const seq = pasteSeq, raw = !e.shiftKey;
+      ctrlVPending = raw;
+      setTimeout(() => {
+        if (pasteSeq !== seq || terms.get(p.id) !== st || !st.term) return;
+        ctrlVPending = false;
+        if (navigator.clipboard?.readText) {
+          navigator.clipboard.readText()
+            .then((t) => {
+              if (terms.get(p.id) !== st || !st.term) return;
+              if (t) st.term.paste(t);
+              else if (raw) termSend(st, "\x16");
+            })
+            .catch(() => { if (raw) termSend(st, "\x16"); else toast("The browser didn't allow reading the clipboard"); });
+        } else if (raw) termSend(st, "\x16");
+      }, 0);
+      return false;
+    }
+    return true;
+  });
+}
+
 async function mountTerminalPane(card, p) {
   const feed = card.querySelector(".orch-feed");
   if (!feed) return;
@@ -1478,20 +1552,7 @@ async function mountTerminalPane(card, p) {
       st.term.onData((d) => termSend(st, d));
       st.term.onResize(({ cols, rows }) => termSend(st, "\0" + JSON.stringify({ cols, rows })));
       st.term.onTitleChange((t) => { if (!t) return; st.title = t; syncWires(); });
-      // Ctrl+Shift+C / V copy and paste (Ctrl+C stays the shell's interrupt); Ctrl/Alt + wheel zooms the canvas.
-      st.term.attachCustomKeyEventHandler((e) => {
-        // Delete closes the card on the free canvas (after the confirm), even while typing in it: the shell loses forward-delete.
-        if (e.type === "keydown" && e.key === "Delete" && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && orchMode === "free" && !orchMax) {
-          const k = paneKey(p);
-          if (!orchSelected.has(k)) { orchSelected.clear(); orchSelected.add(k); updateSelectionUI(); }
-          deleteSelectedPanes();
-          return false;
-        }
-        if (e.type !== "keydown" || !e.ctrlKey || !e.shiftKey || e.altKey) return true;
-        if (e.code === "KeyC") { const sel = st.term.getSelection(); if (sel) navigator.clipboard?.writeText(sel).catch(() => {}); return false; }
-        if (e.code === "KeyV") { navigator.clipboard?.readText().then((t) => t && st.term.paste(t)).catch(() => {}); return false; }
-        return true;
-      });
+      bindTerminalKeys(st, p);
       st.term.attachCustomWheelEventHandler((e) => !(e.ctrlKey || e.altKey));
       // Which card has the keyboard: a ring and a blinking cursor on that one only.
       st.el.addEventListener("focusin", () => {
@@ -3894,8 +3955,8 @@ function paneMenu(key, cx, cy) {
   const ws = getSelection(), picked = term ? term.getSelection() : ws && !ws.isCollapsed && card?.contains(ws.anchorNode) ? ws.toString() : "";
   const others = orchPanes.filter((x) => x !== p), spec = paneSpec(p);
   ctxMenu(cx, cy, [
-    term && { label: "Copy", ic: "copy", kbd: "Ctrl+Shift+C", off: !picked, run: () => copyText(picked) },
-    term && { label: "Paste", ic: "paste", kbd: "Ctrl+Shift+V", run: () => navigator.clipboard?.readText().then((t) => { if (t) term.paste(t); term.focus(); }, () => toast("The browser didn't allow reading the clipboard")) },
+    term && { label: "Copy", ic: "copy", kbd: "Ctrl+C", off: !picked, run: () => copyText(picked) },
+    term && { label: "Paste", ic: "paste", kbd: "Ctrl+V", run: () => navigator.clipboard?.readText().then((t) => { if (t) term.paste(t); term.focus(); }, () => toast("The browser didn't allow reading the clipboard")) },
     term && { label: "Select all", ic: "select", run: () => term.selectAll() },
     term && { label: "Clear screen", ic: "clear", run: () => { term.clear(); term.focus(); } },
     !term && picked && { label: "Copy", ic: "copy", run: () => copyText(picked) },
