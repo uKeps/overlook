@@ -1401,8 +1401,8 @@ function focusPane(k, stay = false) {
   if (orchMax) orchMax = k;
   const r = $("#orch-canvas")?.getBoundingClientRect();
   if (!stay && orchMode === "free" && !orchMax && r && typeof p.x === "number") {
-    orchPanX = Math.round(r.width / 2 - (p.x + p.w / 2) * orchZoom);
-    orchPanY = Math.round(CANVAS_TOP + (r.height - CANVAS_TOP) / 2 - (p.y + p.h / 2) * orchZoom);
+    const { z } = viewGoal();
+    glideView(r.width / 2 - (p.x + p.w / 2) * z, CANVAS_TOP + (r.height - CANVAS_TOP) / 2 - (p.y + p.h / 2) * z, z);
   }
   saveCanvas(); orchSigs.clear(); orchPaint(true);
   setTimeout(() => {
@@ -2310,11 +2310,16 @@ function arrangeCanvasPanes() {
     p.w = w; p.h = h;
     return p;
   });
-  orchPanX = 0; orchPanY = CANVAS_TOP; orchZoom = 1;
+  // the cards slide to their places (see [data-arranging]; an attribute, since orchPaint rewrites the plane's classes)
+  // while the view glides to them
+  const plane = $("#orch-plane");
+  if (plane && !calm.matches) { plane.dataset.arranging = ""; clearTimeout(arrangeT); arrangeT = setTimeout(() => delete plane.dataset.arranging, 500); }
   orchSigs.clear();
   orchPaint(true);
+  glideView(0, CANVAS_TOP, 1);
   return vis;
 }
+let arrangeT = 0;
 function fitCanvasView() {
   const canvas = $("#orch-canvas");
   if (!canvas || !orchPanes.length) return;
@@ -2323,16 +2328,42 @@ function fitCanvasView() {
   const maxX = Math.max(...orchPanes.map((p) => p.x + p.w)), maxY = Math.max(...orchPanes.map((p) => p.y + p.h));
   const bw = Math.max(400, maxX - minX + 48), bh = Math.max(300, maxY - minY + 68);
   const rect = canvas.getBoundingClientRect();
-  orchZoom = Math.min(1.15, Math.max(0.55, Math.min(rect.width / bw, (rect.height - CANVAS_TOP) / bh)));
-  orchPanX = Math.round((rect.width - (maxX - minX) * orchZoom) / 2 - minX * orchZoom);
-  orchPanY = Math.round(CANVAS_TOP + ((rect.height - CANVAS_TOP) - (maxY - minY) * orchZoom) / 2 - minY * orchZoom);
-  applyCanvasTransform();
+  const z = Math.min(1.15, Math.max(0.55, Math.min(rect.width / bw, (rect.height - CANVAS_TOP) / bh)));
+  glideView((rect.width - (maxX - minX) * z) / 2 - minX * z, CANVAS_TOP + ((rect.height - CANVAS_TOP) - (maxY - minY) * z) / 2 - minY * z, z);
 }
+// The view glides where it goes (a card, fit, the zoom buttons, the map, a mouse wheel's notch): an exponential ease-out,
+// zooming about the one screen point both views share, so nothing drifts sideways. Any pan, pinch or drag stops it where
+// it is; reduced motion jumps. viewGoal() is where it's heading, so quick clicks add up.
+let glideRaf = 0, glideGoal = null, viewRaf = 0;
+const viewGoal = () => glideGoal || { x: orchPanX, y: orchPanY, z: orchZoom };
+const clampZoom = (z) => Math.min(2.5, Math.max(0.2, z));
+function stopGlide() { cancelAnimationFrame(glideRaf); glideRaf = 0; glideGoal = null; }
+function glideView(x, y, z = orchZoom, ms = 420) {
+  stopGlide();
+  x = Math.round(x); y = Math.round(y);
+  const x0 = orchPanX, y0 = orchPanY, z0 = orchZoom, t0 = performance.now();
+  const step = (now) => {
+    const t = calm.matches ? 1 : Math.min(1, (now - t0) / ms), e = t === 1 ? 1 : 1 - 2 ** (-10 * t);
+    if (z === z0) { orchPanX = x0 + (x - x0) * e; orchPanY = y0 + (y - y0) * e; }
+    else { orchZoom = z0 * (z / z0) ** e; const k = (orchZoom - z0) / (z - z0); orchPanX = x0 + (x - x0) * k; orchPanY = y0 + (y - y0) * k; }
+    if (t === 1) { orchPanX = x; orchPanY = y; orchZoom = z; glideGoal = null; glideRaf = 0; saveCanvasSoon(); }
+    else glideRaf = requestAnimationFrame(step);
+    applyCanvasTransform();
+  };
+  glideGoal = { x, y, z };
+  step(t0);
+}
+// The wheel and drags change the view at their own rate (a trackpad: 120+ events a second); it's drawn once a frame.
+const applyCanvasSoon = () => { viewRaf ||= requestAnimationFrame(() => { viewRaf = 0; applyCanvasTransform(); }); };
 function applyCanvasTransform() {
   const plane = $("#orch-plane"), zLbl = $("#orch-zoom-lbl"), canvas = $("#orch-canvas");
   const free = orchMode === "free" && !orchMax;
-  if (plane) plane.style.transform = free && orchPanes.length ? `translate(${orchPanX}px, ${orchPanY}px) scale(${orchZoom})` : "";
-  plane?.style.setProperty("--z", orchZoom);
+  // the pan is kept exact (a trackpad's fractional steps add up) and drawn on whole pixels, so text stays sharp
+  const px0 = Math.round(orchPanX), py0 = Math.round(orchPanY);
+  if (plane) plane.style.transform = free && orchPanes.length ? `translate(${px0}px, ${py0}px) scale(${orchZoom})` : "";
+  // --z sets the cards' border width (--bw): in 5% steps, so a pinch doesn't re-lay out every card on every frame
+  const zq = String(Math.round(orchZoom * 20) / 20);
+  if (plane && plane.style.getPropertyValue("--z") !== zq) plane.style.setProperty("--z", zq);
   const sk = $("#orch-sketch");
   if (sk) { sk.hidden = !free; syncSketchView(); }
   // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
@@ -2348,7 +2379,7 @@ function applyCanvasTransform() {
       // background-position/size go straight on the canvas: as CSS variables they'd be inherited by every card, and each
       // pan step then restyled the whole canvas (~10 ms a wheel event)
       canvas.style.setProperty("--bg-lod", lod.toFixed(2));
-      canvas.style.backgroundPosition = `${orchPanX}px ${orchPanY}px`;
+      canvas.style.backgroundPosition = `${px0}px ${py0}px`;
       canvas.style.backgroundSize = `${px}px ${px}px`;
     } else {
       canvas.style.removeProperty("--bg-lod");
@@ -2515,7 +2546,8 @@ function paintMap() {
   const box = (x, y, w, h) => [x * k + ox, y * k + oy, Math.max(3, w * k), Math.max(3, h * k)].map((n) => Math.round(n * 10) / 10);
   const blocks = orchPanes.filter((p) => typeof p.x === "number").map((p) => {
     const [x, y, w, h] = box(p.x, p.y, p.w, p.collapsed ? 34 : p.h);
-    return `<rect class="mb m-${p.kind}${paneKey(p) === orchActive ? " on" : ""}" data-key="${esc(paneKey(p))}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(4, w / 4, h / 4).toFixed(1)}"><title>${esc(paneLabel(p))}</title></rect>`;
+    const tint = p.kind === "sticky" ? ` style="fill:${NOTE_TONES.find(([t]) => t === (p.tone || ""))?.[2] || "var(--accent)"}"` : ""; // a note in its own colour
+    return `<rect class="mb m-${p.kind}${paneKey(p) === orchActive ? " on" : ""}"${tint} data-key="${esc(paneKey(p))}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(4, w / 4, h / 4).toFixed(1)}"><title>${esc(paneLabel(p))}</title></rect>`;
   }).join("");
   const ink = sketchEls.map((e) => {
     if (e.points) return `<polyline class="map-ink" points="${e.points.map((p) => [(e.x + p[0]) * k + ox, (e.y + p[1]) * k + oy].map((n) => n.toFixed(1)).join(",")).join(" ")}"/>`;
@@ -2531,10 +2563,13 @@ function bindMap(box) {
   const svg = box?.querySelector("svg");
   if (!svg) return;
   const at = (ev) => { const b = svg.getBoundingClientRect(); return [(ev.clientX - b.left - mapXf.ox) / mapXf.k, (ev.clientY - b.top - mapXf.oy) / mapXf.k]; };
-  const centre = (x, y) => {
+  // a press outside the frame glides there; a drag moves the view as it goes
+  const centre = (x, y, glide) => {
     const r = $("#orch-canvas").getBoundingClientRect();
+    if (glide) return glideView(r.width / 2 - x * orchZoom, r.height / 2 - y * orchZoom);
+    stopGlide();
     orchPanX = Math.round(r.width / 2 - x * orchZoom); orchPanY = Math.round(r.height / 2 - y * orchZoom);
-    applyCanvasTransform();
+    applyCanvasSoon();
   };
   svg.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || !mapXf) return;
@@ -2546,8 +2581,8 @@ function bindMap(box) {
     // pull the frame away from the cards and it zooms out under you (each move then covers more ground), bring it back
     // and it zooms in. Pressing outside the frame first brings the view there.
     let cx = v.x + v.w / 2, cy = v.y + v.h / 2, lx = e.clientX, ly = e.clientY, moved = false;
-    const jump = () => { [cx, cy] = at(e); centre(cx, cy); };
-    if (!inFrame && !key) jump();
+    const jump = (glide) => { [cx, cy] = at(e); centre(cx, cy, glide); };
+    if (!inFrame && !key) jump(true);
     box.classList.add("dragging");
     const move = (ev) => {
       if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 4) return;
@@ -2566,12 +2601,12 @@ function bindMap(box) {
   });
   // the wheel over the map zooms the canvas around the middle of the screen
   svg.addEventListener("wheel", (e) => {
-    e.preventDefault(); e.stopPropagation();
+    e.preventDefault(); e.stopPropagation(); stopGlide();
     const r = $("#orch-canvas").getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2;
-    const z = Math.min(2.5, Math.max(0.2, orchZoom * Math.exp(-e.deltaY * 0.002)));
-    orchPanX = Math.round(cx - (cx - orchPanX) * (z / orchZoom)); orchPanY = Math.round(cy - (cy - orchPanY) * (z / orchZoom));
-    orchZoom = Math.round(z * 1000) / 1000;
-    applyCanvasTransform(); saveCanvasSoon();
+    const z = clampZoom(orchZoom * Math.exp(-e.deltaY * 0.002));
+    orchPanX = cx - (cx - orchPanX) * (z / orchZoom); orchPanY = cy - (cy - orchPanY) * (z / orchZoom);
+    orchZoom = z;
+    applyCanvasSoon(); saveCanvasSoon();
   }, { passive: false });
 }
 // Links are drawn in canvas coordinates, from the right edge of the source to the left edge of the target.
@@ -2922,6 +2957,8 @@ window.addEventListener("keydown", (e) => {
   e.preventDefault(); e.stopPropagation();
   run();
 }, true);
+// A pinch over the dock or a floating panel would zoom the whole page (and the canvas page is laid out for 100%).
+window.addEventListener("wheel", (e) => { if (e.ctrlKey && document.body.classList.contains("canvas-page")) e.preventDefault(); }, { passive: false });
 // Space held = pan; bound once (the canvas element is rebuilt on every visit to #/agents).
 let isSpacePressed = false;
 window.addEventListener("keydown", (e) => {
@@ -2943,6 +2980,8 @@ document.addEventListener("contextmenu", (e) => {
 const onCanvasBg = (t, canvas) => t === canvas || t.id === "orch-plane" || t.classList?.contains("orch-links") || !!t.closest?.(".orch-empty");
 function bindCanvasInteractions(canvas) {
 
+  // a press on the canvas or a card takes the view from a glide where it is (the HUD's buttons keep adding to it)
+  canvas.addEventListener("pointerdown", (e) => { if (!e.target.closest?.(".cv-island")) stopGlide(); }, true);
   canvas.addEventListener("pointerdown", (e) => {
     const isBg = onCanvasBg(e.target, canvas);
     if (isBg) blurCanvasFocus(e.shiftKey || e.metaKey || e.ctrlKey);
@@ -2962,7 +3001,7 @@ function bindCanvasInteractions(canvas) {
         if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) > 4) moved = true;
         orchPanX = Math.round(startX + (ev.clientX - x0));
         orchPanY = Math.round(startY + (ev.clientY - y0));
-        applyCanvasTransform();
+        applyCanvasSoon();
       };
       const upPan = () => {
         window.removeEventListener("pointermove", movePan);
@@ -3055,28 +3094,42 @@ function bindCanvasInteractions(canvas) {
     else if (orchMode !== "free" || orchMax) canvasMenu(e.clientX, e.clientY);
   });
 
+  // Like Figma: two fingers (or the wheel) pan, a pinch (or Ctrl/Alt + wheel) zooms, anywhere on the canvas. Only the
+  // card you're in (the active one) keeps a plain wheel, so its terminal scrolls back; over any other card the canvas pans.
+  // A gesture keeps the target it started on until it pauses (like the OS's scroll latching): a card sliding under the
+  // pointer mid-pan doesn't take the swipe over.
+  let wheelTo = "", wheelAt = 0;
   canvas.addEventListener("wheel", (e) => {
     if (orchMode !== "free" || orchMax) return;
-    const isBg = onCanvasBg(e.target, canvas);
-    // Like Maestri: the wheel (or a two-finger swipe) pans the background; Ctrl/Alt + wheel (or a pinch) zooms, over a
-    // card too. A plain wheel over a card is the card's (a terminal scrolls back).
+    if (e.timeStamp - wheelAt > 200) {
+      const pane = e.target.closest?.(".orch-pane");
+      wheelTo = onCanvasBg(e.target, canvas) || (pane && pane.dataset.key !== orchActive) ? "pan" : pane ? "card" : "";
+    }
+    wheelAt = e.timeStamp;
     const zoom = e.ctrlKey || e.metaKey || e.altKey;
-    if (!isBg && !zoom) return;
+    if (!zoom && wheelTo !== "pan") return;
     e.preventDefault();
+    e.stopPropagation(); // a terminal under the pointer must not scroll as well
+    // Firefox's lines and pages in pixels. A mouse notch is ±100 or so (fractional on a scaled Windows display): it
+    // glides; a trackpad's small steps follow the fingers as they come.
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1, dx = e.deltaX * unit, dy = e.deltaY * unit;
+    const notch = e.deltaMode !== 0 || (Math.abs(dy) >= 50 && !dx), v = viewGoal();
     if (!zoom) {
-      orchPanX = Math.round(orchPanX - (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX));
-      orchPanY = Math.round(orchPanY - (e.shiftKey && !e.deltaX ? 0 : e.deltaY));
-      applyCanvasTransform(); saveCanvasSoon(); // the links move with the plane: no redraw
+      const [mx, my] = e.shiftKey && !dx ? [dy, 0] : [dx, dy];
+      if (notch) return glideView(v.x - mx, v.y - my, v.z, 200);
+      stopGlide();
+      orchPanX = v.x - mx; orchPanY = v.y - my;
+      applyCanvasSoon(); saveCanvasSoon(); // the links move with the plane: no redraw
       return;
     }
-    e.stopPropagation(); // a terminal under the pointer must not scroll as well
+    // A pinch comes as Ctrl + wheel: the zoom follows the fingers (a notch zooms ~18%), about the point under the pointer.
     const r = canvas.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
-    const k = Math.min(2.5, Math.max(0.2, orchZoom * Math.exp(-e.deltaY * 0.002)));
-    orchPanX = Math.round(sx - (sx - orchPanX) * (k / orchZoom));
-    orchPanY = Math.round(sy - (sy - orchPanY) * (k / orchZoom));
-    orchZoom = Math.round(k * 1000) / 1000;
-    applyCanvasTransform();
-    saveCanvasSoon();
+    const k = clampZoom(v.z * Math.exp(-dy * (notch ? 0.002 : 0.01)));
+    const x = sx - (sx - v.x) * (k / v.z), y = sy - (sy - v.y) * (k / v.z);
+    if (notch) return glideView(x, y, k, 200);
+    stopGlide();
+    orchPanX = x; orchPanY = y; orchZoom = k;
+    applyCanvasSoon(); saveCanvasSoon();
   }, { passive: false, capture: true }); // capture: xterm's scroller stops the wheel before it bubbles
   // Fleet chats and vault notes are dragged in from the left rail (HTML drag and drop).
   canvas.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes(PANE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; canvas.classList.add("drop"); } });
@@ -4031,8 +4084,15 @@ async function orchPaint(force) {
   const vis = orchMax ? orchPanes.filter((p) => paneKey(p) === orchMax) : orchPanes;
   const visKeys = new Set(vis.map(paneKey));
   if (plane.querySelector(".orch-empty")) plane.innerHTML = "";
-  for (const node of [...plane.querySelectorAll(".orch-pane")]) {
-    if (!visKeys.has(node.dataset.key)) { orchSigs.delete(node.dataset.key); node.remove(); }
+  for (const node of [...plane.querySelectorAll(".orch-pane[data-key]")]) {
+    const k = node.dataset.key;
+    if (visKeys.has(k)) continue;
+    orchSigs.delete(k);
+    // A closed card fades out where it was (keyless meanwhile, so nothing finds it); one hidden by a maximized card just goes.
+    if (orchMode === "free" && !orchMax && !calm.matches && !orchPanes.some((p) => paneKey(p) === k)) {
+      node.removeAttribute("data-key"); node.classList.add("pane-out");
+      setTimeout(() => node.remove(), 200);
+    } else node.remove();
   }
   const isFree = orchMode === "free" && !orchMax;
   canvas.className = `orch-canvas ${isFree ? `free tool-${orchTool}` : "tiled"}`;
@@ -5128,21 +5188,10 @@ const ACTIONS = {
     const d = Number(el.dataset.d || 0);
     const canvas = $("#orch-canvas");
     const r = canvas ? canvas.getBoundingClientRect() : { width: 800, height: 600 };
-    const cx = r.width / 2, cy = r.height / 2;
-    if (d === 0) {
-      const prevZoom = orchZoom;
-      orchZoom = 1;
-      orchPanX = Math.round(cx - (cx - orchPanX) * (orchZoom / prevZoom));
-      orchPanY = Math.round(cy - (cy - orchPanY) * (orchZoom / prevZoom));
-    } else {
-      const prevZoom = orchZoom;
-      const nextZoom = Math.min(2.5, Math.max(0.2, Math.round((orchZoom + d) * 100) / 100));
-      orchPanX = Math.round(cx - (cx - orchPanX) * (nextZoom / prevZoom));
-      orchPanY = Math.round(cy - (cy - orchPanY) * (nextZoom / prevZoom));
-      orchZoom = nextZoom;
-    }
-    applyCanvasTransform();
-    saveCanvas();
+    const cx = r.width / 2, cy = r.height / 2, v = viewGoal();
+    // steps by a factor (±15%), so a click zooms as much at 30% as at 200%; 0 is back to 100%
+    const k = d ? clampZoom(v.z * Math.exp(d)) : 1;
+    glideView(cx - (cx - v.x) * (k / v.z), cy - (cy - v.y) * (k / v.z), k, 260);
   },
   "orch-del-sel": () => deleteSelectedPanes(),
   "orch-tool": (el) => {
