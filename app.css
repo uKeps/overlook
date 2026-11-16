@@ -2041,9 +2041,17 @@ body.canvas-page .orch-deck {
 }
 body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--float-ease); }
 @keyframes cv-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
-.orch-pane.pane-in { animation: pane-in .16s var(--float-ease); }
-@keyframes pane-in { from { opacity: 0; transform: scale(.97); } }
-
+.orch-pane.pane-in { animation: pane-in .24s var(--float-ease); }
+@keyframes pane-in { from { opacity: 0; transform: scale(.96); } }
+/* a closed card: a quick fade where it was (orchPaint removes it after) */
+.orch-pane.pane-out { pointer-events: none; animation: pane-out .18s cubic-bezier(.4, 0, 1, 1) forwards; }
+@keyframes pane-out { to { opacity: 0; transform: scale(.96); } }
+/* Arrange windows: the cards slide to their places; the wires, which only know where the cards end up, wait for them */
+.orch-plane.free[data-arranging] .orch-pane {
+  transition: left .45s var(--float-ease), top .45s var(--float-ease), width .45s var(--float-ease), height .45s var(--float-ease);
+}
+.orch-links { transition: opacity .2s var(--ease); }
+.orch-plane.free[data-arranging] .orch-links { opacity: 0; transition: none; }
 /* ---------- Drawing a new card (drawCard), and the "New terminal" sheet ---------- */
 .draw-layer { position: absolute; inset: 0; z-index: 14; cursor: crosshair; touch-action: none; } /* under the HUD (15) */
 .draw-box { border-width: 1px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
