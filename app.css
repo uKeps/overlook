@@ -2146,14 +2146,15 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 /* (not .frame: that class is the embedded apps' iframe, and its CSS height would stretch an SVG rect) */
 .cv-map .map-frame { fill: color-mix(in srgb, #fff 4%, transparent); stroke: rgba(255, 255, 255, .92); stroke-width: 1.5; pointer-events: none; }
 .cv-map.dragging svg, .cv-map.dragging .mb { cursor: grabbing; }
+/* close: a small quiet glyph in the corner, like the cards' tools; a faint tile only under the pointer */
 .cv-map-x {
-  position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
-  color: var(--ink); background: color-mix(in srgb, var(--surface-2) 85%, transparent); box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
-  opacity: 0; transition: opacity .15s, background .15s;
+  position: absolute; top: 6px; right: 6px; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center;
+  color: var(--muted); background: color-mix(in srgb, var(--surface) 70%, transparent);
+  opacity: 0; transition: opacity .15s var(--ease), color .15s var(--ease), background .15s var(--ease);
 }
 .cv-map:is(:hover, :focus-within) .cv-map-x { opacity: 1; }
-.cv-map-x:hover { background: var(--surface-2); }
-@media (pointer: coarse) { .cv-map-x { opacity: 1; } }
+.cv-map-x:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%, var(--surface)); }
+@media (pointer: coarse) { .cv-map-x { opacity: 1; width: 26px; height: 26px; } } /* a finger needs the room */
 @media (max-width: 760px) { .cv-map { width: 184px; height: 126px; } }
 
 /* ---------- Home and Notes: things to do with what you see ----------

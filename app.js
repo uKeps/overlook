@@ -3330,7 +3330,7 @@ function agentsBody() {
         </div>
         <div class="cv-island cv-map" id="orch-map" hidden>
           <svg role="img" aria-label="Map of the canvas: click or drag to move the view"></svg>
-          <button type="button" class="cv-map-x" data-act="orch-map" title="Close the map (M)" aria-label="Close the map">${icon("x", 12)}</button>
+          <button type="button" class="cv-map-x" data-act="orch-map" title="Close the map (M)" aria-label="Close the map">${icon("x", 10)}</button>
         </div>
       </div>`;
     bindCanvasInteractions($("#orch-canvas"));
