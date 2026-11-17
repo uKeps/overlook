@@ -2317,16 +2317,36 @@ function arrangeCanvasPanes() {
     p.w = w; p.h = h;
     return p;
   });
-  // the cards slide to their places (see [data-arranging]; an attribute, since orchPaint rewrites the plane's classes)
-  // while the view glides to them
-  const plane = $("#orch-plane");
-  if (plane && !calm.matches) { plane.dataset.arranging = ""; clearTimeout(arrangeT); arrangeT = setTimeout(() => delete plane.dataset.arranging, 500); }
+  slidePanes(); // while the view glides to them
   orchSigs.clear();
   orchPaint(true);
   glideView(0, CANVAS_TOP, 1);
   return vis;
 }
+// The cards slide to their places on the next paint (see [data-arranging]; an attribute, since orchPaint rewrites the
+// plane's classes).
 let arrangeT = 0;
+function slidePanes() {
+  const plane = $("#orch-plane");
+  if (plane && !calm.matches) { plane.dataset.arranging = ""; clearTimeout(arrangeT); arrangeT = setTimeout(() => delete plane.dataset.arranging, 500); }
+}
+// The terminals an agent spawned hang below it like a tree: each card's children in one row under it, centred, every
+// subtree as wide as it needs so cousins don't overlap. The top card stays put. `born` is a card about to be added.
+// shortcut: cards outside the tree aren't avoided, so a branch can land on one; place around them if that bites.
+function treeLayout(card, born) {
+  const panes = born ? [...orchPanes, born] : orchPanes;
+  const kids = (p) => p.kind === "terminal" ? panes.filter((q) => q.spawnedBy === p.id) : [];
+  let root = card;
+  for (let n = 0, up; n < 50 && (up = panes.find((q) => q.kind === "terminal" && q.id === root.spawnedBy)); n++) root = up;
+  const width = new Map(), row = (ks) => ks.reduce((s, c) => s + width.get(c), 0) + 40 * (ks.length - 1);
+  const measure = (p) => { const ks = kids(p); ks.forEach(measure); width.set(p, Math.max(p.w, ks.length ? row(ks) : 0)); };
+  const put = (p) => {
+    const ks = kids(p);
+    let x = p.x + p.w / 2 - row(ks) / 2;
+    for (const c of ks) { c.x = Math.round(x + (width.get(c) - c.w) / 2); c.y = p.y + p.h + 80; put(c); x += width.get(c) + 40; }
+  };
+  measure(root); put(root);
+}
 function fitCanvasView() {
   const canvas = $("#orch-canvas");
   if (!canvas || !orchPanes.length) return;
@@ -2408,6 +2428,7 @@ function makeRoom() {
 }
 // Puts a card on the workspace (from a click, a drop or the HUD); x/y are canvas coordinates of a drop.
 const bornKeys = new Set(); // cards just added: they fade in once (orchPaint)
+const bornFrom = new Map(); // spawned terminals: the point under their parent they grow out of (orchPaint)
 function addPane(item, x, y) {
   const k = paneKey(item), have = orchPanes.find((p) => paneKey(p) === k), p = have || item;
   if (!have) {
@@ -2421,8 +2442,9 @@ function addPane(item, x, y) {
   agentsBody();
   return true;
 }
-// Cards an agent asked for (`overlook spawn` / `overlook note`, see takeSpawns in tasks.ts): each opens right of the card
-// that asked, below the others there, wired to it, without taking the focus; the server hears how it went on the next poll.
+// Cards an agent asked for (`overlook spawn` / `overlook note`, see takeSpawns in tasks.ts), wired to the card that asked,
+// without taking the focus; the server hears how it went on the next poll. Terminals hang below it (treeLayout) and
+// grow out of it; notes and browsers open right of it, below the others there.
 let spawnDone = [];
 async function takeSpawns() {
   const panes = orchPanes.filter((p) => p.kind === "terminal").map((p) => p.id);
@@ -2455,11 +2477,18 @@ async function takeSpawns() {
       : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
     if (parent && typeof parent.x === "number") {
       ensurePaneRect(p);
-      p.x = parent.x + parent.w + 40; p.y = parent.y;
-      const hit = () => orchPanes.find((q) => typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
-      for (let n = 0, q; n < 40 && (q = hit()); n++) p.y = q.y + q.h + 40;
+      if (p.kind === "terminal") {
+        // laid out before addPane, which paints at once: the siblings slide aside as it grows in
+        p.spawnedBy = parent.id;
+        treeLayout(parent, p); slidePanes();
+        bornFrom.set(paneKey(p), { x: parent.x + parent.w / 2, y: parent.y + parent.h });
+      } else {
+        p.x = parent.x + parent.w + 40; p.y = parent.y;
+        const hit = () => orchPanes.find((q) => typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
+        for (let n = 0, q; n < 40 && (q = hit()); n++) p.y = q.y + q.h + 40;
+      }
     }
-    if (!parent || !addPane(p)) { spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
+    if (!parent || !addPane(p)) { if (p.spawnedBy) treeLayout(parent); spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
     orchLinks.push({ a: paneKey(parent), b: paneKey(p) });
     spawnDone.push({ id: s.id });
   }
@@ -3201,6 +3230,8 @@ function bindPaneDragResize(card, p) {
       const up = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
+        // moved by hand away from the card that spawned it: it leaves that tree, so the next spawn won't move it back
+        if (moved) for (const { p: q } of startPositions) if (!startPositions.some((i) => i.p.kind === "terminal" && i.p.id === q.spawnedBy)) delete q.spawnedBy;
         if (!moved && !e.shiftKey && !e.metaKey && !e.ctrlKey && orchSelected.size > 1) {
           orchSelected.clear();
           orchSelected.add(curKey);
@@ -4165,7 +4196,12 @@ async function orchPaint(force) {
         agentsBody();
       });
       bindPaneDragResize(card, p);
-      if (bornKeys.delete(key)) card.classList.add("pane-in");
+      if (bornKeys.delete(key)) {
+        // a spawned terminal grows out from under the card that spawned it; the others fade in where they are
+        const from = bornFrom.get(key); bornFrom.delete(key);
+        if (from) { card.style.setProperty("--sx", `${Math.round(from.x - p.x - p.w / 2)}px`); card.style.setProperty("--sy", `${Math.round(from.y - p.y)}px`); }
+        card.classList.add(from ? "pane-sprout" : "pane-in");
+      }
       plane.appendChild(card);
     }
     card.classList.toggle("active", key === orchActive);
