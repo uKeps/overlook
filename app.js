@@ -1286,7 +1286,18 @@ const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{
 // The wheel fires 60+ times a second: save once it stops, not on every step.
 let saveT = 0;
 const saveCanvasSoon = () => { clearTimeout(saveT); saveT = setTimeout(saveCanvas, 250); };
+// Browser cards that pass `test` go, from every canvas, with their wires (sweepBrowsers then closes their tabs).
+function dropBrowsers(test) {
+  const gone = new Set(allPanes().filter((p) => p.kind === "browser" && test(p)).map(paneKey));
+  if (!gone.size) return;
+  const keep = (ps) => ps.filter((p) => !gone.has(paneKey(p))), keepL = (ls) => ls.filter((l) => !gone.has(l.a) && !gone.has(l.b));
+  orchPanes = keep(orchPanes); orchLinks = keepL(orchLinks);
+  for (const c of canvases) { if (c.panes) c.panes = keep(c.panes); if (c.links) c.links = keepL(c.links); }
+}
 function saveCanvas() {
+  // a browser card an agent opened (overlook browser open) goes with that agent's card, however that closed
+  const all = allPanes();
+  dropBrowsers((p) => p.openedBy && !all.some((q) => q.kind === "terminal" && q.id === p.openedBy));
   syncWires(); sweepBrowsers();
   try {
     localStorage.setItem(CANVAS_BG_KEY, orchBg);
@@ -2506,9 +2517,11 @@ async function takeSpawns() {
       continue;
     }
     if (s.kind === "close") {
-      const t = all.find((x) => x.kind === "terminal" && x.id === s.target);
-      if (t) closeCardQuietly(t);
-      spawnDone.push({ id: s.id, ...(t ? {} : { why: "that card is no longer on the canvas" }) });
+      // a browser card only by the agent that opened it (the server checks no more than that it's wired to the caller)
+      const t = all.find((x) => x.id === s.target && (x.kind === "terminal" || (x.kind === "browser" && x.openedBy === s.parent)));
+      if (t?.kind === "browser") dropBrowsers((x) => x === t); // the save and paint below take it off
+      else if (t) closeCardQuietly(t);
+      spawnDone.push({ id: s.id, ...(t ? {} : { why: all.some((x) => x.id === s.target) ? `${s.target} isn't one you opened` : "that card is no longer on the canvas" }) });
       continue;
     }
     if (s.kind === "draw") {
@@ -2516,7 +2529,7 @@ async function takeSpawns() {
       continue;
     }
     const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
-      : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url }
+      : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url, openedBy: s.parent }
       : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
     if (parent && typeof parent.x === "number") {
       ensurePaneRect(p);
@@ -4200,7 +4213,7 @@ function moveToCanvas(key, id) {
   if (!p || !c) return;
   orchPanes = orchPanes.filter((x) => x !== p);
   orchLinks = orchLinks.filter((l) => l.a !== key && l.b !== key);
-  delete p.x; delete p.y; delete p.spawnedBy; // placed where you look once that canvas shows (ensurePaneRect), out of any tree
+  delete p.x; delete p.y; delete p.spawnedBy; delete p.openedBy; // placed where you look once that canvas shows (ensurePaneRect), out of any tree; moved on purpose, so it stays when its agent goes
   (c.panes ||= []).push(p);
   orchSelected.delete(key);
   if (orchActive === key) orchActive = "";

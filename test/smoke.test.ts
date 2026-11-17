@@ -1878,6 +1878,21 @@ test("maestro: a card opens cards wired to it, through the canvas that shows it"
   await post("/api/pty/close", { id: "t_ma" });
 });
 
+test("overlook close: a browser card wired to the caller can go, one that isn't can't", async () => {
+  const b = await openPane("t_brc");
+  const send = (path: string, body: object) => fetch(`${BASE}${path}`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify(body) });
+  await send("/api/canvas/wires", { client: "test-brc", wires: [], names: {}, ctx: { t_brc: [{ key: "browser:br9", name: "Page", browser: "br9", url: "http://127.0.0.1:9/" }] } });
+  b.ws.send("overlook close br7; overlook close br9\r");
+  await until(b, /br7 isn't one you opened/);
+  let spawns: any[] = [];
+  for (const end = Date.now() + 8000; !spawns.length && Date.now() < end; await Bun.sleep(100)) ({ spawns } = await (await send("/api/canvas/spawns", { panes: ["t_brc"], done: [] })).json());
+  expect(spawns[0]).toMatchObject({ parent: "t_brc", kind: "close", target: "br9" }); // the canvas checks it opened it
+  await send("/api/canvas/spawns", { panes: [], done: [{ id: spawns[0].id }] });
+  await until(b, /[\r\n]closed/);
+  b.ws.close();
+  await post("/api/pty/close", { id: "t_brc" });
+});
+
 test("wired notes reach the agent: overlook context, and --new only gives what changed", async () => {
   const c = await openPane("t_ctx");
   const wire = (ctx: object) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-ctx", wires: [], names: {}, ctx }) });

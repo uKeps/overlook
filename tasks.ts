@@ -786,12 +786,13 @@ export function ptyDone(from: unknown, token: unknown, text: unknown) {
   me.doneAt = Date.now();
   return { reported: sent === true ? parent : "", why: typeof sent === "string" ? sent : "" };
 }
-// `overlook close <card>`: closes a card the caller opened (only those), once its work is in.
+// `overlook close <card>`: closes a card the caller opened (only those), once its work is in. A browser card isn't in
+// `kids` (the canvas names it): one wired to the caller passes here, and the canvas closes it only if the caller opened it.
 export async function ptyClose(from: unknown, token: unknown, to: unknown) {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
   const id = String(to ?? "");
-  if (kids.get(id) !== me.id) return `${id || "that card"} isn't one you opened (overlook spawn)`;
+  if (kids.get(id) !== me.id && !itemsOf(me.id).some((i) => i.browser === id)) return `${id || "that card"} isn't one you opened (overlook spawn or browser open)`;
   const now = Date.now(), s: Spawn = { id: `c_${now}_${Math.random().toString(36).slice(2, 6)}`, parent: me.id, kind: "close", target: id, at: now, done: () => {} };
   spawns.push(s);
   const why = await new Promise<string | null>((res) => { s.done = res; setTimeout(() => res(null), SPAWN_WAIT); });
