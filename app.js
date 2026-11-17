@@ -638,6 +638,22 @@ setInterval(() => {
     if (window.Notification?.permission === "granted") try { new Notification(t.text, { body: `${t.time} · Overlook`, tag: `todo-${t.id}` }); } catch {}
   }
 }, 30000);
+// An agent that starts waiting for you rings while you look elsewhere (checked on each system refresh, every page); a click
+// opens its card. The first refresh only takes note, so the ones already waiting when the page loads stay quiet.
+let waitSeen = null;
+function notifyWaiting() {
+  const wait = fleetItems().filter((x) => x.group === "waiting"), seen = waitSeen;
+  waitSeen = new Set(wait.map((x) => x.id));
+  if (!seen || window.Notification?.permission !== "granted" || (!document.hidden && document.hasFocus())) return;
+  for (const x of wait.filter((x) => !seen.has(x.id))) try {
+    // one tag per agent: waiting again replaces its notification (and rings again) instead of stacking
+    const n = new Notification(x.title, { body: ["Waiting for you", x.needs].filter(Boolean).join(": "), tag: `wait-${x.id}`, renotify: true });
+    n.onclick = () => { window.focus(); n.close(); ACTIONS["home-agent"]({ dataset: { kind: x.kind, id: x.id } }); };
+  } catch {}
+}
+// Asked from a click (the browser wants a gesture), the first time you open an agent that waits for you (from Home's
+// "Answer" too: the canvas draws right away, within the click's activation).
+const askWaitNotify = (id) => waitSeen?.has(id) && window.Notification?.permission === "default" && Notification.requestPermission().catch(() => {});
 function tiles() {
   const el = $("#tiles");
   if (!el) return;
@@ -5255,6 +5271,7 @@ const ACTIONS = {
   "sketch-color": (el) => sketchPaint({ strokeColor: el.dataset.c }),
   // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
+    askWaitNotify(el.dataset.id);
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
     if (orchPanes.some((p) => paneKey(p) === k)) return focusPane(k);
     if (openTui(item)) return;
@@ -5544,7 +5561,7 @@ window.addEventListener("resize", () => { if (cwdOpen) placeCwdPop(lastCwdBtn); 
 
 addEventListener("hashchange", render);
 async function vault() { D = await api("/api"); }
-async function system() { S = await api("/api/system"); }
+async function system() { S = await api("/api/system"); notifyWaiting(); }
 // Live: system every 10 s (agents, services), vault when you come back to the tab and every minute.
 setInterval(async () => {
   await system(); topBar();
