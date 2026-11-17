@@ -319,12 +319,15 @@ async function claudeSessions() {
   } catch { sessionsCache.t = Date.now(); }
   return sessionsCache.list;
 }
+// What a Claude session cost (≈ API price) and the lines it changed, as its canvas status line last saw them
+// (cache/usage/sessions/<id>.json, from `overlook statusline`): only sessions run on the canvas have one.
+const sessionCost = (key: string) => key.startsWith("c:") && ID.test(key.slice(2)) ? readJson(`${import.meta.dir}/cache/usage/sessions/${key.slice(2)}.json`) ?? undefined : undefined;
 async function background() {
   return (await claudeSessions()).filter((x) => x.kind === "background" && !x.pid).sort((a, b) => b.startedAt - a.startedAt).slice(0, 8)
     .map((x) => ({ key: `c:${x.sessionId}`, title: x.name ?? x.id, state: x.state ?? "", cwd: String(x.cwd ?? "").replace(homedir(), "~"), since: x.startedAt,
       needs: x.state === "blocked" ? readJson(`${homedir()}/.claude/jobs/${x.id}/state.json`)?.needs ?? "" : "",
       // Claude Code deletes transcripts after 30 days: an old job is still listed, but there is nothing to resume.
-      resumable: sessionStarted(x.sessionId) }));
+      resumable: sessionStarted(x.sessionId), cost: sessionCost(`c:${x.sessionId}`) }));
 }
 
 type DeployTarget = { id: string; name: string; check?: string; url?: string; webhook?: string; cmd?: string[]; restart?: string[] };
@@ -412,7 +415,7 @@ async function agent(key: string) {
   }
   if (!events.length && !live && !s) return null;
   return { name: "claude", key, live: !!live, pid: live?.pid, seconds: live?.seconds, cwd: live?.cwd ?? String(s?.cwd ?? "").replace(homedir(), "~"), resumable: sessionStarted(key.slice(2)),
-    title: s?.name, state: s?.state, needs: job?.needs ?? "", events };
+    title: s?.name, state: s?.state, needs: job?.needs ?? "", cost: sessionCost(key), events };
 }
 
 // Talk to an agent. Claude: `claude --bg --resume` continues the session in the background; if it is open in a
@@ -1070,7 +1073,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/settings") return json(settings());
   // Why /ws/pty would refuse these parameters (a browser can't read a refused upgrade's reason).
   if (p === "/api/pty/check") { const id = url.searchParams.get("id") ?? ""; if (getPty(id)?.code === undefined && getPty(id)) return json({ ok: true }); const s = await ptySpec(url.searchParams); return typeof s === "string" ? new Response(s, { status: 400 }) : json({ ok: true }); }
-  if (p === "/api/pty") return json({ sessions: listPtys(), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
+  if (p === "/api/pty") return json({ sessions: listPtys().map((t) => ({ ...t, cost: paneAgents[t.id] && sessionCost(`c:${paneAgents[t.id].session}`) })), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
   if (p === "/api/git") return json(await panesGit((url.searchParams.get("panes") ?? "").split(",").filter(Boolean)));
   if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {
@@ -1122,7 +1125,7 @@ function refreshAgyUsage() {
     try { return { id: a.id, name: a.name, usage: /^[\w-]+$/.test(a.id) ? JSON.parse(readFileSync(`${import.meta.dir}/cache/usage/${a.id}.json`, "utf8")) : null }; }
     catch { return { id: a.id, name: a.name, usage: null }; }
   }) });
-  if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents(), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
+  if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents().map((a) => ({ ...a, cost: sessionCost(a.key) })), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   // no-cache: the app window revalidates on every load, so a restart's new UI shows up without a hard refresh.
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`), { headers: { "cache-control": "no-cache" } });
   // ascii.rest (MIT), served from node_modules so the art loads from this machine, not from ascii.rest.

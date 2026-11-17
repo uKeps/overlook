@@ -1901,6 +1901,7 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 }
 .orch-pane.active .win-title { color: var(--ink); }
 .win-title small { margin-left: 6px; font: 400 11px var(--body); color: var(--faint); }
+.win-title .orch-cost { margin-left: 6px; font: 400 11px var(--body); color: var(--faint); font-variant-numeric: tabular-nums; pointer-events: auto; } /* its tooltip says the dollars are ≈ API price */
 .orch-acts { margin-left: auto; display: flex; align-items: center; gap: 2px; position: relative; z-index: 3; opacity: 0; transition: opacity .15s; }
 .orch-pane:is(:hover, .active) .orch-acts { opacity: 1; }
 .orch-acts .btn, .orch-acts a.btn {
