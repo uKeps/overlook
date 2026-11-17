@@ -345,7 +345,7 @@ const ID = /^[0-9a-f-]{8,64}$/; // session/conversation ids become file paths: h
 
 async function claudeConversation(sessionId: string): Promise<Event[]> {
   let file = "";
-  for await (const p of new Bun.Glob(`*/${sessionId}.jsonl`).scan(`${homedir()}/.claude/projects`)) { file = `${homedir()}/.claude/projects/${p}`; break; }
+  try { for await (const p of new Bun.Glob(`*/${sessionId}.jsonl`).scan(`${homedir()}/.claude/projects`)) { file = `${homedir()}/.claude/projects/${p}`; break; } } catch {} // no ~/.claude/projects yet
   if (!file) return [];
   const f = Bun.file(file);
   // ponytail: reads only the last 1 MB of the conversation; enough for recent events.
