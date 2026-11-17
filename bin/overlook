@@ -17,7 +17,8 @@
 //                                    cache/usage/claude.json and each session's cost in cache/usage/sessions/, then runs
 //                                    the user's own status line so it looks the same
 //   overlook done [summary…]         your task is finished: the summary goes to the card that gave it, and yours folds
-//   overlook close <card>             close a card you opened (overlook spawn) once its work is in
+//   overlook close <card>             close a card you opened (overlook spawn or browser open) once its work is in; a
+//                                    browser card you opened also closes when your card does
 //   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
 // <card> is a card id or part of its name, as `overlook peers` prints them.
 const { OVERLOOK_URL: url, OVERLOOK_PANE: from, OVERLOOK_TOKEN: token } = process.env;
