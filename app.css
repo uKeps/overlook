@@ -1336,13 +1336,19 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
 }
 /* top left: the ☰ menu (pages are in the dock, as on every page) */
-.cv-tl { top: 10px; left: 10px; width: 40px; height: 40px; padding: 3px; display: flex; border-radius: 999px; }
+.cv-tl { top: 10px; left: 10px; height: 40px; padding: 3px; display: flex; border-radius: 999px; }
 .cv-tl-btn {
   height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 999px;
   color: var(--muted); font: 500 13px var(--body); transition: color .15s, background .15s;
 }
 .cv-tl-btn:first-child { flex: none; width: 32px; }
 .cv-tl-btn:hover { color: var(--ink); background: rgba(255, 255, 255, .08); }
+/* the canvas's name: its menu switches, makes and renames canvases */
+.cv-name { padding: 0 12px 0 8px; max-width: 220px; }
+.cv-name[hidden] { display: none; }
+.cv-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-rename { width: 160px; height: 32px; padding: 0 10px; border: 0; border-radius: 999px; outline: 1px solid var(--accent);
+  background: rgba(255, 255, 255, .06); color: var(--ink); font: 500 13px var(--body); }
 .orch-hud {
   top: 10px; left: 50%; translate: -50% 0; max-width: calc(100% - 340px);
   display: inline-flex; align-items: center; gap: 2px; padding: 4px;

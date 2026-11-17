@@ -289,7 +289,7 @@ test("effort selection in capture modal and dismiss chat in fleet sidebar", () =
 
 test("terminals an agent spawns hang below it as a tree: centred rows, subtrees side by side", () => {
   const src = readFileSync(`${ROOT}/app.js`, "utf8").match(/^function treeLayout[\s\S]*?^}/m)![0];
-  const orchPanes: any[] = [], treeLayout = new Function("orchPanes", `${src}; return treeLayout;`)(orchPanes);
+  const orchPanes: any[] = [], treeLayout = new Function("orchPanes", "hiddenOn", `${src}; return treeLayout;`)(orchPanes, () => undefined);
   const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
   const spawn = (id: string, by: any) => { const c: any = { kind: "terminal", id, spawnedBy: by.id, w: 940, h: 600 }; treeLayout(by, c); orchPanes.push(c); return c; };
   orchPanes.push(m, { kind: "sticky", id: "1", x: 5000, y: 0, w: 320, h: 220 });
@@ -301,6 +301,19 @@ test("terminals an agent spawns hang below it as a tree: centred rows, subtrees 
   // a's children need 1920px, so b moves right; the grandchildren sit centred under a, a row lower
   expect([a.x, b.x, g.x, h.x, g.y, h.y]).toEqual([-460, 1010, -950, 30, 1360, 1360]);
   expect([m.x, m.y]).toEqual([0, 0]); // the top card stays put
+});
+
+test("a card spawned on a canvas not showing joins the tree there, among that canvas's cards only", () => {
+  const src = readFileSync(`${ROOT}/app.js`, "utf8").match(/^function treeLayout[\s\S]*?^}/m)![0];
+  // the shown canvas holds a stray card that claims the same parent: a layout over every canvas would move it
+  const stray = { kind: "terminal", id: "z", spawnedBy: "m", x: 7, y: 7, w: 940, h: 600 }, other = { panes: [] as any[] };
+  const treeLayout = new Function("orchPanes", "hiddenOn", `${src}; return treeLayout;`)([stray], (p: any) => (other.panes.includes(p) ? other : undefined));
+  const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 }, a = { kind: "terminal", id: "a", spawnedBy: "m", x: 30, y: 680, w: 940, h: 600 };
+  other.panes.push(m, a);
+  const b: any = { kind: "terminal", id: "b", spawnedBy: "m", w: 940, h: 600 };
+  treeLayout(m, b);
+  expect([a.x, b.x, b.y]).toEqual([-460, 520, 680]); // b joins a's row under m, on m's canvas
+  expect([stray.x, stray.y]).toEqual([7, 7]);
 });
 
 test("agent CLI commands", () => {
