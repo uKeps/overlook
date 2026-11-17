@@ -3200,6 +3200,8 @@ function bindPaneDragResize(card, p) {
           updateSelectionUI();
         }
         saveCanvas();
+        // A done agent's title bar is its fold toggle: a plain click opens it, another folds it back.
+        if (!moved && p.doneAt && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) ACTIONS["orch-collapse"]({ dataset: { key: curKey } });
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);

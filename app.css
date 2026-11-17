@@ -2631,4 +2631,5 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .orch-pane.done { opacity: .62; transition: opacity .18s cubic-bezier(.2, .8, .2, 1); }
 .orch-pane.done:hover, .orch-pane.done.active { opacity: 1; }
 .orch-pane.done .win-title b::before { content: "✓ "; color: var(--accent); }
+.orch-pane.done .orch-head { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { .orch-pane.done { transition: none; } }
