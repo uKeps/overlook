@@ -1883,6 +1883,40 @@ test("wired notes reach the agent: overlook context, and --new only gives what c
   await post("/api/pty/close", { id: "t_ctx" });
 });
 
+test("git on a terminal card: the branch, what changed and the branch's PR with its CI, from the pane's own folder", async () => {
+  // Each repo carries what the fake gh answers for its branch (.git/pr.json); no file, no PR.
+  writeFileSync(`${FAKEBIN}/gh`, `#!/bin/sh\n[ "$1 $2 $3" = "pr view $(git branch --show-current)" ] && cat .git/pr.json\n`, { mode: 0o755 });
+  const repo = (name: string, pr?: object) => {
+    const dir = `${ROOT}/repos/${name}`, git = (...a: string[]) => Bun.spawnSync(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a]);
+    mkdirSync(dir, { recursive: true });
+    git("init", "-q", "-b", `feat/${name}`);
+    writeFileSync(`${dir}/a.txt`, "1\n2\n3\n");
+    git("add", "."); git("commit", "-qm", "init");
+    if (pr) writeFileSync(`${dir}/.git/pr.json`, JSON.stringify({ number: 7, url: "https://github.com/o/r/pull/7", ...pr }));
+    return dir;
+  };
+  const chip = repo("chip", { state: "OPEN", statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }, { status: "IN_PROGRESS", conclusion: "" }] });
+  writeFileSync(`${chip}/a.txt`, "1\n3\nnew1\nnew2\n"); writeFileSync(`${chip}/b.txt`, "x\n"); // 2 files: +2 −1 and a new one
+  repo("red", { state: "OPEN", statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }, { state: "ERROR" }] });
+  repo("done", { state: "MERGED", url: "javascript:alert(1)", statusCheckRollup: [] });
+  repo("nopr");
+  const sh = await openPane("t_git");
+  // Only pane ids count: a path in the list is no pane. The pane's shell starts outside any repo: nothing yet.
+  const gitOf = async () => (await fetch(`${BASE}/api/git?panes=t_git,nope,${encodeURIComponent(chip)}`)).json();
+  expect(await gitOf()).toEqual({});
+  const at = async (name: string) => {
+    sh.ws.send(`cd ${ROOT}/repos/${name}\r`);
+    for (const end = Date.now() + 8000; Date.now() < end; await Bun.sleep(200)) { const r = await gitOf(); if (r.t_git?.branch === `feat/${name}`) return r; }
+    throw new Error(`no git info for ${name}: ${sh.out.slice(-300)}`);
+  };
+  expect(await at("chip")).toEqual({ t_git: { branch: "feat/chip", files: 2, add: 2, del: 1, pr: { number: 7, url: "https://github.com/o/r/pull/7", state: "running" } } });
+  expect((await at("red")).t_git.pr.state).toBe("failed");
+  expect((await at("done")).t_git.pr).toEqual({ number: 7, url: "", state: "merged" }); // only an https URL reaches the page
+  expect(await at("nopr")).toEqual({ t_git: { branch: "feat/nopr", files: 0, add: 0, del: 0 } });
+  sh.ws.close();
+  await post("/api/pty/close", { id: "t_git" });
+});
+
 test("anything wired reaches any agent: typed in once it rests, terminals included; agents write into wired notes", async () => {
   // A stand-in agent: any program named in agents.json's "process" counts (here cat, which shows what it's given).
   const init = await (await fetch(`${BASE}/api/settings`)).json();

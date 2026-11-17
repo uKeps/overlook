@@ -690,6 +690,67 @@ function notePaneAgents() {
   if (JSON.stringify(paneAgents) !== before) savePaneAgents();
 }
 setInterval(() => { try { notePaneAgents(); } catch {} }, 5000);
+// Git on a terminal card: its branch, what changed, and the branch's PR with its CI. The folder comes from the pane (its
+// agent's, else its shell's current one), never from the client. git is cheap (10 s cache); gh is slow and rate-limited
+// (60 s per folder and branch, 3 at a time). Anything missing (not a repo, no gh, no PR) just leaves its part out.
+const gitCache = new Map<string, { at: number; v: Promise<any> }>();
+const cachedFor = (k: string, ms: number, f: () => Promise<any>) => {
+  const c = gitCache.get(k), now = Date.now();
+  if (c && now - c.at < ms) return c.v;
+  for (const [x, y] of gitCache) if (now - y.at > 120_000) gitCache.delete(x);
+  const v = f(); gitCache.set(k, { at: now, v }); return v;
+};
+// GIT_OPTIONAL_LOCKS=0: `git status` doesn't take index.lock, so it never fails an agent's commit in the same repo.
+const output = async (argv: string[], cwd: string, timeout: number) => {
+  try {
+    const p = Bun.spawn(argv, { cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GH_PROMPT_DISABLED: "1" } });
+    const out = await new Response(p.stdout).text();
+    return (await p.exited) === 0 ? out : null;
+  } catch { return null; } // no such program or folder
+};
+let ghRunning = 0;
+const ghQueue: (() => void)[] = [];
+async function ghLimited<T>(f: () => Promise<T>) {
+  while (ghRunning >= 3) await new Promise<void>((r) => ghQueue.push(r));
+  ghRunning++;
+  try { return await f(); } finally { ghRunning--; ghQueue.shift()?.(); }
+}
+const CI_FAIL = new Set(["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+function prState(pr: any) {
+  if (pr.state === "MERGED" || pr.state === "CLOSED") return pr.state.toLowerCase();
+  const checks: any[] = pr.statusCheckRollup ?? [];
+  if (checks.some((c) => CI_FAIL.has(c.conclusion ?? c.state))) return "failed";
+  if (checks.some((c) => (c.status ? c.status !== "COMPLETED" : c.state === "PENDING" || c.state === "EXPECTED"))) return "running";
+  return checks.length ? "passed" : "open";
+}
+async function gitOf(dir: string) {
+  const g = await cachedFor(`git:${dir}`, 10_000, async () => {
+    const [st, diff] = await Promise.all([output(["git", "-C", dir, "status", "--porcelain=v2", "--branch"], dir, 5000), output(["git", "-C", dir, "diff", "--numstat", "HEAD"], dir, 5000)]);
+    if (st === null) return null;
+    const lines = st.split("\n").filter(Boolean), num = (diff ?? "").split("\n").map((l) => l.split("\t"));
+    return {
+      branch: lines.find((l) => l.startsWith("# branch.head "))?.slice(14) ?? "",
+      files: lines.filter((l) => !l.startsWith("#")).length,
+      add: num.reduce((s, [a]) => s + (Number(a) || 0), 0), del: num.reduce((s, [, d]) => s + (Number(d) || 0), 0),
+    };
+  });
+  if (!g?.branch || g.branch === "(detached)") return g;
+  const pr = await cachedFor(`gh:${dir}\0${g.branch}`, 60_000, () => ghLimited(async () => {
+    try { const r = JSON.parse((await output(["gh", "pr", "view", g.branch, "--json", "number,state,url,statusCheckRollup"], dir, 20_000)) ?? ""); return { number: r.number, url: /^https:\/\//.test(r.url) ? r.url : "", state: prState(r) }; } catch { return null; }
+  }));
+  return pr ? { ...g, pr } : g;
+}
+const paneDir = (id: string) => {
+  const t = getPty(id);
+  if (!t || t.code !== undefined) return "";
+  if (paneAgents[id]?.cwd) return paneAgents[id].cwd;
+  try { return readlinkSync(`/proc/${t.proc.pid}/cwd`); } catch { return t.cwd; }
+};
+async function panesGit(ids: string[]) {
+  const out: Record<string, unknown> = {};
+  await Promise.all(ids.slice(0, 50).map(async (id) => { const d = paneDir(id), g = d && (await gitOf(d)); if (g) out[id] = g; }));
+  return out;
+}
 function paneAgentSpec(id: string) {
   const s = paneAgents[id], a = s && loadAgents(import.meta.dir).find((x) => x.process === s.proc);
   if (!a || sessionBusy(s.session) || (s.proc === "claude" && !sessionStarted(s.session))) return null;
@@ -1010,6 +1071,7 @@ async function handle(req: Request, port: number) {
   // Why /ws/pty would refuse these parameters (a browser can't read a refused upgrade's reason).
   if (p === "/api/pty/check") { const id = url.searchParams.get("id") ?? ""; if (getPty(id)?.code === undefined && getPty(id)) return json({ ok: true }); const s = await ptySpec(url.searchParams); return typeof s === "string" ? new Response(s, { status: 400 }) : json({ ok: true }); }
   if (p === "/api/pty") return json({ sessions: listPtys(), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
+  if (p === "/api/git") return json(await panesGit((url.searchParams.get("panes") ?? "").split(",").filter(Boolean)));
   if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {
     const terminals = detectTerminals();
