@@ -14,7 +14,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const FAKEBIN = `${ROOT}/fakebin`;
 // HISTFILE: the shells these tests open must not write into the user's shell history.
 const ENV = { ...process.env, HISTFILE: "/dev/null", PATH: `${FAKEBIN}:${process.env.PATH}`, DEFAULT_TERMINAL: "ghostty", TERMINAL_FALLBACK: "kitty", VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
-const FAKE = "http://127.0.0.1:4798";
+const FAKE_PORT = PORT - 1, FAKE = `http://127.0.0.1:${FAKE_PORT}`; // beside PORT, so TEST_PORT moves both
 const TODAY = new Date().toLocaleDateString("sv");
 let server: ReturnType<typeof Bun.spawn>;
 let fake: ReturnType<typeof Bun.serve>;
@@ -41,7 +41,7 @@ beforeAll(async () => {
     { id: "fake-openai", name: "Fake OpenAI", api: "openai", url: `${FAKE}/v1`, model: "fake", key: "FAKE_KEY" },
     { id: "fake-claude", name: "Fake Claude", api: "anthropic", url: FAKE, model: "claude-opus-5-5", key: "FAKE_KEY" },
   ]));
-  fake = Bun.serve({ hostname: "127.0.0.1", port: 4798, fetch: fakeProvider });
+  fake = Bun.serve({ hostname: "127.0.0.1", port: FAKE_PORT, fetch: fakeProvider });
   // A board already in the cache: no Pinterest config, so nothing syncs over it.
   mkdirSync(`${ROOT}/cache/pinterest`, { recursive: true });
   for (const id of ["aa11", "bb22", "cc33"]) writeFileSync(`${ROOT}/cache/pinterest/${id}.jpg`, "not really a jpeg");
