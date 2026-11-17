@@ -301,6 +301,10 @@ test("terminals an agent spawns hang below it as a tree: centred rows, subtrees 
   // a's children need 1920px, so b moves right; the grandchildren sit centred under a, a row lower
   expect([a.x, b.x, g.x, h.x, g.y, h.y]).toEqual([-460, 1010, -950, 30, 1360, 1360]);
   expect([m.x, m.y]).toEqual([0, 0]); // the top card stays put
+  // a and its children close: b slides back to the middle under m (orchPaint lays out the parent of a closed card)
+  orchPanes.splice(orchPanes.indexOf(a), 1); orchPanes.splice(orchPanes.indexOf(g), 1); orchPanes.splice(orchPanes.indexOf(h), 1);
+  treeLayout(m);
+  expect([b.x, b.y]).toEqual([30, 680]);
 });
 
 test("a card spawned on a canvas not showing joins the tree there, among that canvas's cards only", () => {

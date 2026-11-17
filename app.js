@@ -4257,16 +4257,22 @@ async function orchPaint(force) {
   const vis = orchMax ? orchPanes.filter((p) => paneKey(p) === orchMax) : orchPanes;
   const visKeys = new Set(vis.map(paneKey));
   if (plane.querySelector(".orch-empty")) plane.innerHTML = "";
+  const regrow = new Set();
   for (const node of [...plane.querySelectorAll(".orch-pane[data-key]")]) {
     const k = node.dataset.key;
     if (visKeys.has(k)) continue;
     orchSigs.delete(k);
+    const gone = !orchPanes.some((p) => paneKey(p) === k);
+    // A closed card of a spawn tree, however it closed: its parent's tree closes the gap (below).
+    const parent = gone && node.dataset.from && orchPanes.find((p) => p.kind === "terminal" && p.id === node.dataset.from);
+    if (parent) regrow.add(parent);
     // A closed card fades out where it was (keyless meanwhile, so nothing finds it); one hidden by a maximized card just goes.
-    if (orchMode === "free" && !orchMax && !calm.matches && !orchPanes.some((p) => paneKey(p) === k)) {
+    if (orchMode === "free" && !orchMax && !calm.matches && gone) {
       node.removeAttribute("data-key"); node.classList.add("pane-out");
       setTimeout(() => node.remove(), 200);
     } else node.remove();
   }
+  if (regrow.size) { regrow.forEach((p) => treeLayout(p)); slidePanes(); orchSigs.clear(); saveCanvas(); } // this paint slides them there
   const isFree = orchMode === "free" && !orchMax;
   canvas.className = `orch-canvas ${isFree ? `free tool-${orchTool}` : "tiled"}`;
   plane.className = `orch-plane ${isFree ? "free" : vis.length === 1 ? "single" : vis.length === 2 ? `split-${orchDir}` : "grid"}`;
@@ -4343,6 +4349,7 @@ async function orchPaint(force) {
     card.classList.toggle("selected", orchSelected.has(key));
     card.classList.toggle("locked", !!p.locked && isFree);
     card.dataset.kind = p.kind;
+    card.dataset.from = p.spawnedBy || ""; // the pane is gone once it closes: the tree's regrow reads its parent here
     if (card.querySelector(".win-rename")) return; // being renamed: a repaint would wipe the field
     if (isFree) {
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`;
