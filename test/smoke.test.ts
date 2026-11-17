@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 const REPO = `${import.meta.dir}/..`;
 const ROOT = mkdtempSync(`${tmpdir()}/overlook-`);
 const VAULT = `${ROOT}/example-vault`;
-const PORT = 4799;
+const PORT = Number(process.env.TEST_PORT) || 4799; // TEST_PORT: parallel runs (one per worktree) need their own port
 const BASE = `http://127.0.0.1:${PORT}`;
 // Stand-ins for the desktop terminals: "Open terminal" must not pop a real window (in a folder this test deletes) on every run.
 const FAKEBIN = `${ROOT}/fakebin`;
