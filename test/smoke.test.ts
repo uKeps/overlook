@@ -2402,6 +2402,7 @@ test("canvas terminal clipboard: Ctrl+V/Ctrl+Shift+V paste once, ^V fallback, Ct
         getSelection: () => sel,
         clearSelection: () => { sel = ""; cleared++; },
         focus: () => {},
+        parser: { registerOscHandler: (id: number, fn: (d: string) => boolean) => { st._osc = { ...st._osc, [id]: fn }; } },
       },
     };
     const nav = {
@@ -2434,7 +2435,7 @@ test("canvas terminal clipboard: Ctrl+V/Ctrl+Shift+V paste once, ^V fallback, Ct
       defaultPrevented: false, stopped: false,
       preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; }, ...mods,
     });
-    return { onKey, firePaste, kd, pasted, sent, copied, toasts, getReadCalls: () => readCalls, getSel: () => sel, setSel: (v: string) => { sel = v; }, getCleared: () => cleared };
+    return { onKey, osc: (id: number, d: string) => st._osc?.[id]?.(d), firePaste, kd, pasted, sent, copied, toasts, getReadCalls: () => readCalls, getSel: () => sel, setSel: (v: string) => { sel = v; }, getCleared: () => cleared };
   };
 
   // 1. Ctrl+Shift+V with native browser paste: pastes ONCE (readText fallback must not double-paste)
@@ -2517,5 +2518,13 @@ test("canvas terminal clipboard: Ctrl+V/Ctrl+Shift+V paste once, ^V fallback, Ct
 
     expect(h.onKey(h.kd("KeyV", { ctrlKey: true, altKey: true }))).toBe(true);
     expect(h.onKey(h.kd("KeyV", { metaKey: true }))).toBe(true);
+  }
+
+  // 7. OSC 52 (Claude Code's selection copy): the UTF-8 text reaches the clipboard; a "?" read query is ignored
+  {
+    const h = harness("");
+    expect(h.osc(52, `c;${Buffer.from("olá mundo").toString("base64")}`)).toBe(true);
+    expect(h.osc(52, "c;?")).toBe(true);
+    expect(h.copied).toEqual(["olá mundo"]);
   }
 });
