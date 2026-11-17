@@ -1210,6 +1210,14 @@ orchCwd = recentCwds()[0] || ""; // Ctrl+Alt+N and the task bar start in the las
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
 let orchLinks = [], orchNoteQ = "";
 const CANVAS_KEY = "overlook.canvas", CANVAS_BG_KEY = "overlook.canvas-bg", PANE_MIME = "text/x-overlook-pane";
+// Named canvases (one per project, say). The one showing lives in orchPanes, orchLinks, the view and sketchEls; each other
+// one keeps its own in its entry here until it's shown (switchCanvas). Its terminals run on meanwhile.
+let canvases = [{ id: "main", name: "Main" }], canvasId = "main";
+const allPanes = () => [orchPanes, ...canvases.map((c) => c.panes || [])].flat();
+const allLinks = () => [orchLinks, ...canvases.map((c) => c.links || [])].flat();
+const hiddenOn = (p) => canvases.find((c) => c.panes?.includes(p)); // the canvas a card is on, when it isn't the one showing
+// A terminal card that ended or was closed leaves whichever canvas it's on.
+const dropTerm = (id) => { const keep = (p) => !(p.kind === "terminal" && p.id === id); orchPanes = orchPanes.filter(keep); for (const c of canvases) if (c.panes) c.panes = c.panes.filter(keep); };
 const DISMISSED_KEY = "overlook:dismissed-sessions";
 let dismissedSessions = (() => {
   try { return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
@@ -1230,6 +1238,8 @@ try {
   if (c) {
     orchPanes = c.panes || [];
     orchLinks = c.links || [];
+    // Saved before there were several: that one canvas is "Main", as it was.
+    if (Array.isArray(c.canvases) && c.canvases.some((x) => x.id === c.canvas)) { canvases = c.canvases; canvasId = c.canvas; }
     // The canvas is the default layout; a split is kept only when it was chosen after that change (layout: 2).
     orchMode = c.mode === "tile" && c.layout === 2 ? "tile" : "free";
     orchPanX = c.panX ?? 24;
@@ -1252,13 +1262,15 @@ let wiresSent = "", wiresAt = 0;
 const CANVAS_CLIENT = (() => { try { let id = localStorage.getItem("overlook.client"); if (!id) localStorage.setItem("overlook.client", (id = crypto.randomUUID())); return id; } catch { return crypto.randomUUID(); } })();
 function syncWires(force) {
   const term = (k) => (k.startsWith("terminal:") ? k.slice(9) : "");
-  const wires = orchLinks.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
-  const names = Object.fromEntries(orchPanes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
+  // Every canvas's: the agents on the ones not showing keep talking.
+  const links = allLinks(), panes = allPanes();
+  const wires = links.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
+  const names = Object.fromEntries(panes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
   // Whatever is wired to a terminal (either way round: notes, vault notes, other terminals) is context for the agent in
   // it; the server hands it over (deliverWired in tasks.ts).
   const ctx = {};
-  for (const l of orchLinks) for (const [t, o] of [[l.a, l.b], [l.b, l.a]]) {
-    const p = term(t) && orchPanes.find((x) => paneKey(x) === o), add = (item) => (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), ...item });
+  for (const l of links) for (const [t, o] of [[l.a, l.b], [l.b, l.a]]) {
+    const p = term(t) && panes.find((x) => paneKey(x) === o), add = (item) => (ctx[term(t)] ||= []).push({ key: o, name: paneLabel(p), ...item });
     if (p?.kind === "sticky") add({ text: p.text || "" });
     if (p?.kind === "note") add({ path: p.id });
     if (p?.kind === "terminal") add({ term: p.id });
@@ -1278,7 +1290,8 @@ function saveCanvas() {
   syncWires(); sweepBrowsers();
   try {
     localStorage.setItem(CANVAS_BG_KEY, orchBg);
-    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio }));
+    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio,
+      canvas: canvasId, canvases: canvases.map((c) => (c.panes ? { ...c, panes: c.panes.map(({ ctx, ...p }) => p) } : c)) }));
   } catch {}
 }
 function setCanvasBg(v, silent = false) {
@@ -1333,13 +1346,20 @@ function newAgentTerm(agent, at, extra) {
 const defaultAgent = () => [$("#run-agent")?.value, "claude", ...(S.runners || []).map((r) => r.id)].find((id) => S.runners?.find((r) => r.id === id)?.tui);
 // A new agent TUI: claude gets --session-id up front so the pane can resume it later.
 const newTuiRun = (agent, prompt, model, effort) => ({ agent, session: crypto.randomUUID(), fresh: "1", ...(prompt ? { prompt } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
-function termConnect(st, p) {
-  const q = new URLSearchParams({ id: p.id, cols: st.term.cols, rows: st.term.rows });
+function ptySocket(p, cols, rows) {
+  const q = new URLSearchParams({ id: p.id, cols, rows });
   for (const [k, v] of Object.entries(p.run || { shell: p.shell })) if (v) q.set(k, v);
   if (p.cwd) q.set("cwd", p.cwd);
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws/pty?${q}`);
   // The first prompt runs once: from now on the pane resumes its session (see ptySpec).
   ws.onopen = () => { if (p.run?.fresh) { delete p.run.fresh; delete p.run.prompt; delete p.run.model; delete p.run.effort; saveCanvas(); } };
+  return [ws, q];
+}
+// A card opened on a canvas that isn't showing starts now all the same: the PTY outlives this socket, and the card
+// attaches to it (the screen replayed) once its canvas is shown.
+const termStart = (p) => { const [ws] = ptySocket(p, 100, 30); ws.addEventListener("open", () => ws.close()); };
+function termConnect(st, p) {
+  const [ws, q] = ptySocket(p, st.term.cols, st.term.rows);
   ws.onmessage = (e) => st.term.write(e.data);
   const note = (m) => st.term.write(`\r\n\x1b[2m[${m}]\x1b[0m\r\n`);
   ws.onclose = async (e) => {
@@ -1347,7 +1367,7 @@ function termConnect(st, p) {
     st.ws = null;
     // The shell ended (`exit`, Ctrl+D): the card closes, like a terminal window does.
     if (e.code === 4001) {
-      orchPanes = orchPanes.filter((x) => !(x.kind === "terminal" && x.id === p.id));
+      dropTerm(p.id);
       termClose(p.id); saveCanvas(); orchSigs.clear(); agentsBody();
       return;
     }
@@ -1373,11 +1393,8 @@ const termSend = (st, d) => {
 
 function termClose(id) {
   const st = terms.get(id);
-  if (!st) return;
-  terms.delete(id);
-  st.ws?.close();
-  st.ro?.disconnect();
-  st.term?.dispose();
+  // no st: a card on a canvas not shown since the page loaded; its PTY runs all the same
+  if (st) { terms.delete(id); st.ws?.close(); st.ro?.disconnect(); st.term?.dispose(); }
   return api("/api/pty/close", { id }).catch(() => {});
 }
 // What a terminal pane shows (its rendered screen plus recent scrollback), as plain text for linked context.
@@ -1401,7 +1418,9 @@ function termPrompt(id, text) {
 function openTui(item) {
   const run = fleetItems().find((x) => x.kind === item.kind && x.id === item.id)?.tui;
   if (!run) return false;
-  const have = orchPanes.find((p) => p.kind === "terminal" && p.run && ((run.task && p.run.task === run.task) || (run.key && p.run.key === run.key)));
+  const mine = (p) => p.kind === "terminal" && p.run && ((run.task && p.run.task === run.task) || (run.key && p.run.key === run.key));
+  showCanvasOf(mine);
+  const have = orchPanes.find(mine);
   if (have) { focusPane(paneKey(have)); return true; }
   if (!makeRoom()) return true;
   addPane({ kind: "terminal", id: `term_${Date.now()}`, run });
@@ -1430,7 +1449,8 @@ function focusPane(k, stay = false) {
 }
 // Every path that drops a terminal pane (replace, split, cap, routine…) ends here: its PTY must not live on unseen.
 function reapTerms() {
-  for (const id of [...terms.keys()]) if (!orchPanes.some((p) => p.kind === "terminal" && p.id === id)) termClose(id);
+  const all = allPanes();
+  for (const id of [...terms.keys()]) if (!all.some((p) => p.kind === "terminal" && p.id === id)) termClose(id);
 }
 
 function bindTerminalKeys(st, p) {
@@ -1865,18 +1885,20 @@ async function mountSketch() {
   el.dataset.mounted = "1";
   const lib = await loadExcalidraw().catch(() => null);
   if (!lib) { el.dataset.mounted = ""; toast("Couldn't load the drawing tools"); return; }
+  if (!el.isConnected) return; // another canvas came in meanwhile
   let t = 0, last = sketchEls.map((x) => `${x.id}:${x.version}`).join();
-  lib.mount(el, {
+  const cid = canvasId; // this drawing is that canvas's: a late save must not land on the next one
+  el.unmount = lib.mount(el, {
     theme: "dark",
     initialData: { elements: sketchEls, appState: { theme: "dark", viewBackgroundColor: "transparent", currentItemStrokeColor: sketchColor, ...sketchView() } },
-    excalidrawAPI: (a) => { sketchApi = a; },
+    excalidrawAPI: (a) => { if (cid === canvasId) sketchApi = a; },
     onChange: (els, st) => {
       const selId = Object.keys(st.selectedElementIds || {})[0], selColor = selId && els.find((x) => x.id === selId)?.strokeColor;
       if (sketchOn && (st.activeTool?.type !== sketchToolNow || (selColor && selColor !== sketchColor))) { if (selColor) sketchColor = selColor; paintSketchBar(st.activeTool?.type); }
       clearTimeout(t);
       t = setTimeout(() => {
         const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
-        if (sig === last) return;
+        if (sig === last || cid !== canvasId) return;
         last = sig; sketchEls = live;
         try { localStorage.setItem(SKETCH_KEY, JSON.stringify(live)); } catch {}
         syncWires(); drawMap();
@@ -2087,15 +2109,19 @@ function quickInk(e, canvas) {
 // An agent's `overlook draw`: Mermaid becomes shapes, placed right of the agent's card.
 async function sketchFromMermaid(src, parent) {
   if (!$("#orch-sketch")) return "the canvas isn't showing";
-  await mountSketch();
-  for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
   const lib = await loadExcalidraw().catch(() => null);
-  if (!sketchApi || !lib) return "the drawing tools didn't load";
+  if (!lib) return "the drawing tools didn't load";
   let els;
   try { els = await lib.fromMermaid(src); } catch (e) { return `Mermaid: ${String(e?.message || e).slice(0, 160)}`; }
   const x0 = (parent?.x ?? 0) + (parent?.w ?? 0) + 60, y0 = parent?.y ?? 0;
   const minX = Math.min(...els.map((e) => e.x)), minY = Math.min(...els.map((e) => e.y));
   for (const e of els) { e.x += x0 - minX; e.y += y0 - minY; }
+  // The card that asked is on a canvas not showing: the drawing goes onto that one's.
+  const on = hiddenOn(parent);
+  if (on) { (on.sketch ||= []).push(...els); saveCanvas(); return ""; }
+  await mountSketch();
+  for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
+  if (!sketchApi) return "the drawing tools didn't load";
   sketchApi.updateScene({ elements: [...sketchApi.getSceneElements(), ...els] });
   return "";
 }
@@ -2304,7 +2330,8 @@ function mountBrowser(feed, p) {
 }
 // A closed browser card lets its socket go (the server closes the tab after a while unwatched).
 function sweepBrowsers() {
-  for (const [id, b] of brs) if (!orchPanes.some((p) => p.kind === "browser" && p.id === id)) { b.ws.close(1000); b.ro.disconnect(); brs.delete(id); }
+  const all = allPanes();
+  for (const [id, b] of brs) if (!all.some((p) => p.kind === "browser" && p.id === id)) { b.ws.close(1000); b.ro.disconnect(); brs.delete(id); }
 }
 
 function ensurePaneRect(p, idx = 0) {
@@ -2350,7 +2377,7 @@ function slidePanes() {
 // subtree as wide as it needs so cousins don't overlap. The top card stays put. `born` is a card about to be added.
 // shortcut: cards outside the tree aren't avoided, so a branch can land on one; place around them if that bites.
 function treeLayout(card, born) {
-  const panes = born ? [...orchPanes, born] : orchPanes;
+  const base = hiddenOn(card)?.panes || orchPanes, panes = born ? [...base, born] : base; // the tree is on the card's own canvas
   const kids = (p) => p.kind === "terminal" ? panes.filter((q) => q.spawnedBy === p.id) : [];
   let root = card;
   for (let n = 0, up; n < 50 && (up = panes.find((q) => q.kind === "terminal" && q.id === root.spawnedBy)); n++) root = up;
@@ -2463,23 +2490,23 @@ function addPane(item, x, y) {
 // grow out of it; notes and browsers open right of it, below the others there.
 let spawnDone = [];
 async function takeSpawns() {
-  const panes = orchPanes.filter((p) => p.kind === "terminal").map((p) => p.id);
+  const all = allPanes(), panes = all.filter((p) => p.kind === "terminal").map((p) => p.id);
   if (!panes.length && !spawnDone.length) return;
   const done = spawnDone; spawnDone = [];
   const r = await api("/api/canvas/spawns", { panes, done }).catch(() => { spawnDone.push(...done); return null; });
   if (!r?.spawns?.length) return;
   const active = orchActive;
   for (const s of r.spawns) {
-    const parent = orchPanes.find((p) => p.kind === "terminal" && p.id === s.parent);
+    const parent = all.find((p) => p.kind === "terminal" && p.id === s.parent), on = hiddenOn(parent); // on: its canvas, when not showing
     // An agent wrote into a sticky wired to it (overlook write): the text changes in place.
     if (s.kind === "write") {
-      const note = orchPanes.find((p) => p.kind === "sticky" && paneKey(p) === s.target);
+      const note = all.find((p) => p.kind === "sticky" && paneKey(p) === s.target);
       if (note) note.text = s.text;
       spawnDone.push({ id: s.id, ...(note ? {} : { why: "that note is no longer on the canvas" }) });
       continue;
     }
     if (s.kind === "close") {
-      const t = orchPanes.find((x) => x.kind === "terminal" && x.id === s.target);
+      const t = all.find((x) => x.kind === "terminal" && x.id === s.target);
       if (t) closeCardQuietly(t);
       spawnDone.push({ id: s.id, ...(t ? {} : { why: "that card is no longer on the canvas" }) });
       continue;
@@ -2500,12 +2527,13 @@ async function takeSpawns() {
         bornFrom.set(paneKey(p), { x: parent.x + parent.w / 2, y: parent.y + parent.h });
       } else {
         p.x = parent.x + parent.w + 40; p.y = parent.y;
-        const hit = () => orchPanes.find((q) => typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
+        const hit = () => (on?.panes || orchPanes).find((q) => typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
         for (let n = 0, q; n < 40 && (q = hit()); n++) p.y = q.y + q.h + 40;
       }
     }
-    if (!parent || !addPane(p)) { if (p.spawnedBy) treeLayout(parent); spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
-    orchLinks.push({ a: paneKey(parent), b: paneKey(p) });
+    if (!parent || !(on ? on.panes.length < 18 && on.panes.push(p) : addPane(p))) { if (p.spawnedBy) treeLayout(parent); spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
+    (on ? (on.links ||= []) : orchLinks).push({ a: paneKey(parent), b: paneKey(p) });
+    if (on && p.kind === "terminal") termStart(p);
     spawnDone.push({ id: s.id });
   }
   orchActive = active;
@@ -2514,8 +2542,8 @@ async function takeSpawns() {
 // Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
 let hotWires = new Set();
 async function pollHandoffs() {
-  if (!orchPanes.some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
-  if (orchLinks.length && Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
+  if (!allPanes().some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
+  if (allLinks().length && Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
   const r = await api("/api/pty").catch(() => null);
   doneCards(r?.sessions || []);
   const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [h.from.includes(":") ? h.from : `terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
@@ -2544,7 +2572,7 @@ function closeCardQuietly(p, why) {
   if (p.run?.session) try { localStorage.setItem(CLOSED_KEY, JSON.stringify([{ pane: { ...p, doneAt: undefined, keep: undefined, collapsed: false }, name: termName(p), at: Date.now() }, ...closedCards().filter((c) => c.pane.id !== p.id)].slice(0, 10))); } catch {}
   termClose(p.id);
   const k = paneKey(p);
-  orchPanes = orchPanes.filter((x) => x !== p);
+  dropTerm(p.id);
   orchLinks = orchLinks.filter((l) => l.a !== k && l.b !== k);
   orchSelected.delete(k);
   if (orchActive === k) orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
@@ -2560,7 +2588,7 @@ function reopenCard(c) {
 function doneCards(sessions) {
   const done = new Map(sessions.map((t) => [t.id, t.done || 0]));
   let changed = false;
-  for (const p of [...orchPanes]) {
+  for (const p of allPanes()) {
     if (p.kind !== "terminal") continue;
     const at = done.get(p.id) || 0;
     if (at && p.doneAt !== at) { p.doneAt = at; p.keep = false; if (orchMode === "free") p.collapsed = true; changed = true; }
@@ -2873,13 +2901,13 @@ function fleetItems() {
       tui: !gone && f.state === "done" && S.runners?.find((r) => r.id === "claude")?.tui ? { key: f.key, agent: "claude" } : null,
     });
   }
-  for (const p of orchPanes) {
+  for (const p of allPanes()) {
     if (p && p.kind === "terminal") {
       const what = p.run ? runnerName(p.run.agent) || "Agent" : p.shell || "shell";
       items.push({
         kind: "terminal", id: p.id, agent: "terminal", ic: "terminal",
         title: p.run ? `${what} TUI` : `Terminal (${what})`,
-        sub: shortCwd(p.cwd || orchCwd || ""),
+        sub: [shortCwd(p.cwd || orchCwd || ""), hiddenOn(p)?.name].filter(Boolean).join(" · "),
         group: "active", dot: "run", badge: what, peach: true, needs: "",
       });
     }
@@ -3391,6 +3419,7 @@ function agentsBody() {
         <div class="orch-plane" id="orch-plane"></div>
         <nav class="cv-island cv-tl" aria-label="Canvas menu">
           <button type="button" class="cv-tl-btn" data-act="cv-menu" title="Menu: search, capture, layout" aria-label="Menu">${icon("menu", 18)}</button>
+          <button type="button" class="cv-tl-btn cv-name" id="cv-name" data-act="cv-canvases" title="Canvases: switch, new, rename"><span>${esc(canvases.find((c) => c.id === canvasId)?.name)}</span></button>
         </nav>
         <div class="cv-island orch-hud" id="orch-hud" role="toolbar" aria-label="Canvas tools"></div>
         <div class="cv-br-row">
@@ -3418,12 +3447,12 @@ function agentsBody() {
   pill?.classList.toggle("wait", waiting > 0);
   if (fleetWrap) fleetWrap.classList.toggle("float", orchRailMode === "float");
   if (fleetEl) fleetEl.classList.toggle("floating", orchRailMode === "float");
-  const pinnedKeys = new Set(orchPanes.map(paneKey));
+  const pinnedKeys = new Set(allPanes().map(paneKey));
   // The sessions, grouped by what they need from you, and one search over them.
   const fq = $("#orch-fq");
   if (fq && !fq.oninput) { fq.value = orchNoteQ; fq.oninput = () => { orchNoteQ = fq.value; agentsBody(); }; }
   const q = fold(orchNoteQ.trim());
-  const tuiOn = (it) => it.tui && orchPanes.some((p) => p.kind === "terminal" && p.run && ((it.tui.task && p.run.task === it.tui.task) || (it.tui.key && p.run.key === it.tui.key)));
+  const tuiOn = (it) => it.tui && allPanes().some((p) => p.kind === "terminal" && p.run && ((it.tui.task && p.run.task === it.tui.task) || (it.tui.key && p.run.key === it.tui.key)));
   const row = (it) => {
     const k = paneKey(it), on = pinnedKeys.has(k) || tuiOn(it);
     const x = it.kind === "terminal" ? `data-act="term-close-session" data-id="${esc(it.id)}" title="Close this terminal"`
@@ -4101,6 +4130,7 @@ function paneMenu(key, cx, cy) {
     { label: "Rename…", ic: "edit", run: () => renamePane(p) },
     free && { label: p.collapsed ? "Expand" : "Minimize", ic: "fold", run: () => ACTIONS["orch-collapse"]({ dataset: { key } }) },
     { label: orchMax === key ? "Restore" : "Maximize", ic: "max", kbd: "Ctrl+Alt+Enter", run: () => ACTIONS["orch-max"]({ dataset: { key } }) },
+    canvases.length > 1 && { label: "Move to canvas", ic: "grid", sub: canvases.filter((c) => c.id !== canvasId).map((c) => ({ label: c.name, run: () => moveToCanvas(key, c.id) })) },
     free && others.length && { label: "Give context to", ic: "link", sub: others.map((o) => ({ label: paneLabel(o), on: orchLinks.some((l) => l.a === key && l.b === paneKey(o)), run: () => toggleLink(key, paneKey(o)) })) },
     orchLinks.some((l) => l.a === key || l.b === key) && { label: "Remove its links", ic: "gap", run: () => { orchLinks = orchLinks.filter((l) => l.a !== key && l.b !== key); saveCanvas(); orchSigs.clear(); orchPaint(true); } },
     "-",
@@ -4109,6 +4139,79 @@ function paneMenu(key, cx, cy) {
     free && { label: p.locked ? "Unlock" : "Lock in place", ic: "lock", run: () => { p.locked = !p.locked; saveCanvas(); orchPaint(); } },
     "-",
     { label: "Close", ic: "trash", danger: true, kbd: "Ctrl+Alt+W", run: () => ACTIONS["orch-unpin"]({ dataset: { key } }) },
+  ]);
+}
+// Puts the shown canvas (cards, wires, view, drawing) back in its entry and brings another in. No card closes: a terminal
+// that goes keeps its PTY and its xterm (terms) and shows again as it was.
+function switchCanvas(id) {
+  const cur = canvases.find((c) => c.id === canvasId), next = canvases.find((c) => c.id === id);
+  if (!next || next === cur) return;
+  stopGlide(); endDraw(); ctxClose();
+  Object.assign(cur, { panes: orchPanes, links: orchLinks, panX: orchPanX, panY: orchPanY, zoom: orchZoom, active: orchActive, max: orchMax, sketch: sketchEls });
+  ({ panes: orchPanes = [], links: orchLinks = [], panX: orchPanX = 24, panY: orchPanY = CANVAS_TOP, zoom: orchZoom = 1, active: orchActive = "", max: orchMax = "", sketch: sketchEls = [] } = next);
+  for (const k of ["panes", "links", "panX", "panY", "zoom", "active", "max", "sketch"]) delete next[k];
+  canvasId = id; orchSelected.clear(); orchSigs.clear(); mapXf = null;
+  try { localStorage.setItem(SKETCH_KEY, JSON.stringify(sketchEls)); } catch {}
+  saveCanvas();
+  const cv = $("#orch-canvas"), sk = $("#orch-sketch");
+  if (cv) { sk?.unmount?.(); sk?.remove(); $("#orch-sketchbar")?.remove(); addSketchLayer(cv); }
+  paintCanvasName(); updateSelectionUI(); agentsBody();
+}
+// A card on a canvas that isn't showing (from Sessions, a hand-off): its canvas comes in first.
+function showCanvasOf(test) { const c = canvases.find((x) => x.panes?.some(test)); if (c) switchCanvas(c.id); }
+const paintCanvasName = () => { const b = $("#cv-name span"); if (b) b.textContent = canvases.find((c) => c.id === canvasId)?.name || ""; };
+function newCanvas() {
+  const id = `c${Date.now().toString(36)}`;
+  canvases.push({ id, name: `Canvas ${canvases.length + 1}` });
+  switchCanvas(id);
+  renameCanvas();
+}
+function renameCanvas() {
+  const b = $("#cv-name"), c = canvases.find((x) => x.id === canvasId);
+  if (!b || !c) return;
+  const inp = document.createElement("input");
+  inp.className = "cv-rename"; inp.value = c.name; inp.maxLength = 40; inp.setAttribute("aria-label", "Canvas name");
+  b.hidden = true; b.after(inp); inp.focus(); inp.select();
+  let done = false;
+  const end = (save) => {
+    if (done) return;
+    done = true;
+    if (save && inp.value.trim()) { c.name = inp.value.trim(); saveCanvas(); }
+    inp.remove(); b.hidden = false; paintCanvasName();
+  };
+  inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") end(true); if (e.key === "Escape") end(false); };
+  inp.onblur = () => end(true);
+}
+// Only an empty canvas goes (no card, no drawing): deleting never closes a terminal.
+function deleteCanvas() {
+  const gone = canvasId;
+  if (orchPanes.length || sketchEls.length || canvases.length < 2) return;
+  switchCanvas(canvases.find((c) => c.id !== gone).id);
+  canvases = canvases.filter((c) => c.id !== gone);
+  saveCanvas();
+}
+// A card moves with its PTY running; its wires to cards left behind go (a wire is within one canvas).
+function moveToCanvas(key, id) {
+  const p = orchPanes.find((x) => paneKey(x) === key), c = canvases.find((x) => x.id === id);
+  if (!p || !c) return;
+  orchPanes = orchPanes.filter((x) => x !== p);
+  orchLinks = orchLinks.filter((l) => l.a !== key && l.b !== key);
+  delete p.x; delete p.y; delete p.spawnedBy; // placed where you look once that canvas shows (ensurePaneRect), out of any tree
+  (c.panes ||= []).push(p);
+  orchSelected.delete(key);
+  if (orchActive === key) orchActive = "";
+  if (orchMax === key) orchMax = "";
+  saveCanvas(); orchSigs.clear(); updateSelectionUI(); agentsBody();
+  toast(`Moved to ${c.name}`);
+}
+function canvasesMenu(btn) {
+  const empty = !orchPanes.length && !sketchEls.length;
+  ctxAt(btn, [
+    ...canvases.map((c) => ({ label: c.name, ic: "grid", on: c.id === canvasId, run: () => switchCanvas(c.id) })),
+    "-",
+    { label: "New canvas", ic: "plus", run: newCanvas },
+    { label: "Rename…", ic: "edit", run: renameCanvas },
+    canvases.length > 1 && { label: empty ? "Delete this canvas" : "Delete (empty it first)", ic: "trash", danger: true, off: !empty, run: deleteCanvas },
   ]);
 }
 // The ☰ button: everything the page header and the dock held, now that the canvas takes the whole screen.
@@ -5131,6 +5234,7 @@ const ACTIONS = {
     if (!orchDeckOpen && el) el.blur();
   },
   "cv-menu": (el) => mainMenu(el),
+  "cv-canvases": (el) => canvasesMenu(el),
   "orch-deck-show": () => deckShow(),
   "orch-vault-note": () => openVaultNotes(),
   "note-ask": (el) => askAgent(el.dataset.p),
@@ -5234,7 +5338,7 @@ const ACTIONS = {
   },
   "term-close-session": async (el) => {
     const id = el.dataset.id;
-    orchPanes = orchPanes.filter((p) => !(p.kind === "terminal" && p.id === id));
+    dropTerm(id);
     saveCanvas();
     termClose(id);
     agentsBody();
@@ -5325,6 +5429,7 @@ const ACTIONS = {
   "orch-sel": (el) => {
     askWaitNotify(el.dataset.id);
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
+    showCanvasOf((p) => paneKey(p) === k);
     if (orchPanes.some((p) => paneKey(p) === k)) return focusPane(k);
     if (openTui(item)) return;
     addPane(item);
