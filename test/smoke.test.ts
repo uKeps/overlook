@@ -287,6 +287,22 @@ test("effort selection in capture modal and dismiss chat in fleet sidebar", () =
   expect(js).toContain('const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");');
 });
 
+test("terminals an agent spawns hang below it as a tree: centred rows, subtrees side by side", () => {
+  const src = readFileSync(`${ROOT}/app.js`, "utf8").match(/^function treeLayout[\s\S]*?^}/m)![0];
+  const orchPanes: any[] = [], treeLayout = new Function("orchPanes", `${src}; return treeLayout;`)(orchPanes);
+  const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
+  const spawn = (id: string, by: any) => { const c: any = { kind: "terminal", id, spawnedBy: by.id, w: 940, h: 600 }; treeLayout(by, c); orchPanes.push(c); return c; };
+  orchPanes.push(m, { kind: "sticky", id: "1", x: 5000, y: 0, w: 320, h: 220 });
+  const a = spawn("a", m);
+  expect([a.x, a.y]).toEqual([30, 680]); // centred under m
+  const b = spawn("b", m);
+  expect([a.x, b.x, b.y]).toEqual([-460, 520, 680]); // the row stays centred: a moves left
+  const g = spawn("g", a), h = spawn("h", a);
+  // a's children need 1920px, so b moves right; the grandchildren sit centred under a, a row lower
+  expect([a.x, b.x, g.x, h.x, g.y, h.y]).toEqual([-460, 1010, -950, 30, 1360, 1360]);
+  expect([m.x, m.y]).toEqual([0, 0]); // the top card stays put
+});
+
 test("agent CLI commands", () => {
   const run = (cmd: string) => Bun.spawnSync(["bun", "server.ts", cmd], { cwd: ROOT, env: ENV }).stdout.toString();
   expect(run("map")).toContain("3 Concepts/HTTP.md · concept · A stateless");

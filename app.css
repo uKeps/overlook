@@ -2043,6 +2043,9 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 @keyframes cv-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
 .orch-pane.pane-in { animation: pane-in .24s var(--float-ease); }
 @keyframes pane-in { from { opacity: 0; transform: scale(.96); } }
+/* a terminal an agent spawned grows out from under that agent's card to its place in the tree (treeLayout) */
+.orch-pane.pane-sprout { transform-origin: top center; animation: pane-sprout .5s var(--float-ease); }
+@keyframes pane-sprout { from { opacity: 0; transform: translate(var(--sx), var(--sy)) scale(.15); } }
 /* a closed card: a quick fade where it was (orchPaint removes it after) */
 .orch-pane.pane-out { pointer-events: none; animation: pane-out .18s cubic-bezier(.4, 0, 1, 1) forwards; }
 @keyframes pane-out { to { opacity: 0; transform: scale(.96); } }
