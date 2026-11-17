@@ -1437,6 +1437,13 @@ function bindTerminalKeys(st, p) {
     ta.remove();
     st.term.focus?.();
   };
+  // OSC 52: a program in the terminal (Claude Code copying a selection, tmux, vim) sets the clipboard through it.
+  // Writes only: a "?" query, a program asking to read your clipboard, gets no answer.
+  st.term.parser.registerOscHandler(52, (data) => {
+    const b64 = data.slice(data.indexOf(";") + 1);
+    if (b64 && b64 !== "?") try { copySel(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))); } catch {}
+    return true;
+  });
   let pasteSeq = 0, ctrlVPending = false;
   st.el.addEventListener("paste", (e) => {
     pasteSeq++;
