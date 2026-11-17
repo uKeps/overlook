@@ -2540,12 +2540,13 @@ async function takeSpawns() {
   saveCanvas(); orchSigs.clear(); agentsBody();
 }
 // Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
-let hotWires = new Set();
+let hotWires = new Set(), paneCosts = new Map();
 async function pollHandoffs() {
   if (!allPanes().some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
   if (allLinks().length && Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
   const r = await api("/api/pty").catch(() => null);
   doneCards(r?.sessions || []);
+  paneCosts = new Map((r?.sessions || []).filter((t) => t.cost).map((t) => [t.id, t.cost]));
   const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [h.from.includes(":") ? h.from : `terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
@@ -2865,6 +2866,9 @@ async function linkedContext(key, budget) {
   return body || how ? `${body ? `Context from cards linked to this one on the Overlook canvas:\n\n${body}\n\n` : ""}${how}---\n\n` : "";
 }
 const linkCount = (key) => orchLinks.filter((l) => l.b === key).length;
+// A Claude session's cost and lines changed, from its canvas status line. A subscription isn't billed per session: the
+// dollars are what the same tokens would cost on the API.
+const costChip = (c) => c ? `<span class="orch-cost" title="≈ API price of this session (a subscription isn't billed per session) · ${c.added} lines added, ${c.removed} removed">$${c.usd.toFixed(2)}${c.added || c.removed ? ` · +${c.added} −${c.removed}` : ""}</span>` : "";
 
 function fleetItems() {
   const items = [], seen = new Set();
@@ -2885,7 +2889,7 @@ function fleetItems() {
     items.push({
       kind: "agent", id: a.key, agent: a.name, ic,
       title: name, sub: `${a.cwd} · ${duration(a.seconds)}`,
-      group: "active", dot: "", badge: "live", peach: false, needs: "",
+      group: "active", dot: "", badge: "live", peach: false, needs: "", cost: a.cost,
     });
   }
   for (const f of S.background || []) {
@@ -2897,7 +2901,7 @@ function fleetItems() {
       title: f.title, sub: `${gone ? "transcript expired · " : ""}Claude Code · ${f.cwd} · ${ago(f.since)}`,
       group: wait ? "waiting" : act && !gone ? "active" : "done",
       dot: wait ? "run" : f.state === "done" ? "idle" : "",
-      badge: STATE[f.state] || f.state, peach: wait, needs: gone ? "" : f.needs || "",
+      badge: STATE[f.state] || f.state, peach: wait, needs: gone ? "" : f.needs || "", cost: f.cost,
       tui: !gone && f.state === "done" && S.runners?.find((r) => r.id === "claude")?.tui ? { key: f.key, agent: "claude" } : null,
     });
   }
@@ -2908,7 +2912,7 @@ function fleetItems() {
         kind: "terminal", id: p.id, agent: "terminal", ic: "terminal",
         title: p.run ? `${what} TUI` : `Terminal (${what})`,
         sub: [shortCwd(p.cwd || orchCwd || ""), hiddenOn(p)?.name].filter(Boolean).join(" · "),
-        group: "active", dot: "run", badge: what, peach: true, needs: "",
+        group: "active", dot: "run", badge: what, peach: true, needs: "", cost: paneCosts.get(p.id),
       });
     }
   }
@@ -3460,7 +3464,7 @@ function agentsBody() {
     return `<div class="orch-item ${it.group} ${orchActive === k ? "on" : ""} ${on ? "oncanvas" : ""}" draggable="true" data-kind="${it.kind}" data-id="${esc(it.id)}">
       <button type="button" class="orch-item-main" data-act="orch-sel" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${on ? "Show it on the canvas" : "Open it on the canvas"}">
         <span class="fl-dot"></span>
-        <span class="orch-info"><b>${esc(it.title)}</b><small>${esc(it.needs || [on ? "on canvas" : "", it.sub].filter(Boolean).join(" · "))}</small></span>
+        <span class="orch-info"><b>${esc(it.title)}</b><small>${esc(it.needs || [on ? "on canvas" : "", it.sub].filter(Boolean).join(" · "))}${!it.needs && it.cost ? ` · ${costChip(it.cost)}` : ""}</small></span>
       </button>
       <div class="orch-item-actions"><button type="button" class="orch-dismiss-btn" ${x} aria-label="Remove">${icon("x", 11)}</button></div>
     </div>`;
@@ -4434,13 +4438,14 @@ async function orchPaint(force) {
       const cwd = p.cwd || orchCwd || "";
       const title = terms.get(p.id)?.title || (p.run ? runnerName(p.run.agent || p.agent) || "Agent" : cwdLabel(cwd));
       // the title is in the signature: the slim title bar follows what the shell or the agent names the window
-      const chip = gitChip(gitPanes[p.id]);
-      const sig = `terminal|${p.id}|${title}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}|${chip}`;
+      const chip = gitChip(gitPanes[p.id]), cost = costChip(paneCosts.get(p.id));
+      const sig = `terminal|${p.id}|${title}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}|${chip}|${cost}`;
       if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
       orchSigs.set(key, sig);
       card.querySelector(".orch-head").innerHTML = winHead(key, title, "", `${paneBtns}
           ${p.run ? "" : `<button type="button" class="btn orch-icon-btn" data-act="term-launch-app" data-key="${esc(key)}" title="Open this folder in your desktop terminal">${icon("ext", 12)}</button>`}`);
       if (chip) card.querySelector(".win-title").insertAdjacentHTML("afterend", chip);
+      card.querySelector(".win-title b").insertAdjacentHTML("afterend", cost);
       if (termBg) card.style.setProperty("--win-bg", termBg); // the window is the terminal: its Ghostty theme color
       card.querySelector(".orch-needs").innerHTML = "";
       if (p.run) card.querySelector(".orch-msg").placeholder = `Message ${runnerName(p.run.agent) || "the agent"}… Enter sends · linked cards add their context`;
@@ -4470,7 +4475,7 @@ async function orchPaint(force) {
     } else {
       const a = await api(`/api/agent?key=${encodeURIComponent(p.id)}`).catch(() => null);
       if (!a || !card.isConnected) return;
-      const sig = `${a.live}|${a.state}|${a.events.length}|${a.events.at(-1)?.txt?.length || 0}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      const sig = `${a.live}|${a.state}|${a.events.length}|${a.events.at(-1)?.txt?.length || 0}|${costChip(a.cost)}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
       if (!force && (orchSigs.get(key) === sig || selectingIn(card))) return;
       orchSigs.set(key, sig);
       const name = a.title || AGENT_NAME[a.name]?.[0] || a.name;
@@ -4479,6 +4484,7 @@ async function orchPaint(force) {
           ${S.runners?.find((r) => r.process === a.name)?.tui && !a.live && a.resumable !== false ? `<button class="btn orch-open-btn" data-act="pane-tui" data-key="${esc(key)}" data-agent="${esc(a.name)}" title="Continue this session in the agent's own terminal UI">${icon("terminal", 12)} <span class="orch-btn-lbl">TUI</span></button>` : ""}
           ${openButtons(S.runners?.find((r) => r.process === a.name), `data-key="${esc(p.id)}"`, true)}
           <a class="btn orch-icon-btn" href="#/a/${esc(p.id)}" title="Open the session page">${icon("ext", 12)}</a>`);
+      card.querySelector(".win-title b").insertAdjacentHTML("afterend", costChip(a.cost));
       card.querySelector(".orch-needs").innerHTML = a.needs ? `<div class="needs orch-needs-bar"><b>Needs you:</b> <span>${fmt(a.needs)}</span></div>` : "";
       card.querySelector(".orch-msg").placeholder = a.name === "agy" ? "Reply in AGY… Enter sends, Shift+Enter adds a line" : "Reply in background (claude --bg --resume)… Enter sends";
       const feed = card.querySelector(".orch-feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 90;

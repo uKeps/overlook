@@ -1,7 +1,7 @@
 // Boots the server the way a fresh clone does (tracked files only, no .env, no personal config) against the
 // example vault, then walks every endpoint and page the UI relies on. Writes land in a temp copy.
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync, readFileSync, existsSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, rmSync, readFileSync, existsSync, writeFileSync, symlinkSync, utimesSync, readdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -15,6 +15,7 @@ const FAKEBIN = `${ROOT}/fakebin`;
 // HISTFILE: the shells these tests open must not write into the user's shell history.
 const ENV = { ...process.env, HISTFILE: "/dev/null", PATH: `${FAKEBIN}:${process.env.PATH}`, DEFAULT_TERMINAL: "ghostty", TERMINAL_FALLBACK: "kitty", VAULT_DIR: VAULT, VAULT_LANG: "en", PORT: String(PORT), ART_DIR: `${ROOT}/no-art`, FAKE_KEY: "test-key", TRANSCRIBE: `x=$(cat); [ "$x" = bad ] && { echo "out of memory" >&2; exit 1; }; echo "hello from $x"`, TZ: "Etc/UTC" }; // bun test runs in UTC: the server must agree on "today"
 const FAKE_PORT = PORT - 1, FAKE = `http://127.0.0.1:${FAKE_PORT}`; // beside PORT, so TEST_PORT moves both
+const COST_SID = "5e55c057-0000-4000-8000-000000000001";
 const TODAY = new Date().toLocaleDateString("sv");
 let server: ReturnType<typeof Bun.spawn>;
 let fake: ReturnType<typeof Bun.serve>;
@@ -29,6 +30,8 @@ beforeAll(async () => {
   if (existsSync(`${REPO}/node_modules`)) symlinkSync(`${REPO}/node_modules`, `${ROOT}/node_modules`);
   mkdirSync(FAKEBIN);
   for (const t of ["ghostty", "kitty"]) writeFileSync(`${FAKEBIN}/${t}`, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  // A stand-in claude: `claude agents` lists one finished background session (not the user's real ones).
+  writeFileSync(`${FAKEBIN}/claude`, `#!/bin/sh\n[ "$1" = agents ] && echo '[{"kind":"background","id":"5e55c057","sessionId":"${COST_SID}","name":"Costly job","state":"done","cwd":"/tmp","startedAt":1}]'\nexit 0\n`, { mode: 0o755 });
   writeFileSync(`${ROOT}/agents.json`, JSON.stringify([
     { id: "echo", name: "Echo", process: "echo", run: ["echo", "got", "{prompt}", "--model", "{model}", "--effort", "{effort}"], models: ["m1", "m2"], efforts: ["low", "high"], effort: "high" },
     { id: "bare", name: "Bare", run: ["echo", "got", "{prompt}", "--model", "{model}"] },
@@ -2433,6 +2436,32 @@ test("to-dos: add from one typed line, complete a repeating one, delete; Tasks.m
   const del = await (await post("/api/todos/delete", { id })).json();
   expect(del.todos.some((t: any) => t.id === id)).toBe(false);
   expect((await (await fetch(`${BASE}/api/todos`)).json()).todos.length).toBe(del.todos.length);
+});
+
+test("session cost: the canvas status line keeps each session's cost, drops month-old ones, Sessions and the card get it", async () => {
+  const home = `${ROOT}/cost-home`, dir = `${ROOT}/cache/usage/sessions`, old = `${dir}/0000000a-0000-4000-8000-000000000000.json`;
+  mkdirSync(`${home}/.claude`, { recursive: true });
+  writeFileSync(`${home}/.claude/settings.json`, JSON.stringify({ statusLine: { type: "command", command: "cat > /dev/null; echo mine; exit 3" } }));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(old, "{}");
+  utimesSync(old, new Date(Date.now() - 40 * 864e5), new Date(Date.now() - 40 * 864e5));
+  const line = (session_id: string, usd: number) => Bun.spawnSync([`${ROOT}/bin/overlook`, "statusline"], { env: { ...ENV, HOME: home },
+    stdin: new TextEncoder().encode(JSON.stringify({ session_id, cost: { total_cost_usd: usd, total_duration_ms: Date.now(), total_lines_added: 12, total_lines_removed: 3 } })) });
+  const r = line(COST_SID, 1.234);
+  expect(r.stdout.toString().trim()).toBe("mine"); // the user's own line still prints, and its exit code stands
+  expect(r.exitCode).toBe(3);
+  expect(JSON.parse(readFileSync(`${dir}/${COST_SID}.json`, "utf8"))).toEqual({ usd: 1.234, added: 12, removed: 3 });
+  expect(existsSync(old)).toBe(false);
+  line("0000000b-0000-4000-8000-000000000000", 0); // nothing spent yet: no file
+  line("../escape", 5); // not a session id: no file
+  expect(readdirSync(dir)).toEqual([`${COST_SID}.json`]);
+  const bg = (await (await fetch(`${BASE}/api/system`)).json()).background.find((b: any) => b.key === `c:${COST_SID}`);
+  expect(bg.cost).toEqual({ usd: 1.234, added: 12, removed: 3 });
+  expect((await (await fetch(`${BASE}/api/agent?key=c:${COST_SID}`)).json()).cost.usd).toBe(1.234);
+  const costChip = new Function(`return ${readFileSync(`${ROOT}/app.js`, "utf8").match(/const costChip = ([^\n]*);\n/)![1]}`)();
+  expect(costChip(bg.cost)).toContain(">$1.23 · +12 −3<");
+  expect(costChip(bg.cost)).toContain("≈ API price");
+  expect(costChip(undefined)).toBe("");
 });
 
 test("agent usage: the canvas status line keeps the newest limits, still prints the user's own line, /api/usage serves them", async () => {

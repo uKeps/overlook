@@ -14,7 +14,8 @@
 //   overlook browser <cmd> [arg…]    drive the browser card wired to this one: open <url> | read | shot | click <css |
 //                                    text=… | x,y> | type <text> | key <Enter|Tab|…> (open, with none, puts one on the canvas)
 //   overlook statusline               claude's status line on the canvas: keeps the account's rate limits from its stdin in
-//                                    cache/usage/claude.json, then runs the user's own status line so it looks the same
+//                                    cache/usage/claude.json and each session's cost in cache/usage/sessions/, then runs
+//                                    the user's own status line so it looks the same
 //   overlook done [summary…]         your task is finished: the summary goes to the card that gave it, and yours folds
 //   overlook close <card>             close a card you opened (overlook spawn) once its work is in
 //   overlook todo [task…]             add a to-do ("pagar o servidor dia 15 todo mês"), or list today's
@@ -41,7 +42,7 @@ if (cmd === "todo") {
 // claude hands its status line the account's limits; every canvas card does, so a card idle since hours ago would
 // write back old numbers: a window only moves forward (a later reset, or the same one used more), whichever card ran last.
 if (cmd === "statusline") {
-  const { mkdirSync, readFileSync, writeFileSync, renameSync } = await import("node:fs");
+  const { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, statSync, rmSync } = await import("node:fs");
   const input = await Bun.stdin.text(), dir = `${import.meta.dir}/../cache/usage`, file = `${dir}/claude.json`;
   try {
     const rl = JSON.parse(input).rate_limits, old = (() => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return {}; } })();
@@ -51,6 +52,21 @@ if (cmd === "statusline") {
       mkdirSync(dir, { recursive: true });
       writeFileSync(`${file}.${process.pid}`, JSON.stringify({ ...next, at: Date.now() }));
       renameSync(`${file}.${process.pid}`, file); // atomic: the server never reads half a file
+    }
+  } catch {}
+  // The session's cost (≈ API price) and lines changed, for its card and its Sessions row, written when they change; a
+  // new session's first write also drops the files of sessions untouched for 30 days.
+  try {
+    const { session_id: sid, cost: c } = JSON.parse(input), sdir = `${dir}/sessions`, f = `${sdir}/${sid}.json`;
+    if (c?.total_cost_usd > 0 && /^[0-9a-f-]{8,64}$/.test(sid)) {
+      const next = JSON.stringify({ usd: +c.total_cost_usd, added: +c.total_lines_added || 0, removed: +c.total_lines_removed || 0 });
+      const old = (() => { try { return readFileSync(f, "utf8"); } catch { return ""; } })();
+      if (next !== old) {
+        mkdirSync(sdir, { recursive: true });
+        if (!old) for (const n of readdirSync(sdir)) if (Date.now() - (statSync(`${sdir}/${n}`, { throwIfNoEntry: false })?.mtimeMs ?? Date.now()) > 30 * 864e5) rmSync(`${sdir}/${n}`, { force: true });
+        writeFileSync(`${f}.${process.pid}`, next);
+        renameSync(`${f}.${process.pid}`, f);
+      }
     }
   } catch {}
   let line = "";
