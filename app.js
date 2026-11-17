@@ -58,7 +58,7 @@ const I = {
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', type: '<path d="M4 7V4h16v3M9 20h6M12 4v16"/>',
-  clear: '<path d="M4 6h16M7 12h10M10 18h4"/>', map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
+  clear: '<path d="M4 6h16M7 12h10M10 18h4"/>', branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9c0 5-12 3-12 8"/>', map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
   canvasBg: '<circle cx="6" cy="6" r="1.3"/><circle cx="12" cy="6" r="1.3"/><circle cx="18" cy="6" r="1.3"/><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/><circle cx="6" cy="18" r="1.3"/><circle cx="12" cy="18" r="1.3"/><circle cx="18" cy="18" r="1.3"/>',
 };
 const icon = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || I.services}</svg>`;
@@ -2476,6 +2476,20 @@ async function pollHandoffs() {
   const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [h.from.includes(":") ? h.from : `terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
+// Git on terminal cards (branch, changes, the branch's PR and its CI): one request for all of them, every 25 s while the
+// canvas shows, and at once when a terminal comes or goes.
+let gitPanes = {}, gitAt = 0, gitIds = "";
+async function pollGit() {
+  const ids = orchPanes.filter((p) => p.kind === "terminal").map((p) => p.id).join(",");
+  if (document.hidden || !ids || (ids === gitIds && Date.now() - gitAt < 25_000)) return;
+  gitAt = Date.now(); gitIds = ids;
+  const r = await api(`/api/git?panes=${encodeURIComponent(ids)}`).catch(() => null);
+  if (r && JSON.stringify(r) !== JSON.stringify(gitPanes)) { gitPanes = r; orchPaint(); }
+}
+const CI_LABEL = { running: "CI running", passed: "CI passed", failed: "CI failed", merged: "merged", closed: "closed", open: "open" };
+const gitChip = (g) => !g ? "" : `<span class="git-chip">${icon("branch", 11)}<span class="git-br">${esc(g.branch)}</span>`
+  + (g.files ? `<span class="git-diff" title="Uncommitted: ${g.files} file(s), +${g.add} −${g.del} lines">${g.files} file${g.files > 1 ? "s" : ""} <ins>+${g.add}</ins> <del>−${g.del}</del></span>` : "")
+  + (g.pr ? `<a class="git-pr" data-ci="${esc(g.pr.state)}" ${g.pr.url ? `href="${esc(g.pr.url)}" target="_blank" rel="noopener"` : ""} title="Pull request #${esc(g.pr.number)}: ${CI_LABEL[g.pr.state] || esc(g.pr.state)}">#${esc(g.pr.number)} ${CI_LABEL[g.pr.state] || esc(g.pr.state)}</a>` : "") + "</span>";
 // An agent that ran `overlook done` folds to its title bar, dimmed with a check; untouched for 30 min it closes, and
 // stays reopenable from the canvas menu (the card keeps its session, so reopening resumes the conversation). Typing in it,
 // a message to it or expanding it keeps it.
@@ -2882,7 +2896,7 @@ function agents() {
   };
   agentsBody();
   if (afterCanvas) { const make = afterCanvas; afterCanvas = null; make(); } // a hand-off from another page (toCanvas)
-  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); takeSpawns(); }, 2000);
+  orchTimer = setInterval(() => { if (route().pg !== "agents") return clearInterval(orchTimer); orchPaint(); pollHandoffs(); takeSpawns(); pollGit(); }, 2000);
   ambient(art("agents"));
 }
 function renderMultiChips() {
@@ -4258,11 +4272,13 @@ async function orchPaint(force) {
       const cwd = p.cwd || orchCwd || "";
       const title = terms.get(p.id)?.title || (p.run ? runnerName(p.run.agent || p.agent) || "Agent" : cwdLabel(cwd));
       // the title is in the signature: the slim title bar follows what the shell or the agent names the window
-      const sig = `terminal|${p.id}|${title}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      const chip = gitChip(gitPanes[p.id]);
+      const sig = `terminal|${p.id}|${title}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}|${chip}`;
       if (!force && orchSigs.get(key) === sig && card.querySelector(".orch-term-view")) return;
       orchSigs.set(key, sig);
       card.querySelector(".orch-head").innerHTML = winHead(key, title, "", `${paneBtns}
           ${p.run ? "" : `<button type="button" class="btn orch-icon-btn" data-act="term-launch-app" data-key="${esc(key)}" title="Open this folder in your desktop terminal">${icon("ext", 12)}</button>`}`);
+      if (chip) card.querySelector(".win-title").insertAdjacentHTML("afterend", chip);
       if (termBg) card.style.setProperty("--win-bg", termBg); // the window is the terminal: its Ghostty theme color
       card.querySelector(".orch-needs").innerHTML = "";
       if (p.run) card.querySelector(".orch-msg").placeholder = `Message ${runnerName(p.run.agent) || "the agent"}… Enter sends · linked cards add their context`;

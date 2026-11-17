@@ -2005,6 +2005,21 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-pane[data-kind="terminal"] .wl { width: 10px; height: 10px; }
 .orch-plane.free .orch-pane[data-kind="terminal"].collapsed { height: 28px !important; }
 .orch-pane[data-kind="terminal"].collapsed > .orch-head { border-radius: 12px; }
+/* Git in a terminal's title bar: branch, uncommitted changes, the branch's PR and its CI. The title gives way to it, and
+   the branch name to the PR; it takes the pointer (tooltips, the PR link), a drag on it still moves the card. */
+.orch-head:has(> .git-chip) > .win-title { position: static; flex: 1 1 0; min-width: 40px; }
+/* Grows against the zoom (like --bw) so it stays readable on screen as the canvas zooms out, up to what the bar holds. */
+.git-chip { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: .7em; font: 500 clamp(11px, calc(11px / var(--z, 1)), 18px) var(--body); color: var(--muted); white-space: nowrap; position: relative; z-index: 3; }
+.git-chip svg { flex: none; width: 1em; height: 1em; margin-right: -.35em; }
+.git-br { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.git-diff, .git-pr { flex: none; }
+.git-diff ins, .git-diff del { text-decoration: none; font: 500 .95em var(--mono); }
+.git-diff ins { color: var(--ok); } .git-diff del { color: var(--bad); }
+.git-pr { padding: .1em .6em; border-radius: .5em; color: var(--muted); background: color-mix(in srgb, currentColor 14%, transparent); text-decoration: none; }
+.git-pr::before { content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .45em; border-radius: 50%; background: currentColor; vertical-align: .1em; }
+.git-pr[href]:hover { background: color-mix(in srgb, currentColor 26%, transparent); }
+.git-pr[data-ci="running"] { color: var(--warn); } .git-pr[data-ci="passed"] { color: var(--ok); }
+.git-pr[data-ci="failed"] { color: var(--bad); } .git-pr[data-ci="merged"] { color: var(--p3); }
 /* the window surface: the theme background at 95% over the blur; the text stays at full strength */
 .orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
 .orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 0 0 12px 12px; }
