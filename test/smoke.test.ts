@@ -317,6 +317,14 @@ test("a browser or note an agent opened goes with it, unless another terminal is
   expect(all.filter(leftBehind(all, links)).map((p) => p.id)).toEqual(["1", "br3", "br6"]); // a browser goes even when wired: only a note is context
 });
 
+test("overlook draw lands beside its card, below what's already there", () => {
+  const js = readFileSync(`${ROOT}/app.js`, "utf8"), clearSpot = new Function(`${js.match(/^function clearSpot\([\s\S]*?^}/m)![0]}; return clearSpot;`)();
+  const b = { x: 1060, y: 0, w: 400, h: 300 };
+  expect(clearSpot(b, [{ x: 0, y: 0, w: 1000, h: 600 }])).toEqual(b); // only its own card, to the left
+  const first = { x: 1060, y: 0, w: 500, h: 200 }, note = { x: 1040, y: 280, w: 320, h: 220 };
+  expect(clearSpot(b, [first, note])).toEqual({ ...b, y: 540 }); // past the earlier drawing, then the note under it
+});
+
 test("terminals an agent spawns hang below it as a tree: centred rows, subtrees side by side", () => {
   const orchPanes: any[] = [], { treeLayout } = layoutFns(orchPanes);
   const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
