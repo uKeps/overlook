@@ -381,7 +381,7 @@ async function fakeProvider(req: Request) {
     }
   }
   const first = typeof body.messages.at(-1).content === "string";
-  return Response.json({ id: "msg_1", type: "message", role: "assistant", model: body.model, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 },
+  return Response.json({ id: "msg_1", type: "message", role: "assistant", model: body.model, stop_sequence: null, usage: { input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: 2000, cache_read_input_tokens: 10000 },
     ...(first
       ? { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "write_note", input: { path: "1 Inbox/From claude.md", content: "# From claude\n" } }] }
       : { stop_reason: "end_turn", content: [{ type: "text", text: "done" }] }) });
@@ -602,6 +602,9 @@ test("a Claude agent runs the tool loop through the SDK", async () => {
   expect([calls[0].body.model, calls[0].body.output_config.effort]).toEqual(["claude-opus-5-5", "low"]);
   expect(calls[0].body.tools.every((x: any) => x.strict)).toBe(true);
   expect(calls[1].body.messages.at(-1).content[0]).toMatchObject({ type: "tool_result", tool_use_id: "t1" });
+  // ≈ API price on Opus 5.5, per reply: 1000×$4 + 2000×$4×1.25 (cache write) + 10000×$0.20 (cache read) + 500×$20 per MTok = $0.026
+  expect(t.cost.usd).toBeCloseTo(0.052, 6);
+  expect((await (await fetch(`${BASE}/api/system`)).json()).tasks.find((x: any) => x.id === t.id).cost).toEqual(t.cost);
 });
 
 test("open in… launches the agent's own command for a task session", async () => {

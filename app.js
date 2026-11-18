@@ -2891,7 +2891,7 @@ function fleetItems() {
       kind: "task", id: t.id, agent: t.agent, ic: "agents",
       title: t.routine ? `${ROUTINES[t.routine]?.[0] || t.routine} routine` : t.prompt,
       sub: [taskMeta(t), folder, ago(Date.parse(t.start))].filter(Boolean).join(" · "),
-      group: !t.end ? "active" : "done", dot: liveClass(t), badge: taskStatus(t), peach: !t.end, needs: "",
+      group: !t.end ? "active" : "done", dot: liveClass(t), badge: taskStatus(t), peach: !t.end, needs: "", cost: t.cost,
       tui: S.runners?.find((r) => r.id === t.agent)?.tui && t.session && t.end ? { task: t.id, agent: t.agent } : null,
     });
   }
@@ -4470,7 +4470,7 @@ async function orchPaint(force) {
       if (!t || !card.isConnected) return;
       const qInfo = detectQuota(t);
       const qSig = qInfo ? `${qInfo.exhausted}|${qInfo.model}|${qInfo.resetsIn}` : "";
-      const sig = `${t.end}|${t.ok}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${qSig}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
+      const sig = `${t.end}|${t.ok}|${t.events.length}|${t.events.at(-1)?.txt?.length || 0}|${qSig}|${costChip(t.cost)}|${orchPanes.length}|${orchMax}|${isFree}|${inCount}|${outCount}`;
       if (!force && (orchSigs.get(key) === sig || selectingIn(card))) return;
       orchSigs.set(key, sig);
       const folder = t.cwd ? shortCwd(t.cwd) : "";
@@ -4480,6 +4480,7 @@ async function orchPaint(force) {
           ${S.runners?.find((r) => r.id === t.agent)?.tui && t.session && t.end ? `<button class="btn orch-open-btn" data-act="pane-tui" data-key="${esc(key)}" data-agent="${esc(t.agent)}" title="Continue this session in the agent's own terminal UI">${icon("terminal", 12)} <span class="orch-btn-lbl">TUI</span></button>` : ""}
           ${openButtons(S.runners?.find((r) => r.id === t.agent), `data-task="${esc(t.id)}"`, !!t.session)}
           <a class="btn orch-icon-btn" href="#/t/${esc(t.id)}" title="Open the task page">${icon("ext", 12)}</a>`);
+      card.querySelector(".win-title b").insertAdjacentHTML("afterend", costChip(t.cost));
       card.querySelector(".orch-needs").innerHTML = renderQuotaBanner(t, key);
       card.querySelector(".orch-msg").placeholder = !t.end ? "Running — wait or Stop to send a follow-up…" : "Send a follow-up in this workspace… Enter sends";
       const feed = card.querySelector(".orch-feed"), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 90;

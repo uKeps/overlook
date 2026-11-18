@@ -24,7 +24,7 @@ export type Agent = {
 };
 type Model = { id: string; label?: string; efforts?: string[] };
 export type QuotaInfo = { exhausted: boolean; resetsIn?: string; message: string };
-type Task = { id: string; agent: string; model: string; effort: string; session?: string; cwd: string; role?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void; quota?: QuotaInfo };
+type Task = { id: string; agent: string; model: string; effort: string; session?: string; cwd: string; role?: string; prompt: string; routine?: string; start: string; end?: string; ok?: boolean; events: Event[]; stop?: () => void; quota?: QuotaInfo; cost?: Cost };
 
 // Without agents.json: the CLIs Overlook always knew about. A CLI shows up as runnable only when it is on the PATH.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -45,6 +45,15 @@ const TIMEOUT = 30 * 60_000;
 const ANTHROPIC_MODELS: Model[] = [
   { id: "claude-opus-5-5", label: "Claude Opus 5.5" }, { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" }, { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
 ];
+// ≈ API list price, $ per million tokens: input, output, cache read (a 5-minute cache write is 1.25× input).
+// shortcut: ANTHROPIC_MODELS only and no Haiku >100K-token tier; a reply from a model not listed (a fallback, one of
+// agents.json's own) is priced as the model asked for, or not at all. Add a row when ANTHROPIC_MODELS gains a model.
+const PRICES: Record<string, number[]> = { "claude-opus-5-5": [4, 20, 0.2], "claude-sonnet-5-5": [2, 10, 0.1], "claude-haiku-5-5": [0.1, 0.5, 0.01] };
+// A task's cost in a Claude session's shape (server.ts sessionCost), so its card and Sessions row show it the same way.
+type Cost = { usd: number; added: number; removed: number };
+const addCost = (cost: Cost | undefined, p: number[] | undefined, u: any): Cost | undefined => !p || !u ? cost : {
+  usd: (cost?.usd ?? 0) + ((u.input_tokens ?? 0) * p[0] + (u.cache_creation_input_tokens ?? 0) * p[0] * 1.25 + (u.cache_read_input_tokens ?? 0) * p[2] + (u.output_tokens ?? 0) * p[1]) / 1e6,
+  added: 0, removed: 0 };
 // Models that take the server-side refusal fallback ("default" picks the substitute by refusal category).
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"]);
 
@@ -1145,6 +1154,7 @@ async function anthropic(a: Agent, root: string, task: Task, prompt: string, sig
       model, max_tokens: 16000, system: system(root, task.role), tools, messages,
       thinking: { type: "adaptive" }, output_config: { effort: task.effort as any }, cache_control: { type: "ephemeral" }, ...fallback,
     }, { signal });
+    task.cost = addCost(task.cost, PRICES[r.model] ?? PRICES[model], r.usage); // a follow-up adds to it
     messages.push({ role: "assistant", content: r.content }); // whole content, thinking blocks included
     for (const b of r.content) if (b.type === "text" && b.text.trim()) log(task, { t: "text", txt: clip(b.text.trim(), MESSAGE) });
     if (r.stop_reason === "refusal") { log(task, { t: "error", txt: `declined${r.stop_details?.category ? ` (${r.stop_details.category})` : ""}` }); return false; }
