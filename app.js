@@ -2389,7 +2389,7 @@ function slidePanes() {
 }
 // The terminals an agent spawned hang below it like a tree: each card's children in one row under it, centred, every
 // subtree as wide as it needs so cousins don't overlap. The top card stays put. `born` is a card about to be added.
-// shortcut: cards outside the tree aren't avoided, so a branch can land on one; place around them if that bites.
+// Cards outside the tree that are in its way are pushed aside (pushAside).
 function treeLayout(card, born) {
   const base = hiddenOn(card)?.panes || orchPanes, panes = born ? [...base, born] : base; // the tree is on the card's own canvas
   const kids = (p) => p.kind === "terminal" ? panes.filter((q) => q.spawnedBy === p.id) : [];
@@ -2403,6 +2403,42 @@ function treeLayout(card, born) {
     for (const c of ks) { c.x = Math.round(x + (width.get(c) - c.w) / 2); c.y = p.y + p.h + 80; put(c); x += width.get(c) + 40; }
   };
   measure(root); put(root);
+  pushAside(panes, [...width.keys()], "u"); // width holds every card of the tree
+}
+// Cards in `fixed` keep their place; any other card within 40px of one slides out of their way, the shortest way clear
+// of all of them but never `back` (towards where they grew from), and takes the cards it spawned along, so its own tree
+// keeps its shape. A card pushed pushes on whatever it then covers, the same way (a chain). The callers' slidePanes
+// slides them.
+function pushAside(panes, fixed, back) {
+  const still = new Set(fixed), way = new Map(), on = (q) => typeof q.x === "number";
+  // how far b must go each way to sit 40px clear of a
+  const gap = { r: (a, b) => a.x + a.w + 40 - b.x, l: (a, b) => b.x + b.w + 40 - a.x, d: (a, b) => a.y + a.h + 40 - b.y, u: (a, b) => b.y + b.h + 40 - a.y };
+  const near = (a, b) => Object.values(gap).every((f) => f(a, b) > 0);
+  const step = (b, d, s) => ({ ...b, x: b.x + (d === "r" ? s : d === "l" ? -s : 0), y: b.y + (d === "d" ? s : d === "u" ? -s : 0) });
+  // how far box must go way d to clear every fixed card, not only the one it's on (else it's pushed along a whole row)
+  const out = (box, d) => { let s = 0; for (let n = 0, f; n < 50 && (f = fixed.find((f) => near(f, step(box, d, s)))); n++) s += gap[d](f, step(box, d, s)); return s; };
+  const below = (q) => { const t = [q]; for (let i = 0; i < t.length; i++) if (t[i].kind === "terminal") t.push(...panes.filter((k) => k.spawnedBy === t[i].id && !t.includes(k))); return t; };
+  for (let n = 0, moved = true; moved && n < 50; n++) {
+    moved = false;
+    for (const c of panes) for (const q of panes) {
+      if (!(still.has(c) || way.has(c)) || q === c || still.has(q) || !on(q) || !near(c, q)) continue;
+      const unit = below(q).filter((t) => on(t) && !still.has(t));
+      if (unit.includes(c)) continue; // c is one of q's own cards
+      const x = Math.min(...unit.map((t) => t.x)), y = Math.min(...unit.map((t) => t.y));
+      const box = { x, y, w: Math.max(...unit.map((t) => t.x + t.w)) - x, h: Math.max(...unit.map((t) => t.y + t.h)) - y };
+      const d = way.get(q) || way.get(c) || ["r", "l", "d", "u"].filter((k) => k !== back).sort((a, b) => out(box, a) - out(box, b))[0];
+      const by = step({ x: 0, y: 0 }, d, still.has(c) ? out(box, d) : gap[d](c, box));
+      for (const t of unit) { t.x += by.x; t.y += by.y; way.set(t, d); }
+      moved = true;
+    }
+  }
+}
+// A note or browser an agent opens goes right of it, below the ones it opened before; any other card there is pushed aside.
+function placeBeside(parent, p, panes) {
+  p.x = parent.x + parent.w + 40; p.y = parent.y;
+  const hit = () => panes.find((q) => q.openedBy === parent.id && typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
+  for (let n = 0, q; n < 40 && (q = hit()); n++) p.y = q.y + q.h + 40;
+  pushAside([...panes, p], [p, parent], "l");
 }
 function fitCanvasView() {
   const canvas = $("#orch-canvas");
@@ -2501,7 +2537,7 @@ function addPane(item, x, y) {
 }
 // Cards an agent asked for (`overlook spawn` / `overlook note`, see takeSpawns in tasks.ts), wired to the card that asked,
 // without taking the focus; the server hears how it went on the next poll. Terminals hang below it (treeLayout) and
-// grow out of it; notes and browsers open right of it, below the others there.
+// grow out of it; notes and browsers open right of it (placeBeside).
 let spawnDone = [];
 async function takeSpawns() {
   const all = allPanes(), panes = all.filter((p) => p.kind === "terminal").map((p) => p.id);
@@ -2531,7 +2567,7 @@ async function takeSpawns() {
       sketchFromMermaid(s.text, parent).then((why) => spawnDone.push({ id: s.id, ...(why ? { why } : {}) }));
       continue;
     }
-    const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text }
+    const p = s.kind === "sticky" ? { kind: "sticky", id: String(++orchSeq), text: s.text, openedBy: s.parent }
       : s.kind === "browser" ? { kind: "browser", id: `br${++orchSeq}`, url: s.url, openedBy: s.parent }
       : { kind: "terminal", id: s.id, cwd: s.cwd, ...(s.kind === "agent" ? { run: newTuiRun(s.agent, s.prompt) } : { shell: prefShell || "" }) };
     if (parent && typeof parent.x === "number") {
@@ -2541,11 +2577,7 @@ async function takeSpawns() {
         p.spawnedBy = parent.id;
         treeLayout(parent, p); slidePanes();
         bornFrom.set(paneKey(p), { x: parent.x + parent.w / 2, y: parent.y + parent.h });
-      } else {
-        p.x = parent.x + parent.w + 40; p.y = parent.y;
-        const hit = () => (on?.panes || orchPanes).find((q) => typeof q.x === "number" && p.x < q.x + q.w + 24 && p.x + p.w + 24 > q.x && p.y < q.y + q.h + 24 && p.y + p.h + 24 > q.y);
-        for (let n = 0, q; n < 40 && (q = hit()); n++) p.y = q.y + q.h + 40;
-      }
+      } else { placeBeside(parent, p, on?.panes || orchPanes); slidePanes(); }
     }
     if (!parent || !(on ? on.panes.length < 18 && on.panes.push(p) : addPane(p))) { if (p.spawnedBy) treeLayout(parent); spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
     (on ? (on.links ||= []) : orchLinks).push({ a: paneKey(parent), b: paneKey(p) });
