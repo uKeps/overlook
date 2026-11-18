@@ -290,9 +290,15 @@ test("effort selection in capture modal and dismiss chat in fleet sidebar", () =
   expect(js).toContain('const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");');
 });
 
+// treeLayout and the card placement it shares with notes and browsers (pushAside, placeBeside), out of app.js
+const layoutFns = (orchPanes: any[], hiddenOn: (p: any) => any = () => undefined) => {
+  const js = readFileSync(`${ROOT}/app.js`, "utf8");
+  const src = ["treeLayout", "pushAside", "placeBeside"].map((n) => js.match(new RegExp(`^function ${n}\\([\\s\\S]*?^}`, "m"))![0]).join("\n");
+  return new Function("orchPanes", "hiddenOn", `${src}; return { treeLayout, placeBeside };`)(orchPanes, hiddenOn);
+};
+
 test("terminals an agent spawns hang below it as a tree: centred rows, subtrees side by side", () => {
-  const src = readFileSync(`${ROOT}/app.js`, "utf8").match(/^function treeLayout[\s\S]*?^}/m)![0];
-  const orchPanes: any[] = [], treeLayout = new Function("orchPanes", "hiddenOn", `${src}; return treeLayout;`)(orchPanes, () => undefined);
+  const orchPanes: any[] = [], { treeLayout } = layoutFns(orchPanes);
   const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
   const spawn = (id: string, by: any) => { const c: any = { kind: "terminal", id, spawnedBy: by.id, w: 940, h: 600 }; treeLayout(by, c); orchPanes.push(c); return c; };
   orchPanes.push(m, { kind: "sticky", id: "1", x: 5000, y: 0, w: 320, h: 220 });
@@ -310,11 +316,55 @@ test("terminals an agent spawns hang below it as a tree: centred rows, subtrees 
   expect([b.x, b.y]).toEqual([30, 680]);
 });
 
+test("a spawn tree's row lands in its place and pushes the cards in its way aside, in a chain, each keeping its own tree", () => {
+  const orchPanes: any[] = [], { treeLayout } = layoutFns(orchPanes);
+  const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
+  const note = { kind: "sticky", id: "1", x: 900, y: 700, w: 320, h: 220 }; // under m, where its row goes
+  // another agent's tree just right of the note: the note, pushed, pushes it on
+  const t = { kind: "terminal", id: "t", x: 1300, y: 700, w: 940, h: 600 }, tk = { kind: "terminal", id: "tk", spawnedBy: "t", x: 1300, y: 1380, w: 940, h: 600 };
+  const far = { kind: "sticky", id: "2", x: 5000, y: 680, w: 320, h: 220 }; // level with the row, but off to the side
+  orchPanes.push(m, note, t, tk, far);
+  const spawn = (id: string, by: any) => { const c: any = { kind: "terminal", id, spawnedBy: by.id, w: 940, h: 600 }; treeLayout(by, c); orchPanes.push(c); return c; };
+  const a = spawn("a", m), b = spawn("b", m);
+  expect([a.x, a.y, b.x, b.y]).toEqual([-460, 680, 520, 680]); // where they'd be with nothing in the way
+  expect([note.x, note.y]).toEqual([1500, 700]); // the note slid right of b, the shortest way out
+  expect([t.x, t.y, tk.x, tk.y]).toEqual([1860, 700, 1860, 1380]); // the note pushed t on, and t took its child along
+  expect([m.x, m.y, far.x, far.y]).toEqual([0, 0, 5000, 680]);
+  const g = spawn("g", a);
+  expect([g.x, g.y]).toEqual([-460, 1360]);
+});
+
+test("a card in a row's way goes the shortest way clear of the whole row, not into the next card of it", () => {
+  const orchPanes: any[] = [], { treeLayout } = layoutFns(orchPanes);
+  // the note sits where an agent's 4th note goes (right of it, 3 below), its row is 3 wide: the note is only on c
+  const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 940, h: 600 }, note = { kind: "sticky", id: "1", x: 980, y: 780, w: 320, h: 220 };
+  orchPanes.push(m, note);
+  for (const id of ["a", "b", "c"]) orchPanes.push({ kind: "terminal", id, spawnedBy: "m", w: 940, h: 600 });
+  treeLayout(m); // the whole row at once (as when it regrows): c lands on the note
+  // clear of c it'd be 360px left, but that's on b: down below the row is shorter than past all of it
+  expect([note.x, note.y]).toEqual([980, 1320]);
+});
+
+test("a note or browser an agent opens goes right of it, below the ones it opened, and pushes the rest aside", () => {
+  const orchPanes: any[] = [], { placeBeside } = layoutFns(orchPanes);
+  const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
+  // a terminal right where the browser goes, with a card it spawned below it
+  const s = { kind: "terminal", id: "s", x: 1040, y: 0, w: 940, h: 600 }, sk = { kind: "terminal", id: "sk", spawnedBy: "s", x: 1040, y: 680, w: 940, h: 600 };
+  orchPanes.push(m, s, sk);
+  const open = (p: any) => { placeBeside(m, p, orchPanes); orchPanes.push(p); return p; };
+  const b1 = open({ kind: "browser", id: "br1", openedBy: "m", w: 960, h: 640 });
+  expect([b1.x, b1.y]).toEqual([1040, 0]); // beside m, not below the terminal
+  expect([s.x, s.y, sk.x, sk.y]).toEqual([1040, 680, 1040, 1360]); // pushed down with its child
+  const b2 = open({ kind: "browser", id: "br2", openedBy: "m", w: 960, h: 640 });
+  expect([b2.x, b2.y, b1.y]).toEqual([1040, 680, 0]); // below the one m opened before, which stays
+  expect([s.y, sk.y]).toEqual([1360, 2040]);
+  expect([m.x, m.y]).toEqual([0, 0]);
+});
+
 test("a card spawned on a canvas not showing joins the tree there, among that canvas's cards only", () => {
-  const src = readFileSync(`${ROOT}/app.js`, "utf8").match(/^function treeLayout[\s\S]*?^}/m)![0];
   // the shown canvas holds a stray card that claims the same parent: a layout over every canvas would move it
   const stray = { kind: "terminal", id: "z", spawnedBy: "m", x: 7, y: 7, w: 940, h: 600 }, other = { panes: [] as any[] };
-  const treeLayout = new Function("orchPanes", "hiddenOn", `${src}; return treeLayout;`)([stray], (p: any) => (other.panes.includes(p) ? other : undefined));
+  const { treeLayout } = layoutFns([stray], (p: any) => (other.panes.includes(p) ? other : undefined));
   const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 }, a = { kind: "terminal", id: "a", spawnedBy: "m", x: 30, y: 680, w: 940, h: 600 };
   other.panes.push(m, a);
   const b: any = { kind: "terminal", id: "b", spawnedBy: "m", w: 940, h: 600 };
