@@ -1266,6 +1266,8 @@ function syncWires(force) {
   const links = allLinks(), panes = allPanes();
   const wires = links.map((l) => [term(l.a), term(l.b)]).filter(([a, b]) => a && b);
   const names = Object.fromEntries(panes.filter((p) => p.kind === "terminal").map((p) => [p.id, termName(p)]));
+  // who opened whom (overlook spawn): the server forgets it on a restart, and overlook done / close need it
+  const parents = Object.fromEntries(panes.filter((p) => p.kind === "terminal" && p.spawnedBy).map((p) => [p.id, p.spawnedBy]));
   // Whatever is wired to a terminal (either way round: notes, vault notes, other terminals) is context for the agent in
   // it; the server hands it over (deliverWired in tasks.ts).
   const ctx = {};
@@ -1279,10 +1281,10 @@ function syncWires(force) {
   // Each canvas's drawing with the terminals on it: `overlook sketch` answers with the caller's own canvas.
   const sketch = canvases.map((c) => (c.id === canvasId ? [orchPanes, sketchEls] : [c.panes || [], c.sketch || []]))
     .map(([ps, els]) => ({ text: sketchText(els), terms: ps.filter((p) => p.kind === "terminal").map((p) => p.id) })).filter((k) => k.text);
-  const body = JSON.stringify({ wires, names, ctx, sketch });
+  const body = JSON.stringify({ wires, names, ctx, sketch, parents });
   if (body === wiresSent && !force) return;
   wiresSent = body; wiresAt = Date.now();
-  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx, sketch }).catch(() => { wiresSent = ""; });
+  api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx, sketch, parents }).catch(() => { wiresSent = ""; });
 }
 // A TUI's window title leads with a spinner or status glyph ("✳ Fix the build"): the name is what follows it.
 const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{L}\p{N}]+/u, "") || (p.run ? runnerName(p.run.agent) : `Terminal ${p.shell || ""}`.trim());

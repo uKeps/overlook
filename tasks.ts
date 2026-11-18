@@ -729,25 +729,28 @@ export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("ove
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
 type Ctx = { key: string; name: string; text?: string; path?: string; term?: string; browser?: string; url?: string };
-const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; ctx: Map<string, Ctx[]>; sketch: { text: string; terms: Set<string> }[]; at: number }>(), sent = new Map<string, number[]>();
+const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; ctx: Map<string, Ctx[]>; sketch: { text: string; terms: Set<string> }[]; parents: Map<string, string>; at: number }>(), sent = new Map<string, number[]>();
 export const handoffs: { from: string; to: string; at: number }[] = [];
 const pair = (a: string, b: string) => [a, b].sort().join("|");
 const live = () => [...canvases.values()].filter((c) => Date.now() - c.at < 90_000);
-export function setWires(client: unknown, list: unknown, titles: unknown, ctx?: unknown, sketch?: unknown) {
+export function setWires(client: unknown, list: unknown, titles: unknown, ctx?: unknown, sketch?: unknown, parents?: unknown) {
   if (typeof client !== "string" || !/^[\w-]{1,64}$/.test(client)) return false;
   // One sketch per named canvas, with the terminals on it: `overlook sketch` reads the caller's own canvas.
   const sketches = Array.isArray(sketch) ? sketch.filter((k) => typeof k?.text === "string" && Array.isArray(k.terms)).slice(0, 50) : [];
-  const c = { wires: new Set<string>(), names: new Map<string, string>(), ctx: new Map<string, Ctx[]>(), sketch: sketches.map((k) => ({ text: k.text.slice(0, 8000), terms: new Set<string>(k.terms.filter((x: unknown) => typeof x === "string")) })), at: Date.now() };
+  const c = { wires: new Set<string>(), names: new Map<string, string>(), ctx: new Map<string, Ctx[]>(), sketch: sketches.map((k) => ({ text: k.text.slice(0, 8000), terms: new Set<string>(k.terms.filter((x: unknown) => typeof x === "string")) })), parents: new Map<string, string>(), at: Date.now() };
   if (ctx && typeof ctx === "object") for (const [id, items] of Object.entries(ctx)) if (Array.isArray(items))
     c.ctx.set(id, items.filter((i) => typeof i?.key === "string").slice(0, 8).map((i) => ({ key: i.key.slice(0, 120), name: String(i.name ?? "").slice(0, 80),
       ...(typeof i.term === "string" ? { term: i.term } : typeof i.browser === "string" ? { browser: i.browser.slice(0, 80), url: safeUrl(i.url) }
         : typeof i.path === "string" ? { path: i.path } : { text: String(i.text ?? "").slice(0, 8000) }) })));
   if (Array.isArray(list)) for (const w of list) if (Array.isArray(w) && typeof w[0] === "string" && typeof w[1] === "string") c.wires.add(pair(w[0], w[1]));
   if (titles && typeof titles === "object") for (const [k, v] of Object.entries(titles)) if (typeof v === "string") c.names.set(k, v.slice(0, 80));
+  if (parents && typeof parents === "object") for (const [k, v] of Object.entries(parents)) if (typeof v === "string") c.parents.set(k, v);
   canvases.set(client, c);
   return true;
 }
 const nameOf = (t: Pty) => live().map((c) => c.names.get(t.id)).find(Boolean) || t.title;
+// The card that opened this one (overlook spawn): kept here, and by the canvas (spawnedBy), which outlives a restart.
+const parentOf = (id: string) => kids.get(id) ?? live().map((c) => c.parents.get(id)).find(Boolean);
 const callerOf = (from: unknown, token: unknown) => { const t = typeof from === "string" ? ptys.get(from) : undefined; return t && typeof token === "string" && token === t.token ? t : null; };
 const peersOf = (me: Pty) => { const ws = live(); return [...ptys.values()].filter((p) => p !== me && ws.some((c) => c.wires.has(pair(me.id, p.id)))); };
 // A card by id, or by a part of its name that only one wired card has (a message must not land on a guess).
@@ -799,7 +802,7 @@ export function ptySend(from: unknown, token: unknown, to: unknown, text: unknow
 export function ptyDone(from: unknown, token: unknown, text: unknown) {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
-  const parent = kids.get(me.id), msg = String(text ?? "").trim();
+  const parent = parentOf(me.id), msg = String(text ?? "").trim();
   const sent = parent && msg ? ptySend(from, token, parent, msg) : null;
   me.doneAt = Date.now();
   return { reported: sent === true ? parent : "", why: typeof sent === "string" ? sent : "" };
@@ -811,7 +814,7 @@ export async function ptyClose(from: unknown, token: unknown, to: unknown) {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
   let id = String(to ?? "");
-  if (kids.get(id) !== me.id && !itemsOf(me.id).some((i) => i.browser === id)) {
+  if (parentOf(id) !== me.id && !itemsOf(me.id).some((i) => i.browser === id)) {
     const notes = wiredNotes(me.id, id).filter((i) => i.text !== undefined); // a sticky, not a vault note
     if (notes.length > 1) return `"${id}" matches ${notes.length} notes: ${notes.map((i) => i.name).join(", ")}`;
     if (!notes.length) return `${id || "that card"} isn't one you opened (overlook spawn, browser open or note)`;
@@ -993,8 +996,8 @@ const kidsOf = (id: string) => [...kids].filter(([k, p]) => p === id && ptys.get
 export async function ptySpawn(from: unknown, token: unknown, b: any, agents: string[]): Promise<{ id: string; queued?: boolean } | string> {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
-  // ponytail: one level only (kids live in memory, so after a restart an opened card could open more); depth if needed.
-  if (kids.has(me.id)) return "a card opened by another card can't open cards: ask the one that opened you";
+  // ponytail: one level only; depth if needed.
+  if (parentOf(me.id)) return "a card opened by another card can't open cards: ask the one that opened you";
   const kind = b.note !== undefined ? "sticky" : b.agent === "shell" ? "shell" : "agent";
   const text = String(b.note ?? "").trim().slice(0, 4000), prompt = String(b.prompt ?? "").trim().slice(0, 8000), cwd = String(b.cwd ?? "") || me.cwd;
   if (kind === "sticky" && !text) return "empty note";

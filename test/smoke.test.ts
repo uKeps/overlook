@@ -1936,6 +1936,24 @@ const until = async (st: { out: string }, re: RegExp, ms = 15000) => {
   throw new Error(`timeout waiting for ${re}: ${st.out.slice(-600)}`);
 };
 
+test("who opened whom comes from the canvas too, so overlook done / close / spawn hold after a restart", async () => {
+  const p = await openPane("t_rp"), k = await openPane("t_rk"); // kids (in memory) never saw t_rk opened: as after a restart
+  const send = (path: string, body: object) => fetch(`${BASE}${path}`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify(body) });
+  await send("/api/canvas/wires", { client: "test-rp", wires: [["t_rp", "t_rk"]], names: { t_rp: "Parent", t_rk: "Kid" }, parents: { t_rk: "t_rp" } });
+  k.ws.send("overlook spawn shell; overlook done 'echo SUMMARY_$((6*7))'\r");
+  await until(k, /can't open cards/);
+  await until(k, /reported to t_rp/);
+  await until(p, /SUMMARY_42/);
+  p.ws.send("overlook close t_rk\r");
+  let spawns: any[] = [];
+  for (const end = Date.now() + 8000; !spawns.length && Date.now() < end; await Bun.sleep(100)) ({ spawns } = await (await send("/api/canvas/spawns", { panes: ["t_rp"], done: [] })).json());
+  expect(spawns[0]).toMatchObject({ parent: "t_rp", kind: "close", target: "t_rk" });
+  await send("/api/canvas/spawns", { panes: [], done: [{ id: spawns[0].id }] });
+  await until(p, /[\r\n]closed/);
+  p.ws.close(); k.ws.close();
+  for (const id of ["t_rp", "t_rk"]) await post("/api/pty/close", { id });
+});
+
 test("agent hand-off: a terminal talks to the terminals wired to it, and only to those", async () => {
   // Two shells; A drives everything through the `overlook` command Overlook puts on its PATH.
   const a = await openPane("t_ha"), b = await openPane("t_hb");
