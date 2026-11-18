@@ -1896,6 +1896,17 @@ test("overlook close: a browser card wired to the caller can go, one that isn't 
   await post("/api/pty/close", { id: "t_brc" });
 });
 
+test("overlook sketch reads the drawing of the caller's own canvas, not of the one showing", async () => {
+  const a = await openPane("t_ska"), b = await openPane("t_skb");
+  await fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-sk", wires: [], names: {},
+    sketch: [{ text: "SHOWING_PLAN", terms: ["t_ska"] }, { text: "HIDDEN_PLAN", terms: ["t_skb", "t_other"] }, { text: "x", terms: "t_ska" }] }) });
+  a.ws.send("overlook sketch\r"); b.ws.send("overlook sketch\r");
+  await until(a, /[\r\n]SHOWING_PLAN/); await until(b, /[\r\n]HIDDEN_PLAN/);
+  expect(a.out).not.toContain("HIDDEN_PLAN"); expect(b.out).not.toContain("SHOWING_PLAN");
+  a.ws.close(); b.ws.close();
+  for (const id of ["t_ska", "t_skb"]) await post("/api/pty/close", { id });
+});
+
 test("wired notes reach the agent: overlook context, and --new only gives what changed", async () => {
   const c = await openPane("t_ctx");
   const wire = (ctx: object) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-ctx", wires: [], names: {}, ctx }) });

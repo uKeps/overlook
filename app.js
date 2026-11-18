@@ -1276,7 +1276,10 @@ function syncWires(force) {
     if (p?.kind === "terminal") add({ term: p.id });
     if (p?.kind === "browser") add({ browser: p.id, url: p.url || "" });
   }
-  const sketch = sketchText(sketchEls), body = JSON.stringify({ wires, names, ctx, sketch });
+  // Each canvas's drawing with the terminals on it: `overlook sketch` answers with the caller's own canvas.
+  const sketch = canvases.map((c) => (c.id === canvasId ? [orchPanes, sketchEls] : [c.panes || [], c.sketch || []]))
+    .map(([ps, els]) => ({ text: sketchText(els), terms: ps.filter((p) => p.kind === "terminal").map((p) => p.id) })).filter((k) => k.text);
+  const body = JSON.stringify({ wires, names, ctx, sketch });
   if (body === wiresSent && !force) return;
   wiresSent = body; wiresAt = Date.now();
   api("/api/canvas/wires", { client: CANVAS_CLIENT, wires, names, ctx, sketch }).catch(() => { wiresSent = ""; });
@@ -3000,7 +3003,7 @@ function renderMultiChips() {
 }
 // Canvas shortcuts, tmux-style, on Ctrl+Alt so they work even while a terminal has the keyboard (capture phase,
 // before the terminal sees the key) without taking keys a shell or TUI uses.
-const PANE_KEYS = "Right-click: the menu of a card or of the canvas · Ctrl+Alt: ←/→ next/previous card · 1–9 jump · Enter maximize · T terminal · N agent · W close · F fit · B background · M map · Z full screen · R reload · / this help · Alt+drag moves a card";
+const PANE_KEYS = "Right-click: the menu of a card or of the canvas · Ctrl+Alt: ←/→ next/previous card · ↑/↓ previous/next canvas · 1–9 jump · Enter maximize · T terminal · N agent · W close · F fit · B background · M map · Z full screen · R reload · / this help · Alt+drag moves a card";
 // Full screen: the canvas takes the whole monitor (the page chrome hides, the window goes fullscreen).
 // While a terminal or card has focus, Esc belongs to it (Keyboard Lock stops the browser from eating the first Esc);
 // clicking an empty spot on the canvas blurs the card so Esc leaves full screen.
@@ -3052,6 +3055,8 @@ window.addEventListener("keydown", (e) => {
   const act = {
     ArrowRight: () => keys.length && focusPane(keys[(i + 1) % keys.length]),
     ArrowLeft: () => keys.length && focusPane(keys[(i - 1 + keys.length) % keys.length]),
+    ArrowDown: () => stepCanvas(1),
+    ArrowUp: () => stepCanvas(-1),
     Enter: () => { if (orchActive) { orchMax = orchMax ? "" : orchActive; orchSigs.clear(); agentsBody(); setTimeout(() => focusPane(orchActive), 80); } },
     KeyT: () => newTermPane(),
     KeyN: () => newAgentTerm(defaultAgent()),
@@ -3436,7 +3441,7 @@ function agentsBody() {
         <div class="orch-plane" id="orch-plane"></div>
         <nav class="cv-island cv-tl" aria-label="Canvas menu">
           <button type="button" class="cv-tl-btn" data-act="cv-menu" title="Menu: search, capture, layout" aria-label="Menu">${icon("menu", 18)}</button>
-          <button type="button" class="cv-tl-btn cv-name" id="cv-name" data-act="cv-canvases" title="Canvases: switch, new, rename"><span>${esc(canvases.find((c) => c.id === canvasId)?.name)}</span></button>
+          <button type="button" class="cv-tl-btn cv-name" id="cv-name" data-act="cv-canvases" title="Canvases: switch (Ctrl+Alt+↑/↓), new, rename"><span>${esc(canvases.find((c) => c.id === canvasId)?.name)}</span></button>
         </nav>
         <div class="cv-island orch-hud" id="orch-hud" role="toolbar" aria-label="Canvas tools"></div>
         <div class="cv-br-row">
@@ -4174,6 +4179,13 @@ function switchCanvas(id) {
   if (cv) { sk?.unmount?.(); sk?.remove(); $("#orch-sketchbar")?.remove(); addSketchLayer(cv); }
   paintCanvasName(); updateSelectionUI(); agentsBody();
 }
+// Ctrl+Alt+↓/↑: the next/previous canvas in the switcher's order (wrapping), its last focused card taking the keyboard.
+const canvasStep = (d) => canvases[(canvases.findIndex((c) => c.id === canvasId) + d + canvases.length) % canvases.length];
+function stepCanvas(d) {
+  if (canvases.length < 2) return toast("One canvas only: New canvas is in the menu of its name, top left");
+  switchCanvas(canvasStep(d).id);
+  if (orchActive) setTimeout(() => focusPane(orchActive, true), 80);
+}
 // A card on a canvas that isn't showing (from Sessions, a hand-off): its canvas comes in first.
 function showCanvasOf(test) { const c = canvases.find((x) => x.panes?.some(test)); if (c) switchCanvas(c.id); }
 const paintCanvasName = () => { const b = $("#cv-name span"); if (b) b.textContent = canvases.find((c) => c.id === canvasId)?.name || ""; };
@@ -4224,7 +4236,7 @@ function moveToCanvas(key, id) {
 function canvasesMenu(btn) {
   const empty = !orchPanes.length && !sketchEls.length;
   ctxAt(btn, [
-    ...canvases.map((c) => ({ label: c.name, ic: "grid", on: c.id === canvasId, run: () => switchCanvas(c.id) })),
+    ...canvases.map((c) => ({ label: c.name, ic: "grid", on: c.id === canvasId, kbd: c.id === canvasId ? "" : c === canvasStep(1) ? "Ctrl+Alt+↓" : c === canvasStep(-1) ? "Ctrl+Alt+↑" : "", run: () => switchCanvas(c.id) })),
     "-",
     { label: "New canvas", ic: "plus", run: newCanvas },
     { label: "Rename…", ic: "edit", run: renameCanvas },
