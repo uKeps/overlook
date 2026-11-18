@@ -2796,3 +2796,41 @@ test("canvas terminal clipboard: Ctrl+V/Ctrl+Shift+V paste once, ^V fallback, Ct
     expect(h.copied).toEqual(["olá mundo"]);
   }
 });
+
+test("service header layout: Minimal search stays in flow in body.app and svcbar never overflows or wraps tabs", async () => {
+  const [cssRes, jsRes] = await Promise.all([fetch(`${BASE}/app.css`), fetch(`${BASE}/app.js`)]);
+  expect(cssRes.status).toBe(200);
+  expect(jsRes.status).toBe(200);
+  const appCss = await cssRes.text();
+  const appJs = await jsRes.text();
+  expect(() => new Function(appJs)).not.toThrow();
+
+  // 1. Minimal Search must leave absolute centering when #svcbar is active (body.app) and at <=780px
+  expect(appCss).toContain('html[data-ui="minimal"] body.app .top .search-btn.btn.glass { position: static; transform: none; width: auto;');
+  expect(appCss).toContain('@media (max-width: 780px) { html[data-ui="minimal"] .top .search-btn.btn.glass { position: static; transform: none; width: auto;');
+  expect(appCss).toContain('@media (max-width: 1120px) { html[data-ui="minimal"] body.app .top .search-btn kbd { display: none; } }');
+
+  // 2. .svcbar, .svc-switch, .svc-tab, .crumb and .clock stay single-line and bounded
+  expect(appCss).toMatch(/\.crumb\s*\{[^}]*white-space:\s*nowrap/);
+  expect(appCss).toMatch(/\.clock\s*\{[^}]*white-space:\s*nowrap;\s*flex:\s*none/);
+  expect(appCss).toMatch(/\.svcbar\s*\{[^}]*flex:\s*0 1 auto;\s*min-width:\s*0;\s*flex-wrap:\s*nowrap/);
+  expect(appCss).toMatch(/\.svc-switch\s*\{[^}]*position:\s*relative;[^}]*flex:\s*0 1 auto;\s*min-width:\s*0;\s*max-width:\s*100%;\s*overflow-x:\s*auto/);
+  expect(appCss).toMatch(/\.svc-tab\s*\{[^}]*flex:\s*none;\s*white-space:\s*nowrap/);
+
+  // 3. Responsive breakpoints wrap .svcbar cleanly onto row 2 at <=900px and group right controls at <=480px
+  expect(appCss).toContain("body.app .top { flex-wrap: wrap; }");
+  expect(appCss).toContain("body.app .svcbar { order: 10; flex: 1 0 100%; width: 100%; margin-left: 0; }");
+  expect(appCss).toContain("body.svc-full .top { width: min(92vw, 1200px); border-radius: 18px;");
+  expect(appCss).toContain("@media (max-width: 1120px) {\n  body.app .top .btn kbd { display: none; }\n  body.app .svcbar .pill { display: none; }\n}");
+  expect(appCss).toContain(".search-btn span, .search-btn kbd, .top .cap-btn span { display: none; }");
+  expect(appCss).toContain('@media (max-width: 480px) { html[data-ui="minimal"] .top .search-btn.btn.glass { margin-left: auto; } }');
+
+  // 4. service() keeps active .svc-tab scrolled into view inside .svc-switch
+  expect(appJs).toContain('const sw = $("#svcbar .svc-switch"), onTab = sw?.querySelector(".svc-tab.on");');
+  expect(appJs).toContain("sw.scrollTo({ left: Math.max(0, onTab.offsetLeft - (sw.clientWidth - onTab.clientWidth) / 2) });");
+
+  const scrollTarget = (swWidth: number, tabLeft: number, tabWidth: number) =>
+    Math.max(0, tabLeft - (swWidth - tabWidth) / 2);
+  expect(scrollTarget(240, 4, 90)).toBe(0);
+  expect(scrollTarget(240, 380, 110)).toBe(315);
+});
