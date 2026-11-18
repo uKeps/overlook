@@ -2133,17 +2133,28 @@ async function sketchFromMermaid(src, parent) {
   if (!lib) return "the drawing tools didn't load";
   let els;
   try { els = await lib.fromMermaid(src); } catch (e) { return `Mermaid: ${String(e?.message || e).slice(0, 160)}`; }
-  const x0 = (parent?.x ?? 0) + (parent?.w ?? 0) + 60, y0 = parent?.y ?? 0;
-  const minX = Math.min(...els.map((e) => e.x)), minY = Math.min(...els.map((e) => e.y));
-  for (const e of els) { e.x += x0 - minX; e.y += y0 - minY; }
   // The card that asked is on a canvas not showing: the drawing goes onto that one's.
   const on = hiddenOn(parent);
+  if (!on) {
+    await mountSketch();
+    for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
+    if (!sketchApi) return "the drawing tools didn't load";
+  }
+  const had = on ? on.sketch || [] : sketchApi.getSceneElements().filter((e) => !e.isDeleted);
+  // beside its card, below what's already there (an earlier drawing, a note), not on top of it
+  const bs = els.map(sketchBox), minX = Math.min(...bs.map((b) => b.x)), minY = Math.min(...bs.map((b) => b.y));
+  const at = clearSpot({ x: (parent?.x ?? 0) + (parent?.w ?? 0) + 60, y: parent?.y ?? 0, w: Math.max(...bs.map((b) => b.x + b.w)) - minX, h: Math.max(...bs.map((b) => b.y + b.h)) - minY },
+    [...had.map(sketchBox), ...(on?.panes || orchPanes).filter((p) => typeof p.x === "number")]);
+  for (const e of els) { e.x += at.x - minX; e.y += at.y - minY; }
   if (on) { (on.sketch ||= []).push(...els); saveCanvas(); return ""; }
-  await mountSketch();
-  for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
-  if (!sketchApi) return "the drawing tools didn't load";
   sketchApi.updateScene({ elements: [...sketchApi.getSceneElements(), ...els] });
   return "";
+}
+// Box b where it is, or moved down past every box it would touch (40px apart).
+function clearSpot(b, boxes) {
+  const hit = () => boxes.find((q) => b.x < q.x + q.w + 40 && b.x + b.w + 40 > q.x && b.y < q.y + q.h + 40 && b.y + b.h + 40 > q.y);
+  for (let n = 0, q; n < 100 && (q = hit()); n++) b = { ...b, y: q.y + q.h + 40 };
+  return b;
 }
 
 // The browser card: a real headless browser on the server (browser.ts) whose screen streams in as JPEG frames over
