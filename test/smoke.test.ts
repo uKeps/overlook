@@ -191,7 +191,17 @@ test("system and pinterest work with nothing configured", async () => {
   const s = await (await fetch(`${BASE}/api/system`)).json();
   expect(s.services).toEqual([]);
   expect(Array.isArray(s.agents)).toBe(true);
+  expect(s.panesWaiting).toEqual([]);
   expect((await (await fetch(`${BASE}/api/pinterest`)).json()).status).toBe("no-config");
+});
+
+test("a Claude TUI on a card waits for you on a prompt, or once a turn ends after you last typed there", async () => {
+  const { waitsForYou } = await import(`${ROOT}/tasks.ts`);
+  expect(waitsForYou({ status: "waiting", waitingFor: "permission prompt", statusUpdatedAt: 5 }, 9, 9)).toBe("permission prompt");
+  expect(waitsForYou({ status: "busy", statusUpdatedAt: 20 }, 10)).toBeNull();
+  expect(waitsForYou({ status: "idle", statusUpdatedAt: 20 }, 10, 15)).toBe(""); // its turn ended after you typed
+  expect(waitsForYou({ status: "idle", statusUpdatedAt: 10 }, 10)).toBeNull(); // idle since first seen: a fresh start, a resume
+  expect(waitsForYou({ status: "idle", statusUpdatedAt: 20 }, 10, 25)).toBeNull(); // you typed there since
 });
 
 test("the page and its assets are served and the frontend parses", async () => {

@@ -13,7 +13,7 @@ import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
 import { attach, input, safeUrl } from "./browser";
-import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, ptyBrowser, ptyDone, ptyClose, setVaultRoot, handoffs, withCanvas, GHOSTTY_TERM } from "./tasks";
+import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, ptyBrowser, ptyDone, ptyClose, setVaultRoot, handoffs, withCanvas, waitsForYou, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
@@ -681,17 +681,31 @@ const PANE_AGENTS = `${import.meta.dir}/cache/pane-agents.json`;
 const paneAgents: Record<string, { proc: string; session: string; cwd: string }> = readJson(PANE_AGENTS) ?? {};
 const savePaneAgents = () => { mkdirSync(dirname(PANE_AGENTS), { recursive: true }); writeFileSync(PANE_AGENTS, JSON.stringify(paneAgents)); };
 const paneOf = (pid: number) => { try { return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((x) => x.startsWith("OVERLOOK_PANE="))?.slice(14) ?? ""; } catch { return ""; } };
+// Each pane's Claude status, read with it (see waitsForYou): busy, idle or waiting, and the status time first seen.
+const paneStatus: Record<string, { session: string; base: number; status?: string; waitingFor?: string; statusUpdatedAt?: number }> = {};
 function notePaneAgents() {
   const live = listPtys().filter((t) => t.running).map((t) => t.id);
   if (!live.length) return;
-  const seen: typeof paneAgents = {};
+  const seen: typeof paneAgents = {}, pids: Record<string, number> = {};
   // Oldest last: the agent at the pane's prompt wins over a `claude -p` it runs (which inherits the pane too).
-  for (const a of agents().filter((x) => x.key).sort((x, y) => x.seconds - y.seconds))
-    seen[paneOf(a.pid)] = { proc: a.name, session: a.key.slice(2), cwd: a.cwd.replace(/^~/, homedir()) };
+  for (const a of agents().filter((x) => x.key).sort((x, y) => x.seconds - y.seconds)) {
+    const id = paneOf(a.pid);
+    seen[id] = { proc: a.name, session: a.key.slice(2), cwd: a.cwd.replace(/^~/, homedir()) }; pids[id] = a.pid;
+  }
   const before = JSON.stringify(paneAgents);
   for (const id of live) if (seen[id]) paneAgents[id] = seen[id]; else delete paneAgents[id]; // exited: the pane is a shell again
   if (JSON.stringify(paneAgents) !== before) savePaneAgents();
+  for (const id in paneStatus) if (seen[id]?.proc !== "claude") delete paneStatus[id];
+  for (const id of live) if (seen[id]?.proc === "claude") {
+    const f = readJson(`${homedir()}/.claude/sessions/${pids[id]}.json`) ?? {}, was = paneStatus[id], session = seen[id].session;
+    paneStatus[id] = { session, base: was?.session === session ? was.base : f.statusUpdatedAt ?? 0, status: f.status, waitingFor: f.waitingFor, statusUpdatedAt: f.statusUpdatedAt };
+  }
 }
+// Canvas terminals whose Claude waits for you, and what for: the waiting group, like a blocked background session.
+const panesWaiting = () => listPtys().flatMap((t) => {
+  const s = paneStatus[t.id], needs = s && t.running && !t.done ? waitsForYou(s, s.base, t.typed) : null;
+  return needs === null ? [] : [{ id: t.id, needs }];
+});
 setInterval(() => { try { notePaneAgents(); } catch {} }, 5000);
 // Git on a terminal card: its branch, what changed, and the branch's PR with its CI. The folder comes from the pane (its
 // agent's, else its shell's current one), never from the client. git is cheap (10 s cache); gh is slow and rate-limited
@@ -1125,7 +1139,7 @@ function refreshAgyUsage() {
     try { return { id: a.id, name: a.name, usage: /^[\w-]+$/.test(a.id) ? JSON.parse(readFileSync(`${import.meta.dir}/cache/usage/${a.id}.json`, "utf8")) : null }; }
     catch { return { id: a.id, name: a.name, usage: null }; }
   }) });
-  if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents().map((a) => ({ ...a, cost: sessionCost(a.key) })), background: await background(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
+  if (p === "/api/system") return json({ schedule: loadSchedule(import.meta.dir), agents: agents().map((a) => ({ ...a, cost: sessionCost(a.key) })), background: await background(), panesWaiting: panesWaiting(), services: await services(), runners: runners(), tasks: taskList(), agentsMd: existsSync(`${ROOT}/AGENTS.md`) });
   // no-cache: the app window revalidates on every load, so a restart's new UI shows up without a hard refresh.
   if (STATIC.has(p)) return new Response(Bun.file(`${import.meta.dir}${p}`), { headers: { "cache-control": "no-cache" } });
   // ascii.rest (MIT), served from node_modules so the art loads from this machine, not from ascii.rest.

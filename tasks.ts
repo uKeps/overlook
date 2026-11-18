@@ -672,7 +672,14 @@ export function closePty(id: string) {
   return ptys.delete(id);
 }
 export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, running: t.code === undefined,
-  done: t.doneAt && (t.typed ?? 0) < t.doneAt ? t.doneAt : 0 }));
+  done: t.doneAt && (t.typed ?? 0) < t.doneAt ? t.doneAt : 0, typed: t.typed ?? 0 }));
+// Whether a Claude TUI in a canvas terminal waits for you, from its session file (~/.claude/sessions/<pid>.json): what
+// for (Claude Code's own "waiting": a permission prompt, a question), "" when its turn ended (idle) after you last typed
+// there (focusing the card counts: Claude asks for focus reports), null when it doesn't. `base` is its status time when Overlook first saw it: idle since before then (a fresh
+// start, a resume, an Overlook restart) isn't a turn that just ended.
+export const waitsForYou = (s: { status?: string; waitingFor?: string; statusUpdatedAt?: number }, base: number, typed = 0) =>
+  s.status === "waiting" ? s.waitingFor || "input needed"
+  : s.status === "idle" && (s.statusUpdatedAt ?? 0) > Math.max(base, typed) ? "" : null;
 // A drag resizes the pane every frame, and each resize is a SIGWINCH (the shell redraws its prompt): only the last size
 // in 80 ms is applied, and only if it changed.
 export function resizePty(t: Pty, cols: number, rows: number) {
