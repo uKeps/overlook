@@ -604,7 +604,7 @@ function tdSide() {
   const it = dayItems(D.today);
   const cal = [...it.events.map((e) => ({ t: e.time, x: esc(e.title) })), ...it.scheduled.map((e) => ({ t: e.time, x: `<i>${icon("bolt", 11)}</i>${esc(e.prompt)}` }))]
     .sort((a, b) => (a.t || "").localeCompare(b.t || ""));
-  const fleet = fleetItems().filter((x) => x.group !== "done" && x.kind !== "terminal"), wait = fleet.filter((x) => x.group === "waiting");
+  const fleet = fleetItems().filter((x) => x.group !== "done" && (x.kind !== "terminal" || x.group === "waiting")), wait = fleet.filter((x) => x.group === "waiting");
   const shown = [...wait, ...fleet.filter((x) => x.group !== "waiting").slice(0, Math.max(1, 3 - wait.length))];
   const name = (x) => { const a = x.kind === "agent" && S.agents?.find((y) => y.key === x.id); return a ? a.cwd.split("/").filter(Boolean).pop() || "~" : x.title; };
   const daily = D.notes.find((n) => n.path === `${D.daily}/${D.today}.md`);
@@ -2924,11 +2924,12 @@ function fleetItems() {
   for (const p of allPanes()) {
     if (p && p.kind === "terminal") {
       const what = p.run ? runnerName(p.run.agent) || "Agent" : p.shell || "shell";
+      const wait = S.panesWaiting?.find((w) => w.id === p.id); // its Claude asks for a permission, or ended its turn
       items.push({
         kind: "terminal", id: p.id, agent: "terminal", ic: "terminal",
-        title: p.run ? `${what} TUI` : `Terminal (${what})`,
+        title: wait ? termName(p) : p.run ? `${what} TUI` : `Terminal (${what})`,
         sub: [shortCwd(p.cwd || orchCwd || ""), hiddenOn(p)?.name].filter(Boolean).join(" · "),
-        group: "active", dot: "run", badge: what, peach: true, needs: "", cost: paneCosts.get(p.id),
+        group: wait ? "waiting" : "active", dot: "run", badge: what, peach: true, needs: wait?.needs || "", cost: paneCosts.get(p.id),
       });
     }
   }
