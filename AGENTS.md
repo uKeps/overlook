@@ -7,6 +7,7 @@
   `gh pr merge <n> --auto --squash`, so it merges by itself once CI passes. Keep PRs small and frequent.
 - `~/dev/overlook` is where `overlook.service` runs: it stays on `main`. Work in a worktree
   (`git worktree add ../overlook-<name> -b <branch> origin/main`), never by switching that checkout to another branch.
+  Run `bun install` in a new worktree: it has no `node_modules`, and `bun test` fails with "Cannot find module".
 
 ## Trying a change
 
