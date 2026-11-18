@@ -110,8 +110,9 @@ if (cmd === "peers") {
   const r = await call("/api/pty/spawn", { agent: card ?? "", cwd: resolve(dir || "."), prompt: rest.join(" ") });
   console.log(r.queued ? `${r.id}: queued, it opens when the Overlook canvas is showing this card` : `${r.id}: opened and wired to this card`);
 } else if (cmd === "note" && card) {
-  const r = await call("/api/pty/spawn", { note: [card, ...rest].join(" ") });
-  console.log(r.queued ? "queued, it shows when the Overlook canvas is showing this card" : "note added");
+  const text = [card, ...rest].join(" "), r = await call("/api/pty/spawn", { note: text });
+  const name = text.trim().split("\n")[0].slice(0, 40); // its name on the canvas (paneLabel), for overlook write / close
+  console.log(r.queued ? `note "${name}" queued, it shows when the Overlook canvas is showing this card` : `note "${name}" added`);
 } else if (cmd === "write" && card) {
   const append = rest[0] === "--append", words = append ? rest.slice(1) : rest;
   const r = await call("/api/pty/write", { to: card, append, text: words.length ? words.join(" ") : await Bun.stdin.text() });
