@@ -9,7 +9,7 @@
 //   overlook context [--new|--all]   the notes wired to this card (claude's hooks: --new only new or changed ones, --all
 //                                    all of them; both print nothing when there is nothing)
 //   overlook write <note> [--append] <text…>   replace (or add to) the text of a note wired to this card
-//   overlook sketch                   what's drawn on the canvas (texts, shapes, arrows as "A → B")
+//   overlook sketch                   what's drawn on this card's canvas (texts, shapes, arrows as "A → B")
 //   overlook draw [mermaid…]          draw a Mermaid diagram on the canvas, beside this card (or pipe it in on stdin)
 //   overlook browser <cmd> [arg…]    drive the browser card wired to this one: open <url> | read | shot | click <css |
 //                                    text=… | x,y> | type <text> | key <Enter|Tab|…> (open, with none, puts one on the canvas)

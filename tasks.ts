@@ -713,13 +713,15 @@ export const CANVAS_SETTINGS = JSON.stringify({ hooks: { SessionStart: hook("ove
 // Each open canvas (a browser: the desktop, the phone) sends its own wires, again every 30 s; what's allowed is the union
 // of the canvases heard from in the last 90 s, so two of them don't overwrite each other and a closed one fades out.
 type Ctx = { key: string; name: string; text?: string; path?: string; term?: string; browser?: string; url?: string };
-const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; ctx: Map<string, Ctx[]>; sketch: string; at: number }>(), sent = new Map<string, number[]>();
+const canvases = new Map<string, { wires: Set<string>; names: Map<string, string>; ctx: Map<string, Ctx[]>; sketch: { text: string; terms: Set<string> }[]; at: number }>(), sent = new Map<string, number[]>();
 export const handoffs: { from: string; to: string; at: number }[] = [];
 const pair = (a: string, b: string) => [a, b].sort().join("|");
 const live = () => [...canvases.values()].filter((c) => Date.now() - c.at < 90_000);
 export function setWires(client: unknown, list: unknown, titles: unknown, ctx?: unknown, sketch?: unknown) {
   if (typeof client !== "string" || !/^[\w-]{1,64}$/.test(client)) return false;
-  const c = { wires: new Set<string>(), names: new Map<string, string>(), ctx: new Map<string, Ctx[]>(), sketch: typeof sketch === "string" ? sketch.slice(0, 8000) : "", at: Date.now() };
+  // One sketch per named canvas, with the terminals on it: `overlook sketch` reads the caller's own canvas.
+  const sketches = Array.isArray(sketch) ? sketch.filter((k) => typeof k?.text === "string" && Array.isArray(k.terms)).slice(0, 50) : [];
+  const c = { wires: new Set<string>(), names: new Map<string, string>(), ctx: new Map<string, Ctx[]>(), sketch: sketches.map((k) => ({ text: k.text.slice(0, 8000), terms: new Set<string>(k.terms.filter((x: unknown) => typeof x === "string")) })), at: Date.now() };
   if (ctx && typeof ctx === "object") for (const [id, items] of Object.entries(ctx)) if (Array.isArray(items))
     c.ctx.set(id, items.filter((i) => typeof i?.key === "string").slice(0, 8).map((i) => ({ key: i.key.slice(0, 120), name: String(i.name ?? "").slice(0, 80),
       ...(typeof i.term === "string" ? { term: i.term } : typeof i.browser === "string" ? { browser: i.browser.slice(0, 80), url: safeUrl(i.url) }
@@ -890,11 +892,12 @@ function typeIn(p: Pty, msg: string) {
 }
 // An agent writes into a note wired to its card: a vault note's file directly, a sticky through the canvas showing it
 // (like a spawn). The writer has then seen what it wrote; other agents wired to that note get the new text.
-// The canvas's sketch layer, for any canvas agent: what it says (overlook sketch), and Mermaid drawn onto it beside the
-// caller's card (overlook draw; the canvas showing that card converts it).
+// The sketch layer, for any canvas agent: what the caller's own canvas says (overlook sketch), and Mermaid drawn onto it
+// beside the caller's card (overlook draw; the canvas showing that card converts it).
 export function ptySketch(from: unknown, token: unknown) {
-  if (!callerOf(from, token)) return "unknown pane or token";
-  return { text: live().map((c) => c.sketch).filter(Boolean).join("\n\n") };
+  const me = callerOf(from, token);
+  if (!me) return "unknown pane or token";
+  return { text: live().flatMap((c) => c.sketch.filter((k) => k.terms.has(me.id)).map((k) => k.text)).join("\n\n") };
 }
 export async function ptyDraw(from: unknown, token: unknown, mermaid: unknown) {
   const me = callerOf(from, token);
