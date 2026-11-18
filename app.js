@@ -2417,7 +2417,7 @@ function treeLayout(card, born) {
   const put = (p) => {
     const ks = kids(p);
     let x = p.x + p.w / 2 - row(ks) / 2;
-    for (const c of ks) { c.x = Math.round(x + (width.get(c) - c.w) / 2); c.y = p.y + p.h + 80; put(c); x += width.get(c) + 40; }
+    for (const c of ks) { c.x = Math.round(x + (width.get(c) - c.w) / 2); c.y = p.y + p.h + 80; delete c.home; put(c); x += width.get(c) + 40; }
   };
   measure(root); put(root);
   pushAside(panes, [...width.keys()], "u"); // width holds every card of the tree
@@ -2445,10 +2445,29 @@ function pushAside(panes, fixed, back) {
       const box = { x, y, w: Math.max(...unit.map((t) => t.x + t.w)) - x, h: Math.max(...unit.map((t) => t.y + t.h)) - y };
       const d = way.get(q) || way.get(c) || ["r", "l", "d", "u"].filter((k) => k !== back).sort((a, b) => out(box, a) - out(box, b))[0];
       const by = step({ x: 0, y: 0 }, d, still.has(c) ? out(box, d) : gap[d](c, box));
-      for (const t of unit) { t.x += by.x; t.y += by.y; way.set(t, d); }
+      for (const t of unit) { t.home ??= { x: t.x, y: t.y }; t.x += by.x; t.y += by.y; way.set(t, d); } // home: slideHome
       moved = true;
     }
   }
+}
+// A card pushed aside (pushAside keeps where it was: `home`) goes back there once that's clear again, with the cards it
+// spawned, so its tree keeps its shape. One the user dragged since has no home. Says whether any moved.
+function slideHome(panes) {
+  const on = (q) => typeof q.x === "number", near = (a, b) => a.x < b.x + b.w + 40 && b.x < a.x + a.w + 40 && a.y < b.y + b.h + 40 && b.y < a.y + a.h + 40;
+  const below = (q) => { const t = [q]; for (let i = 0; i < t.length; i++) if (t[i].kind === "terminal") t.push(...panes.filter((k) => k.spawnedBy === t[i].id && !t.includes(k))); return t; };
+  let any = false;
+  for (let n = 0, moved = true; moved && n < 20; n++) { // one going home can clear the way for another
+    moved = false;
+    for (const p of panes) {
+      if (!p.home || !on(p) || panes.some((q) => q.home && q.kind === "terminal" && q.id === p.spawnedBy)) continue; // its parent takes it
+      const unit = below(p).filter(on), dx = p.home.x - p.x, dy = p.home.y - p.y;
+      const at = unit.map((t) => ({ ...t, x: t.x + dx, y: t.y + dy }));
+      if (at.some((a) => panes.some((q) => on(q) && !unit.includes(q) && near(a, q)))) continue;
+      for (const t of unit) { t.x += dx; t.y += dy; delete t.home; }
+      moved = any = true;
+    }
+  }
+  return any;
 }
 // A note or browser an agent opens goes right of it, below the ones it opened before; any other card there is pushed aside.
 function placeBeside(parent, p, panes) {
@@ -2598,7 +2617,7 @@ async function takeSpawns() {
         bornFrom.set(paneKey(p), { x: parent.x + parent.w / 2, y: parent.y + parent.h });
       } else { placeBeside(parent, p, on?.panes || orchPanes); slidePanes(); }
     }
-    if (!parent || !(on ? on.panes.length < 18 && on.panes.push(p) : addPane(p))) { if (p.spawnedBy) treeLayout(parent); spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
+    if (!parent || !(on ? on.panes.length < 18 && on.panes.push(p) : addPane(p))) { if (p.spawnedBy) treeLayout(parent); slideHome(on?.panes || orchPanes); spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
     (on ? (on.links ||= []) : orchLinks).push({ a: paneKey(parent), b: paneKey(p) });
     if (on && p.kind === "terminal") termStart(p);
     spawnDone.push({ id: s.id });
@@ -3363,7 +3382,7 @@ function bindPaneDragResize(card, p) {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         // moved by hand away from the card that spawned it: it leaves that tree, so the next spawn won't move it back
-        if (moved) for (const { p: q } of startPositions) if (!startPositions.some((i) => i.p.kind === "terminal" && i.p.id === q.spawnedBy)) delete q.spawnedBy;
+        if (moved) for (const { p: q } of startPositions) { delete q.home; if (!startPositions.some((i) => i.p.kind === "terminal" && i.p.id === q.spawnedBy)) delete q.spawnedBy; }
         if (!moved && !e.shiftKey && !e.metaKey && !e.ctrlKey && orchSelected.size > 1) {
           orchSelected.clear();
           orchSelected.add(curKey);
@@ -4277,7 +4296,7 @@ function moveToCanvas(key, id) {
   if (!p || !c) return;
   orchPanes = orchPanes.filter((x) => x !== p);
   orchLinks = orchLinks.filter((l) => l.a !== key && l.b !== key);
-  delete p.x; delete p.y; delete p.spawnedBy; delete p.openedBy; // placed where you look once that canvas shows (ensurePaneRect), out of any tree; moved on purpose, so it stays when its agent goes
+  delete p.x; delete p.y; delete p.spawnedBy; delete p.openedBy; delete p.home; // placed where you look once that canvas shows (ensurePaneRect), out of any tree; moved on purpose, so it stays when its agent goes
   (c.panes ||= []).push(p);
   orchSelected.delete(key);
   if (orchActive === key) orchActive = "";
@@ -4339,11 +4358,13 @@ async function orchPaint(force) {
   const visKeys = new Set(vis.map(paneKey));
   if (plane.querySelector(".orch-empty")) plane.innerHTML = "";
   const regrow = new Set();
+  let closed = false;
   for (const node of [...plane.querySelectorAll(".orch-pane[data-key]")]) {
     const k = node.dataset.key;
     if (visKeys.has(k)) continue;
     orchSigs.delete(k);
     const gone = !orchPanes.some((p) => paneKey(p) === k);
+    closed ||= gone;
     // A closed card of a spawn tree, however it closed: its parent's tree closes the gap (below).
     const parent = gone && node.dataset.from && orchPanes.find((p) => p.kind === "terminal" && p.id === node.dataset.from);
     if (parent) regrow.add(parent);
@@ -4353,7 +4374,9 @@ async function orchPaint(force) {
       setTimeout(() => node.remove(), 200);
     } else node.remove();
   }
-  if (regrow.size) { regrow.forEach((p) => treeLayout(p)); slidePanes(); orchSigs.clear(); saveCanvas(); } // this paint slides them there
+  // then the cards it pushed aside go back where they were, if that's clear now (slideHome); this paint slides them there
+  regrow.forEach((p) => treeLayout(p));
+  if ((closed && slideHome(orchPanes)) || regrow.size) { slidePanes(); orchSigs.clear(); saveCanvas(); }
   const isFree = orchMode === "free" && !orchMax;
   canvas.className = `orch-canvas ${isFree ? `free tool-${orchTool}` : "tiled"}`;
   plane.className = `orch-plane ${isFree ? "free" : vis.length === 1 ? "single" : vis.length === 2 ? `split-${orchDir}` : "grid"}`;

@@ -303,8 +303,8 @@ test("effort selection in capture modal and dismiss chat in fleet sidebar", () =
 // treeLayout and the card placement it shares with notes and browsers (pushAside, placeBeside), out of app.js
 const layoutFns = (orchPanes: any[], hiddenOn: (p: any) => any = () => undefined) => {
   const js = readFileSync(`${ROOT}/app.js`, "utf8");
-  const src = ["treeLayout", "pushAside", "placeBeside"].map((n) => js.match(new RegExp(`^function ${n}\\([\\s\\S]*?^}`, "m"))![0]).join("\n");
-  return new Function("orchPanes", "hiddenOn", `${src}; return { treeLayout, placeBeside };`)(orchPanes, hiddenOn);
+  const src = ["treeLayout", "pushAside", "placeBeside", "slideHome"].map((n) => js.match(new RegExp(`^function ${n}\\([\\s\\S]*?^}`, "m"))![0]).join("\n");
+  return new Function("orchPanes", "hiddenOn", `${src}; return { treeLayout, placeBeside, slideHome };`)(orchPanes, hiddenOn);
 };
 
 test("a browser or note an agent opened goes with it, unless another terminal is wired to the note", () => {
@@ -387,6 +387,28 @@ test("a note or browser an agent opens goes right of it, below the ones it opene
   expect([b2.x, b2.y, b1.y]).toEqual([1040, 680, 0]); // below the one m opened before, which stays
   expect([s.y, sk.y]).toEqual([1360, 2040]);
   expect([m.x, m.y]).toEqual([0, 0]);
+});
+
+test("cards a tree pushed aside go back where they were once it shrinks, with their own tree, unless that's taken", () => {
+  const orchPanes: any[] = [], { treeLayout, slideHome } = layoutFns(orchPanes);
+  const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
+  const t: any = { kind: "terminal", id: "t", x: 30, y: 700, w: 940, h: 600 }, tk: any = { kind: "terminal", id: "tk", spawnedBy: "t", x: 30, y: 1380, w: 940, h: 600 };
+  const note: any = { kind: "sticky", id: "1", x: 1100, y: 700, w: 320, h: 220 };
+  orchPanes.push(m, t, tk, note);
+  const a = { kind: "terminal", id: "a", spawnedBy: "m", w: 940, h: 600 };
+  orchPanes.push(a); treeLayout(m); // a lands under m, where t was: t goes with tk
+  expect([t.x, t.y]).not.toEqual([30, 700]);
+  expect([tk.x - t.x, tk.y - t.y]).toEqual([0, 680]);
+  orchPanes.splice(orchPanes.indexOf(a), 1); treeLayout(m); // a closes (orchPaint)
+  expect(slideHome(orchPanes)).toBe(true);
+  expect([t.x, t.y, tk.x, tk.y, t.home, tk.home]).toEqual([30, 700, 30, 1380, undefined, undefined]);
+  expect([note.x, note.y]).toEqual([1100, 700]); // never pushed: no home
+  // pushed again, then something else takes its old spot: it stays where it is, still remembering home
+  orchPanes.push(a); treeLayout(m);
+  const x = t.x;
+  orchPanes.splice(orchPanes.indexOf(a), 1); orchPanes.push({ kind: "sticky", id: "2", x: 30, y: 700, w: 320, h: 220 });
+  expect(slideHome(orchPanes)).toBe(false);
+  expect([t.x, t.home]).toEqual([x, { x: 30, y: 700 }]);
 });
 
 test("a card spawned on a canvas not showing joins the tree there, among that canvas's cards only", () => {
