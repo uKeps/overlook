@@ -1974,17 +1974,27 @@ test("anything wired reaches any agent: typed in once it rests, terminals includ
   const wire = (ctx: object) => fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-push", wires: [["t_ag", "t_sh"]], names: { t_ag: "Agent", t_sh: "Shell" }, ctx }) });
   sh.ws.send("echo SHELL_SAYS_$((6*7))\r");
   await until(sh, /SHELL_SAYS_42/);
-  await wire({ t_ag: [{ key: "sticky:9", name: "Plan", text: "step one" }, { key: "terminal:t_sh", name: "Shell", term: "t_sh" }], t_sh: [{ key: "terminal:t_ag", name: "Agent", term: "t_ag" }] });
-  ag.ws.send("cat\r"); // the user typed: nothing is typed over it for a few seconds
+  const plan = { key: "sticky:9", name: "Plan", text: "step one" }, shell = { key: "terminal:t_sh", name: "Shell", term: "t_sh" }, back = { t_sh: [{ key: "terminal:t_ag", name: "Agent", term: "t_ag" }] };
+  await wire({ t_ag: [plan, shell], ...back });
+  ag.ws.send("cat; echo BACK_$((1+1))\r"); // the user typed: nothing is typed over it for a few seconds
   await until(ag, /\[Overlook: the user wired this[\s\S]*step one[\s\S]*Terminal "Shell" \(card t_sh\)[\s\S]*SHELL_SAYS_42/, 25000);
-  await Bun.sleep(1500); // the tty echoes it, then cat prints it: let both land
-  const times = () => ag.out.match(/\[Overlook: the user wired/g)?.length, first = times();
-  await Bun.sleep(9000);
-  expect(times()).toBe(first); // once, not again every few seconds
+  // The tty echoes each message, then cat prints it: a message has landed once it shows twice.
+  const times = () => ag.out.split("[Overlook: the user wired").length - 1;
+  for (const end = Date.now() + 5000; times() < 2 && Date.now() < end; ) await Bun.sleep(50);
+  expect(times()).toBe(2);
+  // Once, not again every few seconds: a note wired after it comes alone, a delivery or two later.
+  await wire({ t_ag: [plan, shell, { key: "sticky:10", name: "Probe", text: "PROBE_ALONE" }], ...back });
+  await until(ag, /PROBE_ALONE[\s\S]*PROBE_ALONE/, 20000);
+  expect(times()).toBe(4);
+  const last = ag.out.slice(ag.out.lastIndexOf("[Overlook: the user wired"));
+  expect(last).not.toContain("step one");
+  expect(last).not.toContain('Terminal "Shell"');
   expect(sh.out).not.toContain("[Overlook:"); // a shell at its prompt gets nothing typed in
 
   // Writing: a vault note's file directly, a sticky through the canvas (taken and applied like a spawn).
-  ag.ws.send("\x03"); // back to the shell
+  // Back to the shell. Typed right after a ^C, the dying cat could read the command line: EOF, then wait for the shell.
+  ag.ws.send("\x04");
+  await until(ag, /BACK_2/);
   await wire({ t_ag: [{ key: "note:h", name: "HTTP caching", path: "3 Concepts/HTTP caching.md" }, { key: "sticky:9", name: "Plan", text: "step one" }] });
   ag.ws.send("overlook write HTTP --append 'Written by an agent'; overlook write Plan 'step two'; echo WROTE\r");
   const take = (body: object) => fetch(`${BASE}/api/canvas/spawns`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -1998,7 +2008,7 @@ test("anything wired reaches any agent: typed in once it rests, terminals includ
   for (const t of [ag, sh]) t.ws.close();
   for (const id of ["t_ag", "t_sh"]) await post("/api/pty/close", { id });
   await post("/api/settings", { agents: init.agents });
-}, 60000);
+}, 90000); // the waits are on conditions: this only bounds a loaded machine
 
 test("an agent pane runs the agent inside a shell: the prompt is text, and the shell stays when the agent exits", async () => {
   const init = await (await fetch(`${BASE}/api/settings`)).json();
