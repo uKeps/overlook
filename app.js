@@ -1289,18 +1289,24 @@ const termName = (p) => p.name || (terms.get(p.id)?.title || "").replace(/^[^\p{
 // The wheel fires 60+ times a second: save once it stops, not on every step.
 let saveT = 0;
 const saveCanvasSoon = () => { clearTimeout(saveT); saveT = setTimeout(saveCanvas, 250); };
-// Browser cards that pass `test` go, from every canvas, with their wires (sweepBrowsers then closes their tabs).
-function dropBrowsers(test) {
-  const gone = new Set(allPanes().filter((p) => p.kind === "browser" && test(p)).map(paneKey));
+// Cards that pass `test` (an agent's browser cards and notes) go, from every canvas, with their wires (sweepBrowsers
+// then closes the browsers' tabs).
+function dropCards(test) {
+  const gone = new Set(allPanes().filter(test).map(paneKey));
   if (!gone.size) return;
   const keep = (ps) => ps.filter((p) => !gone.has(paneKey(p))), keepL = (ls) => ls.filter((l) => !gone.has(l.a) && !gone.has(l.b));
   orchPanes = keep(orchPanes); orchLinks = keepL(orchLinks);
   for (const c of canvases) { if (c.panes) c.panes = keep(c.panes); if (c.links) c.links = keepL(c.links); }
 }
+// A browser card or note an agent opened (overlook browser open / note) goes with that agent's card, however that
+// closed; a note still wired to another terminal stays: it's context there.
+function leftBehind(all, links) {
+  const terms = new Set(all.filter((q) => q.kind === "terminal").map(paneKey));
+  const inUse = (p) => p.kind === "sticky" && links.some((l) => (l.a === paneKey(p) && terms.has(l.b)) || (l.b === paneKey(p) && terms.has(l.a)));
+  return (p) => (p.kind === "browser" || p.kind === "sticky") && !!p.openedBy && !terms.has(`terminal:${p.openedBy}`) && !inUse(p);
+}
 function saveCanvas() {
-  // a browser card an agent opened (overlook browser open) goes with that agent's card, however that closed
-  const all = allPanes();
-  dropBrowsers((p) => p.openedBy && !all.some((q) => q.kind === "terminal" && q.id === p.openedBy));
+  dropCards(leftBehind(allPanes(), allLinks()));
   syncWires(); sweepBrowsers();
   try {
     localStorage.setItem(CANVAS_BG_KEY, orchBg);
@@ -2556,11 +2562,13 @@ async function takeSpawns() {
       continue;
     }
     if (s.kind === "close") {
-      // a browser card only by the agent that opened it (the server checks no more than that it's wired to the caller)
-      const t = all.find((x) => x.id === s.target && (x.kind === "terminal" || (x.kind === "browser" && x.openedBy === s.parent)));
-      if (t?.kind === "browser") dropBrowsers((x) => x === t); // the save and paint below take it off
+      // a browser card or note only by the agent that opened it (the server checks no more than that it's wired to the
+      // caller); a note comes by its key (sticky:12)
+      const is = (x) => x.id === s.target || paneKey(x) === s.target;
+      const t = all.find((x) => is(x) && (x.kind === "terminal" || ((x.kind === "browser" || x.kind === "sticky") && x.openedBy === s.parent)));
+      if (t && t.kind !== "terminal") dropCards((x) => x === t); // the save and paint below take it off
       else if (t) closeCardQuietly(t);
-      spawnDone.push({ id: s.id, ...(t ? {} : { why: all.some((x) => x.id === s.target) ? `${s.target} isn't one you opened` : "that card is no longer on the canvas" }) });
+      spawnDone.push({ id: s.id, ...(t ? {} : { why: all.some(is) ? `${s.target} isn't one you opened` : "that card is no longer on the canvas" }) });
       continue;
     }
     if (s.kind === "draw") {
@@ -4479,7 +4487,7 @@ async function orchPaint(force) {
         feed.innerHTML = `<div class="orch-sticky-wrap"><div class="orch-sticky-view prose" title="Click to edit"></div><textarea class="orch-sticky-input" spellcheck="false" placeholder="Write in markdown. Wire it to an agent and it becomes context.">${esc(p.text || "")}</textarea></div>`;
         ta = feed.querySelector(".orch-sticky-input");
         const view = feed.querySelector(".orch-sticky-view");
-        ta.oninput = () => { p.text = ta.value; saveCanvasSoon(); };
+        ta.oninput = () => { p.text = ta.value; delete p.openedBy; saveCanvasSoon(); }; // typed in by the user: theirs now, it stays when its agent goes
         ta.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); ta.blur(); } };
         ta.onblur = () => stickyShow(view, ta, p.text);
         view.onclick = (e) => { if (e.target.closest("a")) return; view.hidden = true; ta.hidden = false; ta.focus(); };

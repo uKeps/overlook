@@ -718,7 +718,7 @@ export function screenText(t: Pty, max = 60) {
 // A wire between two terminal cards on the canvas lets the programs in them talk, both ways: `overlook send <card> "…"`
 // types a message into the other pane (bracketed paste + Enter: it lands as a prompt), `overlook read <card>` shows its
 // screen. The canvas sends its wires; a caller proves which pane it is with the token in its environment.
-export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Whatever the user wires to your card (notes, terminals) is context for your work: it reaches you as a message starting with [Overlook: …], and `overlook context` prints it again. `overlook write <note> \"text\"` replaces a wired note's text (`--append` adds to it): use it to keep a shared plan, progress or decisions there. The user can sketch on the canvas: `overlook sketch` prints what's drawn (texts, shapes, arrows); `overlook draw` takes a Mermaid diagram (args or stdin) and draws it beside your card, when a picture explains better than text. `overlook browser open <url>` opens a browser card the user also sees (then read, shot, click, type, key), to check a web page or app. When a task you were given is finished, end with `overlook done \"summary\"`: it reports to whoever gave it and folds your card. `overlook close <card>` closes a card you opened once its work is in.";
+export const CANVAS_HINT = "You run in a terminal card on the Overlook canvas. Cards the user wired to yours can be reached with the `overlook` command: `overlook peers` lists them, `overlook send <card> \"message\"` types the message into that card as a prompt (to delegate, ask or hand off work), `overlook read <card>` shows what its screen shows. Messages from them reach you as prompts that start with [Message from …]. Keep them short and only when it helps the user's task. When the user asks you to orchestrate (split work across agents), `overlook spawn <agent> [--cwd dir] \"task\"` opens a new agent card wired to yours with a self-contained task (`overlook spawn` alone lists the agents; `shell` opens a plain terminal you can drive with send/read); it reports back to you by message when done, so wait for that instead of reading its screen. `overlook note \"text\"` puts a note card next to yours for the user. Whatever the user wires to your card (notes, terminals) is context for your work: it reaches you as a message starting with [Overlook: …], and `overlook context` prints it again. `overlook write <note> \"text\"` replaces a wired note's text (`--append` adds to it): use it to keep a shared plan, progress or decisions there. The user can sketch on the canvas: `overlook sketch` prints what's drawn (texts, shapes, arrows); `overlook draw` takes a Mermaid diagram (args or stdin) and draws it beside your card, when a picture explains better than text. `overlook browser open <url>` opens a browser card the user also sees (then read, shot, click, type, key), to check a web page or app. When a task you were given is finished, end with `overlook done \"summary\"`: it reports to whoever gave it and folds your card. `overlook close <card>` closes a card you opened (an agent, a browser, a note by its name) once its work is in.";
 // claude also gets the wired notes through hooks: all of them when a conversation starts, resumes, is cleared or compacted
 // (its context lost them), then only new or changed ones with each prompt (nothing when none changed).
 const hook = (command: string) => [{ hooks: [{ type: "command", command, timeout: 5 }] }];
@@ -804,13 +804,19 @@ export function ptyDone(from: unknown, token: unknown, text: unknown) {
   me.doneAt = Date.now();
   return { reported: sent === true ? parent : "", why: typeof sent === "string" ? sent : "" };
 }
-// `overlook close <card>`: closes a card the caller opened (only those), once its work is in. A browser card isn't in
-// `kids` (the canvas names it): one wired to the caller passes here, and the canvas closes it only if the caller opened it.
+// `overlook close <card>`: closes a card the caller opened (only those), once its work is in. A browser card or a note
+// isn't in `kids` (the canvas names it): one wired to the caller passes here (a note by its name, like overlook write),
+// and the canvas closes it only if the caller opened it.
 export async function ptyClose(from: unknown, token: unknown, to: unknown) {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
-  const id = String(to ?? "");
-  if (kids.get(id) !== me.id && !itemsOf(me.id).some((i) => i.browser === id)) return `${id || "that card"} isn't one you opened (overlook spawn or browser open)`;
+  let id = String(to ?? "");
+  if (kids.get(id) !== me.id && !itemsOf(me.id).some((i) => i.browser === id)) {
+    const notes = wiredNotes(me.id, id).filter((i) => i.text !== undefined); // a sticky, not a vault note
+    if (notes.length > 1) return `"${id}" matches ${notes.length} notes: ${notes.map((i) => i.name).join(", ")}`;
+    if (!notes.length) return `${id || "that card"} isn't one you opened (overlook spawn, browser open or note)`;
+    id = notes[0].key;
+  }
   const now = Date.now(), s: Spawn = { id: `c_${now}_${Math.random().toString(36).slice(2, 6)}`, parent: me.id, kind: "close", target: id, at: now, done: () => {} };
   spawns.push(s);
   const why = await new Promise<string | null>((res) => { s.done = res; setTimeout(() => res(null), SPAWN_WAIT); });
@@ -946,12 +952,16 @@ export async function ptyBrowser(from: unknown, token: unknown, cmd: unknown, ar
   try { return { text: await agentDo(card.browser!, card.url || "about:blank", c, a) }; }
   catch (e: any) { return String(e?.message || e); }
 }
+// The notes wired to a card that `to` names: by key, or a piece of the name or vault path (overlook write / close).
+const wiredNotes = (id: string, to: unknown) => {
+  const q = String(to ?? "").toLowerCase();
+  return q ? itemsOf(id).filter((i) => i.term === undefined && i.browser === undefined && (i.key === to || i.name.toLowerCase().includes(q) || i.path?.toLowerCase().includes(q))) : [];
+};
 export async function ptyWrite(from: unknown, token: unknown, to: unknown, text: unknown, append: boolean) {
   const me = callerOf(from, token);
   if (!me) return "unknown pane or token";
-  const notes = itemsOf(me.id).filter((i) => i.term === undefined && i.browser === undefined), q = String(to ?? "").toLowerCase();
-  const hits = notes.filter((i) => i.key === to || i.name.toLowerCase().includes(q) || i.path?.toLowerCase().includes(q));
-  if (!q || hits.length !== 1) return hits.length ? `"${to}" matches ${hits.length} notes: ${hits.map((i) => i.name).join(", ")}` : `no note wired to this card matches "${to}" (overlook context lists them)`;
+  const hits = wiredNotes(me.id, to);
+  if (hits.length !== 1) return hits.length ? `"${to}" matches ${hits.length} notes: ${hits.map((i) => i.name).join(", ")}` : `no note wired to this card matches "${to}" (overlook context lists them)`;
   const n = hits[0], add = String(text ?? "").slice(0, 8000);
   if (!add.trim()) return "empty text";
   const k = `${me.id}>write`, now = Date.now(), recent = (sent.get(k) ?? []).filter((x) => now - x < 60_000);

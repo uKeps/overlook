@@ -307,6 +307,16 @@ const layoutFns = (orchPanes: any[], hiddenOn: (p: any) => any = () => undefined
   return new Function("orchPanes", "hiddenOn", `${src}; return { treeLayout, placeBeside };`)(orchPanes, hiddenOn);
 };
 
+test("a browser or note an agent opened goes with it, unless another terminal is wired to the note", () => {
+  const js = readFileSync(`${ROOT}/app.js`, "utf8"), src = js.match(/^function leftBehind\([\s\S]*?^}/m)![0];
+  const leftBehind = new Function("paneKey", `${src}; return leftBehind;`)((p: any) => `${p.kind}:${p.id}`);
+  const other = { kind: "terminal", id: "t2" };
+  const all = [other, { kind: "sticky", id: "1", openedBy: "t1" }, { kind: "sticky", id: "2", openedBy: "t1" }, { kind: "browser", id: "br3", openedBy: "t1" },
+    { kind: "sticky", id: "4" }, { kind: "sticky", id: "5", openedBy: "t2" }, { kind: "browser", id: "br6", openedBy: "t1" }];
+  const links = [{ a: "terminal:t2", b: "sticky:2" }, { a: "browser:br6", b: "terminal:t2" }]; // t1, the opener, is gone
+  expect(all.filter(leftBehind(all, links)).map((p) => p.id)).toEqual(["1", "br3", "br6"]); // a browser goes even when wired: only a note is context
+});
+
 test("terminals an agent spawns hang below it as a tree: centred rows, subtrees side by side", () => {
   const orchPanes: any[] = [], { treeLayout } = layoutFns(orchPanes);
   const m = { kind: "terminal", id: "m", x: 0, y: 0, w: 1000, h: 600 };
@@ -1965,6 +1975,21 @@ test("overlook sketch reads the drawing of the caller's own canvas, not of the o
   expect(a.out).not.toContain("HIDDEN_PLAN"); expect(b.out).not.toContain("SHOWING_PLAN");
   a.ws.close(); b.ws.close();
   for (const id of ["t_ska", "t_skb"]) await post("/api/pty/close", { id });
+});
+
+test("overlook close: a note wired to the caller goes by its name, a vault note or an unknown one doesn't", async () => {
+  const b = await openPane("t_nc");
+  const send = (path: string, body: object) => fetch(`${BASE}${path}`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify(body) });
+  await send("/api/canvas/wires", { client: "test-nc", wires: [], names: {}, ctx: { t_nc: [{ key: "sticky:12", name: "Plano do dia", text: "a" }, { key: "note:x.md", name: "Plano antigo", path: "x.md" }] } });
+  b.ws.send("overlook close outra; overlook close plano\r");
+  await until(b, /outra isn't one you opened/);
+  let spawns: any[] = [];
+  for (const end = Date.now() + 8000; !spawns.length && Date.now() < end; await Bun.sleep(100)) ({ spawns } = await (await send("/api/canvas/spawns", { panes: ["t_nc"], done: [] })).json());
+  expect(spawns[0]).toMatchObject({ parent: "t_nc", kind: "close", target: "sticky:12" }); // the vault note isn't a candidate; the canvas checks it opened it
+  await send("/api/canvas/spawns", { panes: [], done: [{ id: spawns[0].id }] });
+  await until(b, /[\r\n]closed/);
+  b.ws.close();
+  await post("/api/pty/close", { id: "t_nc" });
 });
 
 test("wired notes reach the agent: overlook context, and --new only gives what changed", async () => {
