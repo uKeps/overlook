@@ -2037,15 +2037,19 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-plane.free .orch-pane[data-kind="terminal"].collapsed { height: 28px !important; }
 .orch-pane[data-kind="terminal"].collapsed > .orch-head { border-radius: 12px; }
 /* On the canvas a terminal or a browser has no strip at all: its name sits on the canvas just above the card, like a
-   frame's name, always in view; git and − □ × join it on that line while the pointer is over the card. It's still the
-   handle (drag the name, or Alt+drag anywhere). Sized against the zoom, so it reads the same as the canvas zooms out.
-   A browser keeps its address bar, now the card's top. Folded, maximized or tiled, the card keeps the strip on itself. */
+   frame's name; it's still the handle (drag the name, or Alt+drag anywhere). Sized against the zoom, so it reads the
+   same as the canvas zooms out. A browser's name is always in view, with − □ × on that line while the pointer is over
+   it, and its address bar is the card's top. A terminal is the terminal only: its name shows while the pointer is over
+   it or it waits for you, and git and the buttons are in its right-click menu. Folded, maximized or tiled, the card
+   keeps the strip on itself. */
 .orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) { overflow: visible; }
 .orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) > .orch-head {
   position: absolute; left: 0; right: 0; bottom: 100%; height: auto; padding: 0 0 8px 2px;
   background: none; border: 0; border-radius: 0; overflow: visible; font-size: clamp(11px, calc(12px / var(--z, 1)), 22px);
 }
-.orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) > .orch-head > .win-title { opacity: 1; flex: 0 1 auto; font-size: inherit; }
+.orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) > .orch-head > .win-title { flex: 0 1 auto; font-size: inherit; }
+.orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) > .orch-head > .win-title { opacity: 1; }
+.orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) > .orch-head > :not(.win-title) { display: none; }
 .orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) > .orch-feed { border-radius: calc(10px - var(--bw, 1px)); } /* inside its border */
 .orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) > .orch-feed { border-radius: 12px; }
 .orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed):has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 12px 12px 0 0; }

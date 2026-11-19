@@ -4227,7 +4227,7 @@ function paneMenu(key, cx, cy) {
   }
   const term = p.kind === "terminal" ? terms.get(p.id)?.term : null, card = $(`.orch-pane[data-key="${CSS.escape(key)}"]`);
   const ws = getSelection(), picked = term ? term.getSelection() : ws && !ws.isCollapsed && card?.contains(ws.anchorNode) ? ws.toString() : "";
-  const others = orchPanes.filter((x) => x !== p), spec = paneSpec(p);
+  const others = orchPanes.filter((x) => x !== p), spec = paneSpec(p), git = p.kind === "terminal" && gitPanes[p.id];
   ctxMenu(cx, cy, [
     term && { label: "Copy", ic: "copy", kbd: "Ctrl+C", off: !picked, run: () => copyText(picked) },
     term && { label: "Paste", ic: "paste", kbd: "Ctrl+V", run: () => navigator.clipboard?.readText().then((t) => { if (t) term.paste(t); term.focus(); }, () => toast("The browser didn't allow reading the clipboard")) },
@@ -4248,6 +4248,9 @@ function paneMenu(key, cx, cy) {
     term && { label: p.run ? "Restart (resumes the session)" : "Restart", ic: "reload", run: () => termRestart(p) },
     p.kind === "terminal" && !p.run && { label: "Open in desktop terminal", ic: "ext", run: () => ACTIONS["term-launch-app"]({ dataset: { key } }) },
     p.cwd && { label: "Copy folder path", ic: "folder", run: () => copyText(p.cwd) },
+    // a terminal's git, which its card no longer shows on the canvas (nothing on top of it)
+    git && { label: `${git.branch}${git.files ? ` · +${git.add} −${git.del} in ${git.files} file${git.files > 1 ? "s" : ""}` : ""}`, ic: "branch", off: true },
+    git?.pr && { label: `PR #${git.pr.number}: ${CI_LABEL[git.pr.state] || git.pr.state}`, ic: "ext", off: !git.pr.url, run: () => window.open(git.pr.url, "_blank", "noopener") },
     "-",
     { label: "Rename…", ic: "edit", run: () => renamePane(p) },
     free && { label: p.collapsed ? "Expand" : "Minimize", ic: "fold", run: () => ACTIONS["orch-collapse"]({ dataset: { key } }) },
