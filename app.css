@@ -2044,13 +2044,13 @@ body.canvas-full .orch-work { gap: 0; }
 .git-chip svg { flex: none; width: 1em; height: 1em; margin-right: -.35em; }
 .git-br { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .git-diff, .git-pr { flex: none; }
-.git-diff ins, .git-diff del { text-decoration: none; font: 400 .95em var(--mono); }
-.git-diff ins { color: var(--ok); } .git-diff del { color: var(--bad); }
-.git-pr { color: var(--faint); text-decoration: none; } /* the CI's colour is its dot and its text, no pill */
-.git-pr::before { content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .45em; border-radius: 50%; background: currentColor; vertical-align: .1em; }
+.git-diff ins, .git-diff del { text-decoration: none; font-variant-numeric: tabular-nums; }
+.git-diff ins { color: color-mix(in srgb, var(--ok) 70%, var(--faint)); } .git-diff del { color: color-mix(in srgb, var(--bad) 70%, var(--faint)); }
+.git-pr { --ci: var(--faint); color: var(--faint); text-decoration: none; } /* its CI is the dot's colour (and the tooltip) */
+.git-pr::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .4em; border-radius: 50%; background: var(--ci); vertical-align: .1em; }
 .git-pr[href]:hover { text-decoration: underline; text-underline-offset: 2px; }
-.git-pr[data-ci="running"] { color: var(--warn); } .git-pr[data-ci="passed"] { color: var(--ok); }
-.git-pr[data-ci="failed"] { color: var(--bad); } .git-pr[data-ci="merged"] { color: var(--p3); }
+.git-pr[data-ci="running"] { --ci: var(--warn); } .git-pr[data-ci="passed"] { --ci: var(--ok); }
+.git-pr[data-ci="failed"] { --ci: var(--bad); } .git-pr[data-ci="merged"] { --ci: var(--p3); }
 /* the window surface: the theme background at 95% over the blur; the text stays at full strength */
 .orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
 .orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 0 0 12px 12px; }

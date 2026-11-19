@@ -2659,8 +2659,8 @@ async function pollGit() {
 }
 const CI_LABEL = { running: "CI running", passed: "CI passed", failed: "CI failed", merged: "merged", closed: "closed", open: "open" };
 const gitChip = (g) => !g ? "" : `<span class="git-chip">${icon("branch", 11)}<span class="git-br">${esc(g.branch)}</span>`
-  + (g.files ? `<span class="git-diff" title="Uncommitted: ${g.files} file(s), +${g.add} −${g.del} lines">${g.files} file${g.files > 1 ? "s" : ""} <ins>+${g.add}</ins> <del>−${g.del}</del></span>` : "")
-  + (g.pr ? `<a class="git-pr" data-ci="${esc(g.pr.state)}" ${g.pr.url ? `href="${esc(g.pr.url)}" target="_blank" rel="noopener"` : ""} title="Pull request #${esc(g.pr.number)}: ${CI_LABEL[g.pr.state] || esc(g.pr.state)}">#${esc(g.pr.number)} ${CI_LABEL[g.pr.state] || esc(g.pr.state)}</a>` : "") + "</span>";
+  + (g.files ? `<span class="git-diff" title="Uncommitted: ${g.files} file(s), +${g.add} −${g.del} lines"><ins>+${g.add}</ins> <del>−${g.del}</del></span>` : "")
+  + (g.pr ? `<a class="git-pr" data-ci="${esc(g.pr.state)}" ${g.pr.url ? `href="${esc(g.pr.url)}" target="_blank" rel="noopener"` : ""} title="Pull request #${esc(g.pr.number)}: ${CI_LABEL[g.pr.state] || esc(g.pr.state)}">#${esc(g.pr.number)}</a>` : "") + "</span>";
 // An agent that ran `overlook done` folds to its title bar, dimmed with a check; untouched for 30 min it closes, and
 // stays reopenable from the canvas menu (the card keeps its session, so reopening resumes the conversation). Typing in it,
 // a message to it or expanding it keeps it.
