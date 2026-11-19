@@ -2332,18 +2332,20 @@ function mountBrowser(feed, p) {
   });
   view.addEventListener("pointerup", (e) => { if (held === "none" && view.dataset.s) return; out({ t: "mouse", e: "mouseReleased", ...at(e), b: BTN[e.button] || "none", bs: e.buttons, n: e.detail || 1, m: mods(e) }); held = "none"; });
   view.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); }); // the page's own menu, not the card's
-  // The wheel scrolls the page; Ctrl/Alt + wheel (or a pinch) stays the canvas's zoom.
+  // The wheel scrolls the page; Ctrl/Alt + wheel (or a pinch) zooms the canvas, unless you clicked into the page: then
+  // that goes to the page too (an Overlook or a map in it zooms itself), until you click outside the card.
   view.addEventListener("wheel", (e) => {
-    if (e.ctrlKey || e.altKey || view.dataset.s) return;
+    if (view.dataset.s || ((e.ctrlKey || e.altKey) && document.activeElement !== view)) return;
     e.preventDefault(); e.stopPropagation();
     const k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
     out({ t: "wheel", ...at(e), dx: e.deltaX * k, dy: e.deltaY * k, m: mods(e) });
   }, { passive: false });
-  // Keys typed into the page stay there (the canvas's own shortcuts on Ctrl+Alt still work); Ctrl+V pastes the
-  // clipboard of this machine, which the headless browser can't read itself; Ctrl+= / Ctrl+- / Ctrl+0 zoom the page.
+  // Keys typed into the page stay there, Ctrl+Alt ones too (click outside the card for the canvas's shortcuts); AltGr
+  // (Ctrl+Alt on Windows) types its character. Ctrl+V pastes the clipboard of this machine, which the headless browser
+  // can't read itself; Ctrl+= / Ctrl+- / Ctrl+0 zoom the page.
   const key = (e, up) => {
-    if (e.ctrlKey && e.altKey) return;
     e.preventDefault(); e.stopPropagation();
+    if (e.getModifierState?.("AltGraph") && e.key.length === 1) return out({ t: "key", e: up ? "up" : "down", key: e.key, code: e.code, m: mods(e) & 8 });
     const zk = (e.ctrlKey || e.metaKey) && { "=": 1, "+": 1, "-": -1, "_": -1, "0": 0 }[e.key];
     if (zk !== undefined && zk !== false) { if (!up) zk ? zoomBy(zk) : setView({ zoom: 1 }); return; }
     if (!up && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") { navigator.clipboard?.readText().then((text) => text && out({ t: "text", text })).catch(() => toast("The browser didn't allow reading the clipboard")); return; }
@@ -3146,6 +3148,7 @@ document.addEventListener("fullscreenchange", () => {
 });
 window.addEventListener("keydown", (e) => {
   if (!e.ctrlKey || !e.altKey || e.metaKey || route().pg !== "agents") return;
+  if (document.activeElement?.closest?.(".orch-br-view")) return; // clicked into a browser card: its page gets every key
   const keys = orchPanes.map(paneKey), i = keys.indexOf(orchActive);
   const act = {
     ArrowRight: () => keys.length && focusPane(keys[(i + 1) % keys.length]),
@@ -3312,6 +3315,8 @@ function bindCanvasInteractions(canvas) {
   let wheelTo = "", wheelAt = 0;
   canvas.addEventListener("wheel", (e) => {
     if (orchMode !== "free" || orchMax) return;
+    const br = document.activeElement?.closest?.(".orch-br-view");
+    if (br?.contains(e.target)) return; // clicked into a browser card's page: the wheel, Ctrl or a pinch too, is the page's
     if (e.timeStamp - wheelAt > 200) {
       const pane = e.target.closest?.(".orch-pane");
       wheelTo = onCanvasBg(e.target, canvas) || (pane && pane.dataset.key !== orchActive) ? "pan" : pane ? "card" : "";
