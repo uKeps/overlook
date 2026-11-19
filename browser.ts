@@ -72,6 +72,21 @@ const look = (t: Tab) => call(t, "Runtime.evaluate", { expression: `[document.ti
   t.title = String(title ?? ""); t.icon = /^https?:\/\//.test(String(icon)) ? String(icon).slice(0, 2000) : ""; meta(t);
 });
 
+// Each card's tab in a window of its own: a tab behind another in the same window is hidden, and a hidden page paints
+// no screencast frames (a card froze on its last frame as soon as another card opened, while its clicks still went in).
+async function newTab(b: string, url: string) {
+  const { webSocketDebuggerUrl } = await (await fetch(`${b}/json/version`)).json() as any;
+  const ws = new WebSocket(webSocketDebuggerUrl);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const r: any = await new Promise((res, rej) => {
+    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url, newWindow: true } }));
+    ws.onmessage = (e) => { const m = JSON.parse(String(e.data)); if (m.id === 1) res(m); };
+    ws.onerror = () => rej(new Error("couldn't reach the browser"));
+    timer = setTimeout(() => rej(new Error("the browser didn't open a tab")), 15_000);
+  }).finally(() => { clearTimeout(timer); ws.close(); });
+  if (!r.result?.targetId) throw new Error(r.error?.message || "the browser didn't open a tab");
+  return { id: r.result.targetId as string, webSocketDebuggerUrl: `${b.replace(/^http/, "ws")}/devtools/page/${r.result.targetId}` };
+}
 // The card's tab (opened at `url` the first time).
 export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
   const have = tabs.get(id);
@@ -79,9 +94,9 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
   if (opening.has(id)) return opening.get(id)!;
   const p = (async () => {
     const b = await devtools();
-    const info = await (await fetch(`${b}/json/new?${encodeURIComponent(safeUrl(url) || "about:blank")}`, { method: "PUT" })).json() as any;
+    const start = safeUrl(url) || "about:blank", info = await newTab(b, start);
     const ws = new WebSocket(info.webSocketDebuggerUrl);
-    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: info.url, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, used: Date.now(), ready: Promise.resolve() };
+    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: start, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, used: Date.now(), ready: Promise.resolve() };
     t.ready = new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error("couldn't reach the tab")); });
     ws.onclose = () => { if (tabs.get(id) === t) drop(t); };
     ws.onmessage = (ev) => {
