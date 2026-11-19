@@ -4260,7 +4260,9 @@ function paneMenu(key, cx, cy) {
 }
 // Puts the shown canvas (cards, wires, view, drawing) back in its entry and brings another in. No card closes: a terminal
 // that goes keeps its PTY and its xterm (terms) and shows again as it was.
-function switchCanvas(id) {
+// dir: which way you went (Ctrl+Alt+↓: 1, ↑: -1); otherwise from the switcher's order.
+let slideT = 0;
+function switchCanvas(id, dir) {
   const cur = canvases.find((c) => c.id === canvasId), next = canvases.find((c) => c.id === id);
   if (!next || next === cur) return;
   stopGlide(); endDraw(); ctxClose();
@@ -4272,13 +4274,21 @@ function switchCanvas(id) {
   saveCanvas();
   const cv = $("#orch-canvas"), sk = $("#orch-sketch");
   if (cv) { sk?.unmount?.(); sk?.remove(); $("#orch-sketchbar")?.remove(); addSketchLayer(cv); }
+  // the cards you leave go the way you went and the new ones come in from the other side (orchPaint's pane-out and
+  // pane-in, turned by data-slide); the wires sit it out (slidePanes)
+  const plane = $("#orch-plane"), way = dir ?? Math.sign(canvases.indexOf(next) - canvases.indexOf(cur));
+  if (plane && way && !calm.matches) {
+    plane.dataset.slide = way > 0 ? "down" : "up"; slidePanes();
+    for (const p of orchPanes) bornKeys.add(paneKey(p)); // so they come in (pane-in) instead of just being there
+    clearTimeout(slideT); slideT = setTimeout(() => delete plane.dataset.slide, 450);
+  }
   paintCanvasName(); updateSelectionUI(); agentsBody();
 }
 // Ctrl+Alt+↓/↑: the next/previous canvas in the switcher's order (wrapping), its last focused card taking the keyboard.
 const canvasStep = (d) => canvases[(canvases.findIndex((c) => c.id === canvasId) + d + canvases.length) % canvases.length];
 function stepCanvas(d) {
   if (canvases.length < 2) return toast("One canvas only: New canvas is in the menu of its name, top left");
-  switchCanvas(canvasStep(d).id);
+  switchCanvas(canvasStep(d).id, d);
   if (orchActive) setTimeout(() => focusPane(orchActive, true), 80);
 }
 // A card on a canvas that isn't showing (from Sessions, a hand-off): its canvas comes in first.
@@ -4467,7 +4477,14 @@ async function orchPaint(force) {
         // a spawned terminal grows out from under the card that spawned it; the others fade in where they are
         const from = bornFrom.get(key); bornFrom.delete(key);
         if (from) { card.style.setProperty("--sx", `${Math.round(from.x - p.x - p.w / 2)}px`); card.style.setProperty("--sy", `${Math.round(from.y - p.y)}px`); }
-        card.classList.add(from ? "pane-sprout" : "pane-in");
+        // the class goes once it has come in: the waiting ring (an animation too) waits for that
+        if (!calm.matches) {
+          card.classList.add(from ? "pane-sprout" : "pane-in");
+          card.addEventListener("animationend", function done(e) {
+            if (e.target !== card || !/^pane-(in|sprout|from-)/.test(e.animationName)) return;
+            card.classList.remove("pane-in", "pane-sprout"); card.removeEventListener("animationend", done);
+          });
+        }
       }
       plane.appendChild(card);
     }
