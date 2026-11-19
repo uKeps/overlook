@@ -1160,19 +1160,20 @@ body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill.wait { border-color: co
 /* focusPane: a short ring so the eye finds the card it jumped to */
 .orch-pane.pane-flash { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash .7s ease-out; } /* outline: the shadows are !important */
 @keyframes pane-flash { 0% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
-/* an agent wrote into this note (overlook write): the same ring, slower, and the text it changed glows a moment */
-.orch-pane.pane-wrote { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash 1.6s ease-out; }
-.orch-pane.pane-wrote .orch-sticky-view { animation: wrote-tint 1.6s ease-out; }
-@keyframes wrote-tint { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } }
-/* a terminal whose Claude waits for you (a question, a permission, its turn ended): a ring that breathes, so the card
-   that needs you shows among the others; still (but there) under reduced motion */
-.orch-pane.waiting { isolation: isolate; } /* the ring stays inside its own card, under any card on top of it */
-.orch-pane.waiting::before {
-  content: ""; position: absolute; inset: 0; z-index: 30; border-radius: inherit; pointer-events: none;
-  box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 0 22px color-mix(in srgb, var(--accent) 22%, transparent);
-  animation: wait-breathe 2.4s ease-in-out infinite;
+/* an agent wrote into this note (overlook write): the ring and a glow over the whole note rise and fade, both slowly */
+.orch-pane.pane-wrote { outline: 3px solid transparent; outline-offset: 4px; animation: wrote-ring 2.4s ease-in-out; }
+@keyframes wrote-ring { 35%, 50% { outline-color: var(--accent); } }
+.orch-pane.pane-wrote > .orch-feed { animation: wrote-tint 2.4s ease-in-out; }
+@keyframes wrote-tint { 35%, 50% { background: color-mix(in srgb, var(--accent) 18%, transparent); } }
+/* a terminal whose Claude waits for you (a question, a permission, its turn ended): its title says so and a soft ring
+   stays round it, so the card that needs you shows among the others. When it starts waiting the ring breathes a few
+   times, slowly, and settles (not all night: an agent can wait for hours). Under reduced motion it's just still. */
+.orch-pane.waiting:not(.pane-in, .pane-sprout, .pane-out, .pane-flash) {
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 3px;
+  animation: wait-breathe 3.2s ease-in-out 6;
 }
-@keyframes wait-breathe { 50% { opacity: .3; } }
+@keyframes wait-breathe { 50% { outline-color: var(--accent); outline-offset: 6px; } }
+.orch-pane.waiting .win-title b::after { content: " · waiting for you"; color: var(--accent); font-weight: 500; }
 
 /* Free 2D Maestri Canvas mode & Background Presets */
 .orch-canvas.free {
