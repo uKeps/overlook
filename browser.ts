@@ -11,6 +11,7 @@ type Tab = {
   id: string; target: string; ws: WebSocket; seq: number; calls: Map<number, (r: any) => void>; subs: Set<Sub>;
   url: string; title: string; icon: string; back: boolean; fwd: boolean; loading: boolean;
   w: number; h: number; z: number; mobile: boolean; used: number; ready: Promise<void>;
+  win?: number; fw: number; fh: number; // its window, and what the window's frame takes around the page
 };
 let proc: ReturnType<typeof Bun.spawn> | null = null, base: Promise<string> | null = null, lastTab = Date.now();
 const tabs = new Map<string, Tab>(), opening = new Map<string, Promise<Tab>>();
@@ -96,7 +97,7 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
     const b = await devtools();
     const start = safeUrl(url) || "about:blank", info = await newTab(b, start);
     const ws = new WebSocket(info.webSocketDebuggerUrl);
-    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: start, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, used: Date.now(), ready: Promise.resolve() };
+    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: start, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, fw: 0, fh: 0, used: Date.now(), ready: Promise.resolve() };
     t.ready = new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error("couldn't reach the tab")); });
     ws.onclose = () => { if (tabs.get(id) === t) drop(t); };
     ws.onmessage = (ev) => {
@@ -116,6 +117,11 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
     await t.ready;
     tabs.set(id, t);
     await call(t, "Page.enable");
+    // The window's page area is what gets painted and captured, whatever the emulated viewport: a window smaller than
+    // the card's page clipped it (the card showed the page's top-left corner stretched, and clicks landed elsewhere).
+    // size() keeps the page area at the card's size; the frame around it (headless still has one) is measured here.
+    const win = (await call(t, "Browser.getWindowForTarget", { targetId: t.target })).result, vp = (await call(t, "Page.getLayoutMetrics")).result?.cssLayoutViewport;
+    if (win?.windowId && vp?.clientWidth) { t.win = win.windowId; t.fw = Math.max(0, win.bounds.width - vp.clientWidth); t.fh = Math.max(0, win.bounds.height - vp.clientHeight); }
     await size(t, t.w, t.h);
     return t;
   })().finally(() => opening.delete(id));
@@ -128,6 +134,7 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
 async function size(t: Tab, w: number, h: number, z = t.z, mobile = t.mobile) {
   t.z = Math.max(0.25, Math.min(3, z)); t.mobile = mobile;
   t.w = Math.max(200, Math.min(4000, Math.round(w))); t.h = Math.max(150, Math.min(3000, Math.round(h)));
+  if (t.win) await call(t, "Browser.setWindowBounds", { windowId: t.win, bounds: { width: t.w + t.fw, height: t.h + t.fh } });
   await call(t, "Emulation.setDeviceMetricsOverride", { width: t.w, height: t.h, deviceScaleFactor: t.z, mobile: t.mobile });
   if (t.subs.size) await cast(t);
 }
