@@ -2566,6 +2566,7 @@ function makeRoom() {
 // Puts a card on the workspace (from a click, a drop or the HUD); x/y are canvas coordinates of a drop.
 const bornKeys = new Set(); // cards just added: they fade in once (orchPaint)
 const bornFrom = new Map(); // spawned terminals: the point under their parent they grow out of (orchPaint)
+const bornWires = new Set(); // wires ("a>b") to cards an agent just opened: they draw themselves in (wireIn)
 function addPane(item, x, y) {
   const k = paneKey(item), have = orchPanes.find((p) => paneKey(p) === k), p = have || item;
   if (!have) {
@@ -2627,6 +2628,7 @@ async function takeSpawns() {
     }
     if (!parent || !(on ? on.panes.length < 18 && on.panes.push(p) : addPane(p))) { if (p.spawnedBy) treeLayout(parent); slideHome(on?.panes || orchPanes); spawnDone.push({ id: s.id, why: parent ? "the canvas is full: ask the user to close a card" : "your card is no longer on the canvas" }); continue; }
     (on ? (on.links ||= []) : orchLinks).push({ a: paneKey(parent), b: paneKey(p) });
+    if (!on) bornWires.add(`${paneKey(parent)}>${paneKey(p)}`);
     if (on && p.kind === "terminal") termStart(p);
     spawnDone.push({ id: s.id });
   }
@@ -2871,11 +2873,24 @@ function drawLinks(tmp) {
     const r = rope(keys[i], route(box(byKey.get(l.a)), box(byKey.get(l.b))));
     r.ln = svg.children[i]?.firstChild; r.hit = hits.children[i];
     svg.children[i]?.classList.toggle("hot", hotWires.has([l.a, l.b].sort().join("|")));
+    if (bornWires.delete(keys[i]) && !calm.matches) wireIn(r.ln);
   });
   ropePaint = () => { for (const r of ropes.values()) { const d = smooth(r.pts); r.ln?.setAttribute("d", d); r.hit?.setAttribute("d", d); } };
   let tp = svg.querySelector("path.tmp");
   if (tmp) { tp ||= svg.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "path")); tp.setAttribute("class", "ln tmp"); tp.setAttribute("d", curve(...tmp)); } else tp?.remove();
   ropeKick();
+}
+// A wire to a card an agent just opened draws itself out of that agent, once the card has grown in (the wires sit out
+// the arranging, data-arranging): a dash as long as the rope (in its own units: the zoom is a CSS transform above the
+// svg, which vector-effect doesn't undo) slides along it.
+function wireIn(el) {
+  if (!el) return;
+  setTimeout(() => { // the rope has its path by then (ropePaint)
+    const len = Math.ceil((el.getTotalLength?.() || 0) * 1.05);
+    if (!len) return;
+    el.style.setProperty("--len", `${len}px`); el.classList.add("ln-in");
+    el.addEventListener("animationend", () => el.classList.remove("ln-in"), { once: true });
+  }, 40);
 }
 // Wires are ropes (Verlet: points that remember where they were, pulled down by gravity, held at a fixed distance
 // from each other): they hang loose between the cards, drop when wired, and swing when a card moves. The simulation
