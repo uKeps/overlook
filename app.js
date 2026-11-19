@@ -3784,9 +3784,9 @@ function noteStyle(key, patch) {
   saveCanvas(); orchSigs.delete(key); orchPaint(true);
 }
 const winHead = (key, title0, sub, acts = "", title = orchPanes.find((x) => paneKey(x) === key)?.name || title0) => `<div class="win-title" title="${esc(title)}"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="orch-acts">${acts}<span class="win-ctl">
-    <button type="button" class="btn orch-icon-btn" data-act="orch-collapse" data-key="${esc(key)}" title="Minimize to the title bar" aria-label="Minimize">${icon("minus", 13)}</button>
-    <button type="button" class="btn orch-icon-btn" data-act="orch-max" data-key="${esc(key)}" title="Maximize (Ctrl+Alt+Enter)" aria-label="Maximize">${icon("max", 12)}</button>
-    <button type="button" class="btn orch-icon-btn win-close" data-act="orch-unpin" data-key="${esc(key)}" title="Close (Ctrl+Alt+W)" aria-label="Close">${icon("x", 13)}</button>
+    <button type="button" class="btn orch-icon-btn" data-act="orch-collapse" data-key="${esc(key)}" title="Minimize to the title bar" aria-label="Minimize">${icon("minus", 12)}</button>
+    <button type="button" class="btn orch-icon-btn" data-act="orch-max" data-key="${esc(key)}" title="Maximize (Ctrl+Alt+Enter)" aria-label="Maximize">${icon("rect", 11)}</button>
+    <button type="button" class="btn orch-icon-btn win-close" data-act="orch-unpin" data-key="${esc(key)}" title="Close (Ctrl+Alt+W)" aria-label="Close">${icon("x", 12)}</button>
   </span></div>`;
 // A re-render while the user is selecting text in a card would wipe the selection: wait for the next tick.
 const selectingIn = (el) => { const s = getSelection(); return !!s && !s.isCollapsed && el.contains(s.anchorNode); };

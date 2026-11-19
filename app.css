@@ -1312,7 +1312,6 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 .orch-pane[data-kind="sticky"].collapsed > .orch-head { height: 100%; }
 .orch-pane[data-kind="sticky"] .win-ctl > :not(.win-close) { display: none; }
 .orch-pane[data-kind="sticky"] .win-title { font: 600 calc(var(--fs) * 1.06)/1.25 var(--display); color: color-mix(in srgb, var(--note) 25%, var(--ink)); letter-spacing: -.005em; }
-.orch-pane[data-kind="sticky"] .win-title b { font-weight: inherit; }
 .orch-pane[data-kind="sticky"] .win-title b:empty::before { content: "Untitled"; font-weight: 500; color: var(--faint); opacity: 0; transition: opacity .15s var(--ease); }
 .orch-pane[data-kind="sticky"]:is(:hover, .active) .win-title b:empty::before { opacity: .55; }
 .orch-pane[data-kind="sticky"] .win-rename { width: 100%; height: 1.6em; font: inherit; color: inherit; }
@@ -1904,14 +1903,16 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 .orch-plane.free .orch-head:active { cursor: grabbing; }
 .win-title {
   flex: 1 1 0; min-width: 0; pointer-events: none;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 500 12px var(--body); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 400 11.5px var(--body); color: var(--faint); letter-spacing: .01em;
 }
-.orch-pane.active .win-title { color: var(--ink); }
+.orch-pane.active .win-title { color: var(--muted); }
+.win-title b { font-weight: inherit; }
 .win-title small { margin-left: 6px; font: 400 11px var(--body); color: var(--faint); }
 .win-title .orch-cost { margin-left: 6px; font: 400 11px var(--body); color: var(--faint); font-variant-numeric: tabular-nums; pointer-events: auto; } /* its tooltip says the dollars are ≈ API price */
 .orch-acts { margin-left: auto; display: flex; align-items: center; gap: 2px; position: relative; z-index: 3; opacity: 0; transition: opacity .15s; }
 .orch-pane:is(:hover, .active, :focus-within) .orch-acts { opacity: 1; }
 .win-ctl { display: flex; gap: 1px; }
+.orch-acts .btn.orch-icon-btn { color: var(--faint); }
 .orch-acts .win-close:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
 .orch-acts .btn, .orch-acts a.btn {
   height: 22px; min-width: 22px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent;
@@ -2039,15 +2040,15 @@ body.canvas-full .orch-work { gap: 0; }
    the branch name to the PR; it takes the pointer (tooltips, the PR link), a drag on it still moves the card. */
 .orch-head:has(> .git-chip) > .win-title { min-width: 40px; }
 /* Grows against the zoom (like --bw) so it stays readable on screen as the canvas zooms out, up to what the bar holds. */
-.git-chip { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: .7em; font: 500 clamp(11px, calc(11px / var(--z, 1)), 18px) var(--body); color: var(--muted); white-space: nowrap; position: relative; z-index: 3; }
+.git-chip { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: .7em; font: 400 clamp(11px, calc(11px / var(--z, 1)), 18px) var(--body); color: var(--faint); white-space: nowrap; position: relative; z-index: 3; }
 .git-chip svg { flex: none; width: 1em; height: 1em; margin-right: -.35em; }
 .git-br { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .git-diff, .git-pr { flex: none; }
-.git-diff ins, .git-diff del { text-decoration: none; font: 500 .95em var(--mono); }
+.git-diff ins, .git-diff del { text-decoration: none; font: 400 .95em var(--mono); }
 .git-diff ins { color: var(--ok); } .git-diff del { color: var(--bad); }
-.git-pr { padding: .1em .6em; border-radius: .5em; color: var(--muted); background: color-mix(in srgb, currentColor 14%, transparent); text-decoration: none; }
+.git-pr { color: var(--faint); text-decoration: none; } /* the CI's colour is its dot and its text, no pill */
 .git-pr::before { content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .45em; border-radius: 50%; background: currentColor; vertical-align: .1em; }
-.git-pr[href]:hover { background: color-mix(in srgb, currentColor 26%, transparent); }
+.git-pr[href]:hover { text-decoration: underline; text-underline-offset: 2px; }
 .git-pr[data-ci="running"] { color: var(--warn); } .git-pr[data-ci="passed"] { color: var(--ok); }
 .git-pr[data-ci="failed"] { color: var(--bad); } .git-pr[data-ci="merged"] { color: var(--p3); }
 /* the window surface: the theme background at 95% over the blur; the text stays at full strength */
