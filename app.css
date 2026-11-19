@@ -1287,32 +1287,34 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 }
 .orch-note-view h1, .orch-note-view h2, .orch-note-view h3 { margin: 12px 0 6px; }
 /* ---------- The note card (sticky): a calm sheet of tinted paper, its title as the bar ----------
-   --note is its tint (the theme's palette), --fs its text size; color and size live on the pane (data-tone, data-size). */
+   --note is its tint (the theme's palette). Its text grows with the card's width (cqi: the pane is a container), and
+   the text size setting scales that (--fs-k); paddings are in em, so the whole sheet scales with it.
+   Color and size live on the pane (data-tone, data-size). */
 .orch-pane[data-kind="sticky"] {
-  --note: var(--accent); --fs: 13.5px;
-  --win-bg: color-mix(in srgb, var(--note) 10%, color-mix(in srgb, var(--surface) 90%, #000));
-  border-color: color-mix(in srgb, var(--note) 20%, rgba(255, 255, 255, .06)); border-radius: 12px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, .45), 0 12px 32px rgba(0, 0, 0, .38);
+  --note: var(--accent); --fs-k: 1;
+  --fs: clamp(12px, calc(var(--fs-k) * (8px + 2cqi)), 40px);
+  --win-bg: color-mix(in srgb, var(--note) 8%, color-mix(in srgb, var(--surface) 86%, #000));
+  border-color: color-mix(in srgb, var(--note) 14%, rgba(255, 255, 255, .05)); border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035), 0 10px 28px rgba(0, 0, 0, .34);
   transition: border-color .18s var(--ease), box-shadow .18s var(--ease), background-color .18s var(--ease);
 }
-.orch-pane[data-kind="sticky"].active { border-color: color-mix(in srgb, var(--note) 45%, transparent); }
+.orch-pane[data-kind="sticky"].active { border-color: color-mix(in srgb, var(--note) 40%, transparent); }
 .orch-plane.free .orch-pane[data-kind="sticky"].selected { border-color: color-mix(in srgb, var(--note) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--note) 30%, transparent), 0 16px 40px rgba(0, 0, 0, .45); }
 .orch-pane[data-tone="yellow"] { --note: var(--p5); }
 .orch-pane[data-tone="green"] { --note: var(--p4); }
 .orch-pane[data-tone="blue"] { --note: var(--p2); }
 .orch-pane[data-tone="violet"] { --note: var(--p3); }
 .orch-pane[data-tone="rose"] { --note: var(--p6); }
-.orch-pane[data-size="s"] { --fs: 12.5px; }
-.orch-pane[data-size="l"] { --fs: 16px; }
-/* the bar: no window chrome, just the title (left) and, on hover, the note's tools */
-.orch-pane[data-kind="sticky"] > .orch-head { height: 36px; padding: 0 8px 0 16px; background: transparent; border-bottom: 0; border-radius: 12px 12px 0 0; }
-.orch-pane[data-kind="sticky"] .win-lights { display: none; }
-.orch-pane[data-kind="sticky"] .win-title { position: static; flex: 1; min-width: 0; text-align: left; font: 600 calc(var(--fs) + 1px) var(--display); color: color-mix(in srgb, var(--note) 30%, var(--ink)); letter-spacing: -.005em; }
-.orch-pane[data-kind="sticky"] .win-title b { font-weight: inherit; }
+.orch-pane[data-size="s"] { --fs-k: .86; }
+.orch-pane[data-size="l"] { --fs-k: 1.2; }
+/* the bar: no window chrome, just the title (left, in the note's type) and, on hover, the note's tools */
+.orch-pane[data-kind="sticky"] > .orch-head { height: max(34px, calc(var(--fs) * 2.6)); padding: 0 6px 0 calc(var(--fs) * 1.15); background: transparent; border-bottom: 0; border-radius: 12px 12px 0 0; }
+.orch-pane[data-kind="sticky"].collapsed > .orch-head { height: 100%; }
+.orch-pane[data-kind="sticky"] .win-ctl > :not(.win-close) { display: none; }
+.orch-pane[data-kind="sticky"] .win-title { font: 600 calc(var(--fs) * 1.06)/1.25 var(--display); color: color-mix(in srgb, var(--note) 25%, var(--ink)); letter-spacing: -.005em; }
 .orch-pane[data-kind="sticky"] .win-title b:empty::before { content: "Untitled"; font-weight: 500; color: var(--faint); opacity: 0; transition: opacity .15s var(--ease); }
 .orch-pane[data-kind="sticky"]:is(:hover, .active) .win-title b:empty::before { opacity: .55; }
-.orch-pane[data-kind="sticky"] .win-title.editing { flex: 1; }
-.orch-pane[data-kind="sticky"] .win-rename { width: 100%; font: inherit; color: inherit; }
+.orch-pane[data-kind="sticky"] .win-rename { width: 100%; height: 1.6em; font: inherit; color: inherit; }
 .orch-pane[data-kind="sticky"] .orch-acts { flex: none; margin-left: 6px; transform: translateY(-2px); transition: opacity .16s var(--ease), transform .16s var(--ease); }
 .orch-pane[data-kind="sticky"]:is(:hover, .active, :focus-within) .orch-acts { opacity: 1; transform: none; }
 .note-tones { display: flex; align-items: center; gap: 5px; padding: 0 6px 0 2px; }
@@ -1326,10 +1328,10 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 @container pane (max-width: 330px) { .note-tones { gap: 3px; padding: 0 3px 0 0; } .note-tone { width: 10px; height: 10px; } }
 .orch-pane[data-kind="sticky"] .orch-feed { padding: 0; gap: 0; }
 .orch-sticky-wrap { height: 100%; display: flex; flex-direction: column; }
-.orch-sticky-view, .orch-sticky-input { flex: 1; min-height: 0; padding: 2px 16px 16px; font: 400 var(--fs)/1.62 var(--body); color: color-mix(in srgb, var(--ink) 90%, transparent); }
+.orch-sticky-view, .orch-sticky-input { flex: 1; min-height: 0; padding: 0 1.15em 1.1em; font: 400 var(--fs)/1.55 var(--body); color: color-mix(in srgb, var(--ink) 86%, transparent); }
 .orch-sticky-view { overflow-y: auto; cursor: text; scrollbar-width: thin; }
 .orch-sticky-view > * + * { margin-top: .6em; }
-.orch-sticky-view :is(h1, h2, h3) { font: 600 1.08em/1.3 var(--display); color: var(--ink); margin-top: 1em; }
+.orch-sticky-view :is(h1, h2, h3) { font: 600 1em/1.35 var(--display); color: var(--ink); margin-top: 1em; }
 .orch-sticky-view > :first-child { margin-top: 0; }
 .orch-sticky-view :is(ul, ol) { padding-left: 1.2em; }
 .orch-sticky-view li + li { margin-top: .2em; }
@@ -1868,13 +1870,14 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   .search-btn span, .search-btn kbd { display: none; }
 }
 
-/* ---------- Canvas cards are windows (Maestri-style): one chrome for every kind ----------
-   Traffic lights (close · minimize · maximize), a centered title, actions that show on hover, a hairline edge and a
-   window shadow. Inner parts are transparent, so the card's own background (a terminal's theme color) is the window. */
+/* ---------- Canvas cards are windows: one quiet chrome for every kind ----------
+   The bar is the card's own surface: its title on the left, a hairline under it; its tools and the window controls
+   (minimize · maximize · close) show on hover. Inner parts are transparent, so the card's own background (a terminal's
+   theme color) is the window. */
 .orch-pane {
   --win-bg: color-mix(in srgb, var(--surface) 88%, #000);
-  --win-head: color-mix(in srgb, var(--win-bg) 90%, #fff);
-  --win-line: rgba(255, 255, 255, .09);
+  --win-head: var(--win-bg);
+  --win-line: rgba(255, 255, 255, .06);
   position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; overflow: hidden;
   background: var(--win-bg); border-radius: 10px;
   border: var(--bw, 1px) solid rgba(255, 255, 255, .13);
@@ -1893,31 +1896,24 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 
 .orch-head {
   flex: none; position: relative; display: flex; align-items: center; gap: 8px;
-  height: 34px; padding: 0 10px; overflow: hidden; user-select: none;
+  height: 34px; padding: 0 5px 0 12px; overflow: hidden; user-select: none;
   background: var(--win-head); border-bottom: 1px solid var(--win-line); border-radius: 9px 9px 0 0;
 }
 .orch-plane.free .orch-head { cursor: grab; }
 .orch-plane.free .orch-head:active { cursor: grabbing; }
-.win-lights { display: flex; gap: 8px; flex: none; position: relative; z-index: 3; }
-.wl {
-  width: 12px; height: 12px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
-  background: rgba(255, 255, 255, .16); display: grid; place-items: center; transition: background .12s;
-}
-.orch-pane:is(.active, :hover) .wl.close { background: #ff5f57; }
-.orch-pane:is(.active, :hover) .wl.min { background: #febc2e; }
-.orch-pane:is(.active, :hover) .wl.max { background: #28c840; }
-.wl::after { font: 700 9px/1 var(--body); color: rgba(0, 0, 0, .55); opacity: 0; }
-.wl.close::after { content: "×"; } .wl.min::after { content: "−"; } .wl.max::after { content: "+"; }
-.win-lights:hover .wl::after { opacity: 1; }
 .win-title {
-  position: absolute; left: 80px; right: 80px; text-align: center; pointer-events: none;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 500 12px var(--body); color: var(--muted);
+  flex: 1 1 0; min-width: 0; pointer-events: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 400 11.5px var(--body); color: var(--faint); letter-spacing: .01em;
 }
-.orch-pane.active .win-title { color: var(--ink); }
+.orch-pane.active .win-title { color: var(--muted); }
+.win-title b { font-weight: inherit; }
 .win-title small { margin-left: 6px; font: 400 11px var(--body); color: var(--faint); }
 .win-title .orch-cost { margin-left: 6px; font: 400 11px var(--body); color: var(--faint); font-variant-numeric: tabular-nums; pointer-events: auto; } /* its tooltip says the dollars are ≈ API price */
 .orch-acts { margin-left: auto; display: flex; align-items: center; gap: 2px; position: relative; z-index: 3; opacity: 0; transition: opacity .15s; }
-.orch-pane:is(:hover, .active) .orch-acts { opacity: 1; }
+.orch-pane:is(:hover, .active, :focus-within) .orch-acts { opacity: 1; }
+.win-ctl { display: flex; gap: 1px; }
+.orch-acts .btn.orch-icon-btn { color: var(--faint); }
+.orch-acts .win-close:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
 .orch-acts .btn, .orch-acts a.btn {
   height: 22px; min-width: 22px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent;
   color: var(--muted); font: 500 11px var(--body); display: inline-flex; align-items: center; justify-content: center; gap: 4px; box-shadow: none;
@@ -2014,7 +2010,8 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-empty { background: none !important; border: 0 !important; box-shadow: none !important; }
 
 /* ---------- Terminal cards: a Ghostty window under Hyprland (decorations.lua, lucid-glass.lua) ----------
-   A slim title bar (its name; drag it, or Alt+drag anywhere, to move), its edges resize it, `exit` closes it.
+   No title bar: a strip of its own surface on top (drag it, or Alt+drag anywhere, to move; its name shows on it while
+   the pointer is over the card), its edges resize it, `exit` closes it.
    No border either: a border's width follows the canvas zoom (--bw), so the terminal's box changed size on every zoom
    step and the shell redrew its prompt each time. The ring and the shadow are box-shadows: they never take room. */
 .orch-pane[data-kind="terminal"] {
@@ -2025,28 +2022,35 @@ body.canvas-full .orch-work { gap: 0; }
 }
 .orch-pane[data-kind="terminal"].typing { --ring: rgba(255, 255, 255, .12); } /* has the keyboard */
 .orch-plane.free .orch-pane[data-kind="terminal"].selected { --ring: var(--accent); }
-.orch-pane[data-kind="terminal"] > .orch-head {
-  height: 28px; border-radius: 12px 12px 0 0; border-bottom-color: rgba(255, 255, 255, .06);
-  background: color-mix(in srgb, var(--win-bg) 95%, transparent);
-}
-.orch-pane[data-kind="terminal"] .wl { width: 10px; height: 10px; }
+.orch-pane[data-kind="terminal"] > .orch-head { border-radius: 12px 12px 0 0; background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
+/* Terminal and browser cards have no title bar: the strip on top is the card's own surface, and its name, chips and
+   buttons show while the pointer is over the card (or the keyboard is in the strip). A card that waits for you keeps
+   its name in view, a folded one its name and git, a rename its field. */
+.orch-pane:is([data-kind="terminal"], [data-kind="browser"]) > .orch-head { height: 24px; border-bottom-color: transparent; }
+.orch-pane:is([data-kind="terminal"], [data-kind="browser"]).collapsed > .orch-head { height: 100%; }
+.orch-pane:is([data-kind="terminal"], [data-kind="browser"]) > .orch-head > * { opacity: 0; transition: opacity .15s; }
+.orch-pane:is([data-kind="terminal"], [data-kind="browser"]):hover > .orch-head > *,
+.orch-pane:is([data-kind="terminal"], [data-kind="browser"]) > .orch-head:focus-within > *,
+.orch-pane:is(.collapsed, .waiting) > .orch-head > .win-title,
+.orch-pane.collapsed > .orch-head > .git-chip,
+.orch-pane > .orch-head > .win-title.editing { opacity: 1; }
 .orch-plane.free .orch-pane[data-kind="terminal"].collapsed { height: 28px !important; }
 .orch-pane[data-kind="terminal"].collapsed > .orch-head { border-radius: 12px; }
 /* Git in a terminal's title bar: branch, uncommitted changes, the branch's PR and its CI. The title gives way to it, and
    the branch name to the PR; it takes the pointer (tooltips, the PR link), a drag on it still moves the card. */
-.orch-head:has(> .git-chip) > .win-title { position: static; flex: 1 1 0; min-width: 40px; }
+.orch-head:has(> .git-chip) > .win-title { min-width: 40px; }
 /* Grows against the zoom (like --bw) so it stays readable on screen as the canvas zooms out, up to what the bar holds. */
-.git-chip { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: .7em; font: 500 clamp(11px, calc(11px / var(--z, 1)), 18px) var(--body); color: var(--muted); white-space: nowrap; position: relative; z-index: 3; }
+.git-chip { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: .7em; font: 400 clamp(11px, calc(11px / var(--z, 1)), 18px) var(--body); color: var(--faint); white-space: nowrap; position: relative; z-index: 3; }
 .git-chip svg { flex: none; width: 1em; height: 1em; margin-right: -.35em; }
 .git-br { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .git-diff, .git-pr { flex: none; }
-.git-diff ins, .git-diff del { text-decoration: none; font: 500 .95em var(--mono); }
-.git-diff ins { color: var(--ok); } .git-diff del { color: var(--bad); }
-.git-pr { padding: .1em .6em; border-radius: .5em; color: var(--muted); background: color-mix(in srgb, currentColor 14%, transparent); text-decoration: none; }
-.git-pr::before { content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .45em; border-radius: 50%; background: currentColor; vertical-align: .1em; }
-.git-pr[href]:hover { background: color-mix(in srgb, currentColor 26%, transparent); }
-.git-pr[data-ci="running"] { color: var(--warn); } .git-pr[data-ci="passed"] { color: var(--ok); }
-.git-pr[data-ci="failed"] { color: var(--bad); } .git-pr[data-ci="merged"] { color: var(--p3); }
+.git-diff ins, .git-diff del { text-decoration: none; font-variant-numeric: tabular-nums; }
+.git-diff ins { color: color-mix(in srgb, var(--ok) 70%, var(--faint)); } .git-diff del { color: color-mix(in srgb, var(--bad) 70%, var(--faint)); }
+.git-pr { --ci: var(--faint); color: var(--faint); text-decoration: none; } /* its CI is the dot's colour (and the tooltip) */
+.git-pr::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .4em; border-radius: 50%; background: var(--ci); vertical-align: .1em; }
+.git-pr[href]:hover { text-decoration: underline; text-underline-offset: 2px; }
+.git-pr[data-ci="running"] { --ci: var(--warn); } .git-pr[data-ci="passed"] { --ci: var(--ok); }
+.git-pr[data-ci="failed"] { --ci: var(--bad); } .git-pr[data-ci="merged"] { --ci: var(--p3); }
 /* the window surface: the theme background at 95% over the blur; the text stays at full strength */
 .orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
 .orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 0 0 12px 12px; }
@@ -2056,7 +2060,7 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-term-view { flex: 1; min-width: 0; min-height: 0; overflow: clip; cursor: text; }
 /* The padding sits on xterm's own element: its FitAddon subtracts that padding from the box it measures, so every
    row and column it counts is on screen (padding on the outer box made it count cells that were then cut off). */
-.orch-term-view .xterm { height: 100%; padding: 10px 12px; }
+.orch-term-view .xterm { height: 100%; padding: 4px 12px 10px; } /* the bar above is the rest of its top margin */
 .orch-term-view .xterm-viewport { background: transparent !important; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .18) transparent; }
 
 /* ---------- Canvas page: the canvas is the whole screen; the header, the week strip and the dock step aside ---------- */
@@ -2175,7 +2179,7 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 /* rename in place, and a card locked in place (no resize edges, no grab cursor) */
 .win-title.editing { pointer-events: auto; }
 .win-rename {
-  width: min(260px, 100%); height: 22px; padding: 0 8px; border-radius: 6px; outline: none; text-align: center;
+  width: min(260px, 100%); height: 22px; padding: 0 8px; border-radius: 6px; outline: none;
   border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); background: rgba(0, 0, 0, .35); color: var(--ink); font: 500 12px var(--body);
 }
 .orch-pane.locked .orch-resize { display: none !important; }
