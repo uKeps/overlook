@@ -3772,7 +3772,7 @@ async function retryTask(taskId, model, paneKeyStr, opts = {}) {
   location.hash = `#/t/${encodeURIComponent(res.id)}`;
 }
 
-// Every card is a window: traffic lights (close · minimize · maximize), a centered title, actions on hover.
+// Every card is a window: its title on the left; on hover, its tools, then minimize · maximize · close, on the right.
 // A name the user gave the card (right-click › Rename) wins over the title it would show.
 // A note's color (soft tints of the theme's own palette) and text size, kept on the pane.
 const NOTE_TONES = [["", "Sand", "var(--accent)"], ["yellow", "Yellow", "var(--p5)"], ["green", "Green", "var(--p4)"], ["blue", "Blue", "var(--p2)"], ["violet", "Violet", "var(--p3)"], ["rose", "Rose", "var(--p6)"]];
@@ -3783,11 +3783,11 @@ function noteStyle(key, patch) {
   for (const [k, v] of Object.entries(patch)) if (v) p[k] = v; else delete p[k];
   saveCanvas(); orchSigs.delete(key); orchPaint(true);
 }
-const winHead = (key, title0, sub, acts = "", title = orchPanes.find((x) => paneKey(x) === key)?.name || title0) => `<div class="win-lights">
-    <button type="button" class="wl close" data-act="orch-unpin" data-key="${esc(key)}" title="Close (Ctrl+Alt+W)" aria-label="Close"></button>
-    <button type="button" class="wl min" data-act="orch-collapse" data-key="${esc(key)}" title="Minimize to the title bar" aria-label="Minimize"></button>
-    <button type="button" class="wl max" data-act="orch-max" data-key="${esc(key)}" title="Maximize (Ctrl+Alt+Enter)" aria-label="Maximize"></button>
-  </div><div class="win-title" title="${esc(title)}"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="orch-acts">${acts}</div>`;
+const winHead = (key, title0, sub, acts = "", title = orchPanes.find((x) => paneKey(x) === key)?.name || title0) => `<div class="win-title" title="${esc(title)}"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="orch-acts">${acts}<span class="win-ctl">
+    <button type="button" class="btn orch-icon-btn" data-act="orch-collapse" data-key="${esc(key)}" title="Minimize to the title bar" aria-label="Minimize">${icon("minus", 13)}</button>
+    <button type="button" class="btn orch-icon-btn" data-act="orch-max" data-key="${esc(key)}" title="Maximize (Ctrl+Alt+Enter)" aria-label="Maximize">${icon("max", 12)}</button>
+    <button type="button" class="btn orch-icon-btn win-close" data-act="orch-unpin" data-key="${esc(key)}" title="Close (Ctrl+Alt+W)" aria-label="Close">${icon("x", 13)}</button>
+  </span></div>`;
 // A re-render while the user is selecting text in a card would wipe the selection: wait for the next tick.
 const selectingIn = (el) => { const s = getSelection(); return !!s && !s.isCollapsed && el.contains(s.anchorNode); };
 // The canvas chrome, Maestri-style: small islands floating over the canvas. Top centre, the tools (select/pan, new
@@ -4553,8 +4553,7 @@ async function orchPaint(force) {
       // A note's bar is its title (double-click edits it) and, on hover, its color, text size and close.
       const size = NOTE_SIZES.find((x) => x[0] === (p.size || ""));
       card.querySelector(".orch-head").innerHTML = winHead(key, "", "", `${paneBtns}<span class="note-tones">${NOTE_TONES.map(([t, n, c]) => `<button type="button" class="note-tone ${(p.tone || "") === t ? "on" : ""}" style="--note:${c}" data-act="note-style" data-key="${esc(key)}" data-tone="${t}" title="${n}" aria-label="Color: ${n}"></button>`).join("")}</span>
-          <button type="button" class="btn orch-icon-btn note-size" data-act="note-style" data-key="${esc(key)}" data-size="${NOTE_SIZES[(NOTE_SIZES.indexOf(size) + 1) % NOTE_SIZES.length][0]}" title="Text size: ${size[1]}" aria-label="Text size: ${size[1]}">Aa</button>
-          <button type="button" class="btn orch-icon-btn" data-act="orch-unpin" data-key="${esc(key)}" title="Close" aria-label="Close">${icon("x", 12)}</button>`);
+          <button type="button" class="btn orch-icon-btn note-size" data-act="note-style" data-key="${esc(key)}" data-size="${NOTE_SIZES[(NOTE_SIZES.indexOf(size) + 1) % NOTE_SIZES.length][0]}" title="Text size: ${size[1]}" aria-label="Text size: ${size[1]}">Aa</button>`);
       card.querySelector(".orch-needs").innerHTML = "";
       const feed = card.querySelector(".orch-feed");
       // Read as markdown; a click (not on a link) edits the text, leaving the field shows it rendered again.
