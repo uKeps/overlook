@@ -89,7 +89,6 @@ const obs = (p) => `obsidian://open?vault=${encodeURIComponent(D.vault)}&file=${
 const noteHref = (p) => `#/n/${encodeURIComponent(p)}`;
 const unlink = (s) => s.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => b || a);
 const emLinks = (s) => esc(s).replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => `<em>${b || a}</em>`);
-const withLinks = (s) => esc(s).replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => `<a href="#/w/${encodeURIComponent(a)}">${b || a}</a>`);
 const plain = (s) => unlink(s || "").replace(/[*`_]/g, "");
 const nameOf = (p) => p.split("/").pop().replace(/\.md$/, "");
 const resolveNote = (name) => D.notes.find((n) => nameOf(n.path) === name || n.title === name);
@@ -1200,7 +1199,7 @@ const VALID_BGS = new Set(CANVAS_BGS.map(([k]) => k));
 const bgEntry = (k) => CANVAS_BGS.find(([id]) => id === k) || CANVAS_BGS[0];
 let orchRole = "", orchCwd = "", orchMode = "free", orchDir = "cols", orchRatio = 50, orchBg = "dots",
   orchPanX = 24, orchPanY = CANVAS_TOP, orchZoom = 1, orchPanes = [], orchSelected = new Set(), orchActive = "", orchMax = "", orchTool = "select",
-  orchRail = true, orchRailMode = "float", orchDeckOpen = false, orchMapOpen = true, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
+  orchDeckOpen = false, orchMapOpen = true, orchExtra = new Set(), orchTimer = null, orchSigs = new Map(), orchSeq = 1;
 let drawing = null; // a card being drawn: { kind, layer, sheet } (drawCard)
 let cwdOpen = false, cwdBrowse = "~/dev", cwdQuery = "", cwdData = null, cwdPaneKey = "", cwdItems = [], cwdIdx = 0, cwdStart = "";
 // Folders picked in the folder popover, latest first: they head its Recent list.
@@ -1208,8 +1207,8 @@ const RECENT_CWDS = "overlook.recent-cwds";
 const recentCwds = () => { try { return JSON.parse(localStorage.getItem(RECENT_CWDS) || "[]"); } catch { return []; } };
 orchCwd = recentCwds()[0] || ""; // Ctrl+Alt+N and the task bar start in the last folder you picked
 // Canvas links: { a, b } means card a's content goes along as context when you message card b.
-let orchLinks = [], orchNoteQ = "";
-const CANVAS_KEY = "overlook.canvas", CANVAS_BG_KEY = "overlook.canvas-bg", PANE_MIME = "text/x-overlook-pane";
+let orchLinks = [];
+const CANVAS_KEY = "overlook.canvas", CANVAS_BG_KEY = "overlook.canvas-bg";
 // Named canvases (one per project, say). The one showing lives in orchPanes, orchLinks, the view and sketchEls; each other
 // one keeps its own in its entry here until it's shown (switchCanvas). Its terminals run on meanwhile.
 let canvases = [{ id: "main", name: "Main" }], canvasId = "main";
@@ -1222,15 +1221,6 @@ const DISMISSED_KEY = "overlook:dismissed-sessions";
 let dismissedSessions = (() => {
   try { return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
 })();
-function saveDismissedSessions() {
-  try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions])); } catch {}
-}
-try {
-  orchRailMode = localStorage.getItem("overlook.rail-mode") || "float";
-} catch {}
-function saveRailMode() {
-  try { localStorage.setItem("overlook.rail-mode", orchRailMode); } catch {}
-}
 try {
   const savedBg = localStorage.getItem(CANVAS_BG_KEY);
   if (savedBg && VALID_BGS.has(savedBg)) orchBg = savedBg;
@@ -1246,7 +1236,6 @@ try {
     orchPanY = c.panY ?? CANVAS_TOP;
     orchZoom = c.zoom || 1;
     orchSeq = c.seq || 1;
-    if (c.railMode) orchRailMode = c.railMode;
     if (c.bg && VALID_BGS.has(c.bg)) orchBg = c.bg;
     orchMapOpen = c.map ?? true;
     // Where you were: the focused and maximized card, the split direction and divider.
@@ -1312,7 +1301,7 @@ function saveCanvas() {
   syncWires(); sweepBrowsers();
   try {
     localStorage.setItem(CANVAS_BG_KEY, orchBg);
-    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, railMode: orchRailMode, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio,
+    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio,
       canvas: canvasId, canvases: canvases.map((c) => (c.panes ? { ...c, panes: c.panes.map(({ ctx, ...p }) => p) } : c)) }));
   } catch {}
 }
@@ -3070,7 +3059,7 @@ function agents() {
       ${ready.length ? "" : "<small>No agent is set up yet: see README › Agents.</small>"}
       <div class="cwd-pop" id="cwd-pop" hidden></div>
     </form>
-    <div class="orch-work ${orchRail ? "" : "rail-shut"} ${orchRail && orchRailMode === "float" ? "rail-float" : ""}" id="agents-body"></div>
+    <div class="orch-work" id="agents-body"></div>
   </div>`;
   // The task bar floats over the canvas (the ✦ button): it folds away once a task started (the prompt is cleared).
   const ran = () => { if (!$("#run-prompt")?.value) deckShow(false); };
@@ -3112,7 +3101,6 @@ function blurCanvasFocus(keepSel = false) {
   for (const st of terms.values()) st.term?.blur?.();
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur?.();
   $("#orch-plane")?.querySelectorAll(".orch-pane").forEach((n) => n.classList.remove("typing", "active"));
-  document.querySelectorAll(".orch-item.on").forEach((n) => n.classList.remove("on"));
   orchActive = "";
   if (!keepSel && orchSelected.size) { orchSelected.clear(); updateSelectionUI(); }
 }
@@ -3347,17 +3335,6 @@ function bindCanvasInteractions(canvas) {
     orchPanX = x; orchPanY = y; orchZoom = k;
     applyCanvasSoon(); saveCanvasSoon();
   }, { passive: false, capture: true }); // capture: xterm's scroller stops the wheel before it bubbles
-  // Fleet chats and vault notes are dragged in from the left rail (HTML drag and drop).
-  canvas.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes(PANE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; canvas.classList.add("drop"); } });
-  canvas.addEventListener("dragleave", (e) => { if (!canvas.contains(e.relatedTarget)) canvas.classList.remove("drop"); });
-  canvas.addEventListener("drop", (e) => {
-    canvas.classList.remove("drop");
-    const raw = e.dataTransfer.getData(PANE_MIME);
-    if (!raw) return;
-    e.preventDefault();
-    const { kind, id } = JSON.parse(raw), r = canvas.getBoundingClientRect();
-    addPane({ kind, id }, (e.clientX - r.left - orchPanX) / orchZoom, (e.clientY - r.top - orchPanY) / orchZoom);
-  });
 }
 function bindPaneDragResize(card, p) {
   const head = card.querySelector(".orch-head"), port = card.querySelector(".orch-port");
@@ -3502,10 +3479,7 @@ function bindPaneDragResize(card, p) {
 function agentsBody() {
   const el = $("#agents-body");
   if (!el) return;
-  el.classList.toggle("rail-shut", !orchRail);
-  el.classList.toggle("rail-float", orchRail && orchRailMode === "float");
   const all = fleetItems();
-  const counts = { all: all.length };
   const validKeys = new Set(all.map(paneKey)), notePaths = new Set(D.notes.map((n) => n.path));
   orchPanes = orchPanes.filter((p) => p && (p.kind === "sticky" || p.kind === "browser" || p.kind === "terminal" || (p.kind === "note" ? notePaths.has(p.id) : validKeys.has(paneKey(p)))));
   // Agents run in terminals (like Maestri): a task or session card turns into its own TUI as soon as nothing else
@@ -3520,24 +3494,7 @@ function agentsBody() {
   if (orchMax && !orchPanes.some((p) => paneKey(p) === orchMax)) orchMax = "";
   document.querySelectorAll("[data-act='orch-mode']").forEach((b) => b.classList.toggle("on", b.dataset.m === orchMode));
   if (!el.querySelector(".orch-canvas")) {
-    el.innerHTML = `<div class="orch-fleet-wrap ${orchRailMode === "float" ? "float" : ""}" id="orch-fleet-wrap">
-        <button type="button" class="orch-fleet-pill glass" data-act="orch-rail-open" title="Sessions (A)">${icon("cols", 13)} <span>Sessions <small id="orch-fleet-pill-cnt"></small></span></button>
-        <aside class="orch-fleet glass ${orchRailMode === "float" ? "floating" : ""}">
-          <div class="orch-fleet-head">
-            <div class="orch-fleet-title"><span>Sessions</span> <small id="orch-fleet-badge"></small></div>
-            <div class="orch-fleet-acts">
-              <button type="button" class="fl-icon ${orchRailMode === "float" ? "" : "on"}" data-act="orch-rail-mode" title="${orchRailMode === "float" ? "Keep Sessions open beside the canvas" : "Let Sessions float over the canvas"}">${icon("pin", 13)}</button>
-            </div>
-          </div>
-          <input id="orch-fq" class="orch-fq" type="search" placeholder="Search sessions" autocomplete="off" aria-label="Search sessions">
-          <div class="orch-list" id="orch-list"></div>
-          <details class="orch-ledger" id="orch-ledger">
-            <summary id="orch-ledger-sum"></summary>
-            <div class="orch-ledger-cols" id="orch-ledger-cols"></div>
-          </details>
-        </aside>
-      </div>
-      <div class="orch-canvas" id="orch-canvas">
+    el.innerHTML = `<div class="orch-canvas" id="orch-canvas">
         <div class="orch-plane" id="orch-plane"></div>
         <nav class="cv-island cv-tl" aria-label="Canvas menu">
           <button type="button" class="cv-tl-btn" data-act="cv-menu" title="Menu: search, capture, layout" aria-label="Menu">${icon("menu", 18)}</button>
@@ -3562,46 +3519,6 @@ function agentsBody() {
     hoverMenu($('.cv-tl [data-act="cv-menu"]'), mainMenu);
     bindUsage();
   }
-  const fleetBadge = $("#orch-fleet-badge"), fleetPillCnt = $("#orch-fleet-pill-cnt"), pill = el.querySelector(".orch-fleet-pill"), fleetEl = el.querySelector(".orch-fleet"), fleetWrap = $("#orch-fleet-wrap");
-  if (fleetBadge) fleetBadge.textContent = counts.all;
-  const waiting = all.filter((x) => x.group === "waiting").length;
-  if (fleetPillCnt) fleetPillCnt.textContent = waiting ? `${waiting} waiting` : "";
-  pill?.classList.toggle("wait", waiting > 0);
-  if (fleetWrap) fleetWrap.classList.toggle("float", orchRailMode === "float");
-  if (fleetEl) fleetEl.classList.toggle("floating", orchRailMode === "float");
-  const pinnedKeys = new Set(allPanes().map(paneKey));
-  // The sessions, grouped by what they need from you, and one search over them.
-  const fq = $("#orch-fq");
-  if (fq && !fq.oninput) { fq.value = orchNoteQ; fq.oninput = () => { orchNoteQ = fq.value; agentsBody(); }; }
-  const q = fold(orchNoteQ.trim());
-  const tuiOn = (it) => it.tui && allPanes().some((p) => p.kind === "terminal" && p.run && ((it.tui.task && p.run.task === it.tui.task) || (it.tui.key && p.run.key === it.tui.key)));
-  const row = (it) => {
-    const k = paneKey(it), on = pinnedKeys.has(k) || tuiOn(it);
-    const x = it.kind === "terminal" ? `data-act="term-close-session" data-id="${esc(it.id)}" title="Close this terminal"`
-      : `data-act="orch-dismiss" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${it.kind === "task" ? "Delete this task" : "Hide from Sessions"}"`;
-    return `<div class="orch-item ${it.group} ${orchActive === k ? "on" : ""} ${on ? "oncanvas" : ""}" draggable="true" data-kind="${it.kind}" data-id="${esc(it.id)}">
-      <button type="button" class="orch-item-main" data-act="orch-sel" data-kind="${it.kind}" data-id="${esc(it.id)}" title="${on ? "Show it on the canvas" : "Open it on the canvas"}">
-        <span class="fl-dot"></span>
-        <span class="orch-info"><b>${esc(it.title)}</b><small>${esc(it.needs || [on ? "on canvas" : "", it.sub].filter(Boolean).join(" · "))}${!it.needs && it.cost ? ` · ${costChip(it.cost)}` : ""}</small></span>
-      </button>
-      <div class="orch-item-actions"><button type="button" class="orch-dismiss-btn" ${x} aria-label="Remove">${icon("x", 11)}</button></div>
-    </div>`;
-  };
-  const hits = all.filter((it) => !q || fold(`${it.title} ${it.sub} ${it.needs}`).includes(q));
-  $("#orch-list").innerHTML = [["waiting", "Needs you"], ["active", "Running"], ["done", "Recent"]].map(([g, l]) => {
-    const xs = hits.filter((it) => it.group === g);
-    return xs.length ? `<div class="fl-group">${l} <small>${xs.length}</small></div>${xs.map(row).join("")}` : "";
-  }).join("") || `<p class="empty">${q ? "Nothing matches." : "No sessions yet. Start one from the bar above."}</p>`;
-  // The vault's agent log, folded at the bottom: 9 Agent isn't a notes folder, so this is where Overlook shows it.
-  $("#orch-ledger-sum").innerHTML = `<span>Vault log</span><small>${D.log.length} runs · ${D.findings.length} findings</small>`;
-  $("#orch-ledger-cols").innerHTML = `<div><h3>Log</h3><div class="list">${D.log.slice(0, 12).map((l) => {
-      const [when, who, ...rest] = l.split(" · ");
-      return `<div class="row"><span class="who">${esc(who)}</span><span class="txt">${withLinks(rest.join(" · "))}</span><span class="x">${esc(when.slice(5).replace("-", "/"))}</span></div>`;
-    }).join("") || '<p class="empty">No runs logged.</p>'}</div></div>
-    <div><h3>Findings</h3><div class="list">${D.findings.slice(0, 10).map((a) => {
-      const [d, ...t] = a.split(" · ");
-      return `<div class="row"><span class="txt">${esc(t.join(" · "))}</span><span class="x">${esc(d)}</span></div>`;
-    }).join("") || '<p class="empty">No findings yet.</p>'}</div></div>`;
   orchPaint();
 }
 function bindSplitResizer(plane) {
@@ -4299,7 +4216,7 @@ function stepCanvas(d) {
   switchCanvas(canvasStep(d).id, d);
   if (orchActive) setTimeout(() => focusPane(orchActive, true), 80);
 }
-// A card on a canvas that isn't showing (from Sessions, a hand-off): its canvas comes in first.
+// A card on a canvas that isn't showing (from Home, a hand-off): its canvas comes in first.
 function showCanvasOf(test) { const c = canvases.find((x) => x.panes?.some(test)); if (c) switchCanvas(c.id); }
 const paintCanvasName = () => { const b = $("#cv-name span"); if (b) b.textContent = canvases.find((c) => c.id === canvasId)?.name || ""; };
 function newCanvas() {
@@ -4360,7 +4277,6 @@ function canvasesMenu(btn) {
 function mainMenu(btn) {
   const go = (h) => () => { location.hash = h; };
   ctxAt(btn, [
-    { label: "Sessions", ic: "cols", kbd: "A", run: () => $("#orch-fleet-wrap")?.classList.add("open") },
     { label: "New task…", ic: "spark", run: () => deckShow(true) },
     { label: "Search", ic: "search", kbd: "Ctrl+K", run: () => cmdkOpen() },
     { label: "Capture", ic: "inbox", kbd: "C", run: () => ACTIONS.capture() },
@@ -4377,7 +4293,6 @@ function mainMenu(btn) {
       { label: "Canvas", ic: "grid", on: orchMode === "free", run: () => ACTIONS["orch-mode"]({ dataset: { m: "free" } }) },
       { label: "Split", ic: "split", on: orchMode === "tile", run: () => ACTIONS["orch-mode"]({ dataset: { m: "tile" } }) },
     ] },
-    { label: orchRailMode === "float" ? "Keep Sessions open" : "Let Sessions float", ic: "pin", run: () => ACTIONS["orch-rail-mode"]() },
     { label: document.body.classList.contains("canvas-full") ? "Leave full screen" : "Full screen", ic: "expand", kbd: "Ctrl+Alt+Z", run: () => canvasFull() },
     { label: "Keyboard shortcuts", run: () => toast(PANE_KEYS) },
   ]);
@@ -4390,7 +4305,7 @@ async function orchPaint(force) {
     orchSigs.clear();
     canvas.className = `orch-canvas ${orchMode === "free" ? `free tool-${orchTool}` : "tiled"}`; // keeps its size and dot grid
     plane.className = `orch-plane ${orchMode === "free" ? "free" : "single"}`;
-    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Right-click anywhere to open an agent, a terminal or a note.<br><small>Or use the tools above, or a session from Sessions (A).</small></p></div>`;
+    plane.innerHTML = `<div class="orch-empty glass"><p class="empty">Right-click anywhere to open an agent, a terminal or a note.<br><small>Or use the tools above.</small></p></div>`;
     applyCanvasTransform();
     paintHud(hud, orchMode === "free");
     drawLinks();
@@ -4457,10 +4372,6 @@ async function orchPaint(force) {
         if (orchActive !== key) {
           orchActive = key;
           plane.querySelectorAll(".orch-pane").forEach((n) => n.classList.toggle("active", n.dataset.key === orchActive));
-          document.querySelectorAll(".orch-item").forEach((n) => {
-            const b = n.querySelector(".orch-item-main");
-            if (b) n.classList.toggle("on", `${b.dataset.kind}:${b.dataset.id}` === orchActive);
-          });
         }
         updateSelectionUI();
       });
@@ -5371,25 +5282,6 @@ const ACTIONS = {
     if (orchExtra.has(id)) orchExtra.delete(id); else orchExtra.add(id);
     renderMultiChips();
   },
-  "orch-rail-open": () => {
-    $("#orch-fleet-wrap")?.classList.toggle("open");
-  },
-  "orch-rail-mode": () => {
-    orchRailMode = orchRailMode === "float" ? "dock" : "float";
-    saveRailMode();
-    saveCanvas();
-    const wrap = $("#orch-fleet-wrap");
-    if (wrap) wrap.classList.toggle("float", orchRailMode === "float");
-    const body = $("#agents-body");
-    if (body) body.classList.toggle("rail-float", orchRail && orchRailMode === "float");
-    const fleet = document.querySelector(".orch-fleet");
-    if (fleet) fleet.classList.toggle("floating", orchRailMode === "float");
-    const btn = document.querySelector('[data-act="orch-rail-mode"]');
-    if (btn) {
-      btn.classList.toggle("on", orchRailMode !== "float");
-      btn.title = orchRailMode === "float" ? "Keep Sessions open beside the canvas" : "Let Sessions float over the canvas";
-    }
-  },
   "orch-deck-toggle": (el) => {
     orchDeckOpen = !orchDeckOpen;
     $("#run")?.classList.toggle("open", orchDeckOpen);
@@ -5499,15 +5391,6 @@ const ACTIONS = {
       toast(e.message);
     }
   },
-  "term-close-session": async (el) => {
-    const id = el.dataset.id;
-    dropTerm(id);
-    saveCanvas();
-    termClose(id);
-    agentsBody();
-    orchPaint(true);
-    toast("Terminal closed");
-  },
   "orch-mode": (el) => {
     orchMode = (el.dataset.m || el.dataset.mode) === "free" ? "free" : "tile";
     orchMax = "";
@@ -5588,7 +5471,7 @@ const ACTIONS = {
   "orch-sketch": () => setSketch(!sketchOn),
   "sketch-tool": (el) => { sketchApi?.setActiveTool({ type: el.dataset.tool }); paintSketchBar(el.dataset.tool); },
   "sketch-color": (el) => sketchPaint({ strokeColor: el.dataset.c }),
-  // A Fleet row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
+  // Home's agent row opens its session on the canvas (as a TUI when idle) or brings it into view; it never replaces a card.
   "orch-sel": (el) => {
     askWaitNotify(el.dataset.id);
     const item = { kind: el.dataset.kind, id: el.dataset.id }, k = paneKey(item);
@@ -5619,41 +5502,6 @@ const ACTIONS = {
     orchSigs.clear();
     agentsBody();
     orchPaint(true);
-  },
-  "orch-dismiss": async (el) => {
-    const kind = el.dataset.kind, id = el.dataset.id;
-    if (!kind || !id) return;
-    if (kind === "task" && !(await askOk("Delete this task?", "Its history leaves Overlook too.", "Delete task"))) return;
-    const targetKey = `${kind}:${id}`;
-    orchSelected.delete(targetKey);
-    updateSelectionUI();
-    orchLinks = orchLinks.filter((l) => l.a !== targetKey && l.b !== targetKey);
-    if (kind === "task") {
-      try { await api("/api/task/delete", { id }); } catch (e) { return toast(e.message); }
-      if (S?.tasks) S.tasks = S.tasks.filter((t) => t.id !== id);
-    } else if (kind === "agent") {
-      dismissedSessions.add(id);
-      saveDismissedSessions();
-    }
-    const wasInPanes = orchPanes.some((p) => paneKey(p) === targetKey);
-    if (wasInPanes) {
-      orchPanes = orchPanes.filter((p) => paneKey(p) !== targetKey);
-      const paneKeys = new Set(orchPanes.map(paneKey));
-      orchLinks = orchLinks.filter((l) => paneKeys.has(l.a) && paneKeys.has(l.b));
-      if (orchActive === targetKey) {
-        orchActive = paneKey(orchPanes[0]);
-      }
-      if (orchMax === targetKey) orchMax = "";
-      saveCanvas();
-    } else if (orchActive === targetKey) {
-      orchActive = orchPanes[0] ? paneKey(orchPanes[0]) : "";
-      if (orchMax === targetKey) orchMax = "";
-      saveCanvas();
-    }
-    try { S = await api("/api/system"); } catch {}
-    orchSigs.clear();
-    agentsBody();
-    toast("Chat dismissed");
   },
   open: async (el) => {
     try { await api("/api/open", { via: el.dataset.via, key: el.dataset.key, task: el.dataset.task }); toast(`Opening in ${el.dataset.via}`); } catch (e) { toast(e.message); }
@@ -5752,7 +5600,6 @@ document.addEventListener("click", (e) => {
     cwdOpen = false; cwdPaneKey = ""; paintCwdPop();
   }
   if (!e.target.closest("#dockwrap") || e.target.closest("#dock a")) $("#dockwrap")?.classList.remove("open");
-  if (!e.target.closest("#orch-fleet-wrap")) $("#orch-fleet-wrap")?.classList.remove("open");
   const el = e.target.closest("[data-act]");
   if (el) { e.preventDefault(); ACTIONS[el.dataset.act]?.(el); return; }
   const res = e.target.closest(".ev.result");
@@ -5814,14 +5661,6 @@ document.addEventListener("keydown", (e) => {
   const { pg } = route();
   if (sketchOn) return; // letters are Excalidraw's tools (Esc is handled first, below bindSketchClicks)
   if (pg === "agents" && (e.key === "d" || e.key === "D") && orchMode === "free" && !orchMax) { e.preventDefault(); setSketch(true); return; }
-  // A shows or hides Sessions; hiding also takes the focus out of it (a clicked row or the log keeps it open otherwise).
-  if (pg === "agents" && (e.key === "a" || e.key === "A")) {
-    e.preventDefault();
-    const w = $("#orch-fleet-wrap"), shown = !!w?.matches(".open, :focus-within");
-    w?.classList.toggle("open", !shown);
-    if (shown && w.contains(document.activeElement)) document.activeElement.blur();
-    return;
-  }
   if (pg === "agents" && orchMode === "free" && !orchMax) {
     if (e.key === "h") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "pan" } }); return; }
     if (e.key === "s") { e.preventDefault(); ACTIONS["orch-tool"]({ dataset: { tool: "select" } }); return; }
@@ -5870,13 +5709,6 @@ document.addEventListener("touchend", (e) => {
 document.addEventListener("touchcancel", () => {
   touchStartX = null; touchStartY = null;
 }, { passive: true });
-document.addEventListener("dragstart", (e) => {
-  const item = e.target.closest?.("[draggable][data-kind]");
-  if (!item) return;
-  const payload = { kind: item.dataset.kind, id: item.dataset.id };
-  e.dataTransfer.setData(PANE_MIME, JSON.stringify(payload));
-  e.dataTransfer.effectAllowed = "copyMove";
-});
 window.addEventListener("resize", () => { if (cwdOpen) placeCwdPop(lastCwdBtn); });
 
 addEventListener("hashchange", render);
