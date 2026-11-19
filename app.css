@@ -2009,7 +2009,8 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-empty { background: none !important; border: 0 !important; box-shadow: none !important; }
 
 /* ---------- Terminal cards: a Ghostty window under Hyprland (decorations.lua, lucid-glass.lua) ----------
-   A slim title bar (its name; drag it, or Alt+drag anywhere, to move), its edges resize it, `exit` closes it.
+   No title bar: a strip of its own surface on top (drag it, or Alt+drag anywhere, to move; its name shows on it on hover),
+   its edges resize it, `exit` closes it.
    No border either: a border's width follows the canvas zoom (--bw), so the terminal's box changed size on every zoom
    step and the shell redrew its prompt each time. The ring and the shadow are box-shadows: they never take room. */
 .orch-pane[data-kind="terminal"] {
@@ -2020,12 +2021,19 @@ body.canvas-full .orch-work { gap: 0; }
 }
 .orch-pane[data-kind="terminal"].typing { --ring: rgba(255, 255, 255, .12); } /* has the keyboard */
 .orch-plane.free .orch-pane[data-kind="terminal"].selected { --ring: var(--accent); }
+/* No bar: the top strip is the terminal's own surface, its name, git and buttons show while the pointer is on it (or
+   the keyboard); a card that waits for you, a folded one and a rename keep the name in view. */
 .orch-pane[data-kind="terminal"] > .orch-head {
-  height: 28px; border-radius: 12px 12px 0 0; border-bottom-color: rgba(255, 255, 255, .06);
+  height: 24px; border-radius: 12px 12px 0 0; border-bottom-color: transparent;
   background: color-mix(in srgb, var(--win-bg) 95%, transparent);
 }
+.orch-pane[data-kind="terminal"] > .orch-head > * { opacity: 0; transition: opacity .15s; }
+.orch-pane[data-kind="terminal"] > .orch-head:is(:hover, :focus-within) > *,
+.orch-pane[data-kind="terminal"]:is(.collapsed, .waiting) > .orch-head > .win-title,
+.orch-pane[data-kind="terminal"].collapsed > .orch-head > .git-chip,
+.orch-pane[data-kind="terminal"] > .orch-head > .win-title.editing { opacity: 1; }
 .orch-plane.free .orch-pane[data-kind="terminal"].collapsed { height: 28px !important; }
-.orch-pane[data-kind="terminal"].collapsed > .orch-head { border-radius: 12px; }
+.orch-pane[data-kind="terminal"].collapsed > .orch-head { height: 100%; border-radius: 12px; }
 /* Git in a terminal's title bar: branch, uncommitted changes, the branch's PR and its CI. The title gives way to it, and
    the branch name to the PR; it takes the pointer (tooltips, the PR link), a drag on it still moves the card. */
 .orch-head:has(> .git-chip) > .win-title { min-width: 40px; }
@@ -2050,7 +2058,7 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-term-view { flex: 1; min-width: 0; min-height: 0; overflow: clip; cursor: text; }
 /* The padding sits on xterm's own element: its FitAddon subtracts that padding from the box it measures, so every
    row and column it counts is on screen (padding on the outer box made it count cells that were then cut off). */
-.orch-term-view .xterm { height: 100%; padding: 10px 12px; }
+.orch-term-view .xterm { height: 100%; padding: 4px 12px 10px; } /* the bar above is the rest of its top margin */
 .orch-term-view .xterm-viewport { background: transparent !important; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .18) transparent; }
 
 /* ---------- Canvas page: the canvas is the whole screen; the header, the week strip and the dock step aside ---------- */
