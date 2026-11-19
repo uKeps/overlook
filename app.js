@@ -1463,8 +1463,7 @@ function focusPane(k, stay = false) {
   }
   saveCanvas(); orchSigs.clear(); orchPaint(true);
   setTimeout(() => {
-    const card = $(`.orch-pane[data-key="${CSS.escape(k)}"]`);
-    card?.classList.add("pane-flash"); setTimeout(() => card?.classList.remove("pane-flash"), 700); // not "flash": the Home's card uses that name
+    const card = flashCard(k);
     const st = p.kind === "terminal" && terms.get(p.id);
     if (st?.term) st.term.focus(); else card?.querySelector(".orch-msg:not([disabled])")?.focus();
   }, 60);
@@ -2159,6 +2158,13 @@ function clearSpot(b, boxes) {
   return b;
 }
 
+// A short accent ring round a card, to point at it: focusing it (pane-flash), an agent writing into a note (pane-wrote).
+function flashCard(k, cls = "pane-flash", ms = 700) {
+  const card = $(`.orch-pane[data-key="${CSS.escape(k)}"]`);
+  card?.classList.remove(cls); void card?.offsetWidth; // a second one while the first runs starts it again
+  card?.classList.add(cls); setTimeout(() => card?.classList.remove(cls), ms); // not "flash": the Home's card uses that name
+  return card;
+}
 // The browser card: a real headless browser on the server (browser.ts) whose screen streams in as JPEG frames over
 // /ws/browser; the card's mouse, wheel and keys go back as input. Agents wired to it drive the same page.
 const brs = new Map(); // card id -> { ws, ro }
@@ -2583,13 +2589,13 @@ async function takeSpawns() {
   const done = spawnDone; spawnDone = [];
   const r = await api("/api/canvas/spawns", { panes, done }).catch(() => { spawnDone.push(...done); return null; });
   if (!r?.spawns?.length) return;
-  const active = orchActive;
+  const active = orchActive, wrote = [];
   for (const s of r.spawns) {
     const parent = all.find((p) => p.kind === "terminal" && p.id === s.parent), on = hiddenOn(parent); // on: its canvas, when not showing
     // An agent wrote into a sticky wired to it (overlook write): the text changes in place.
     if (s.kind === "write") {
       const note = all.find((p) => p.kind === "sticky" && paneKey(p) === s.target);
-      if (note) note.text = s.text;
+      if (note) { note.text = s.text; wrote.push(s.target); }
       spawnDone.push({ id: s.id, ...(note ? {} : { why: "that note is no longer on the canvas" }) });
       continue;
     }
@@ -2626,6 +2632,7 @@ async function takeSpawns() {
   }
   orchActive = active;
   saveCanvas(); orchSigs.clear(); agentsBody();
+  setTimeout(() => wrote.forEach((k) => flashCard(k, "pane-wrote", 1600)), 60); // once the new text is painted
 }
 // Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
 let hotWires = new Set(), paneCosts = new Map();
@@ -4452,6 +4459,7 @@ async function orchPaint(force) {
     card.classList.toggle("active", key === orchActive);
     card.classList.toggle("collapsed", !!p.collapsed && isFree);
     card.classList.toggle("done", !!p.doneAt);
+    card.classList.toggle("waiting", p.kind === "terminal" && !!S.panesWaiting?.some((w) => w.id === p.id)); // its Claude waits for you
     card.classList.toggle("selected", orchSelected.has(key));
     card.classList.toggle("locked", !!p.locked && isFree);
     card.dataset.kind = p.kind;

@@ -1160,6 +1160,19 @@ body.canvas-page .orch-fleet-wrap.float .orch-fleet-pill.wait { border-color: co
 /* focusPane: a short ring so the eye finds the card it jumped to */
 .orch-pane.pane-flash { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash .7s ease-out; } /* outline: the shadows are !important */
 @keyframes pane-flash { 0% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+/* an agent wrote into this note (overlook write): the same ring, slower, and the text it changed glows a moment */
+.orch-pane.pane-wrote { outline: 3px solid transparent; outline-offset: 3px; animation: pane-flash 1.6s ease-out; }
+.orch-pane.pane-wrote .orch-sticky-view { animation: wrote-tint 1.6s ease-out; }
+@keyframes wrote-tint { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } }
+/* a terminal whose Claude waits for you (a question, a permission, its turn ended): a ring that breathes, so the card
+   that needs you shows among the others; still (but there) under reduced motion */
+.orch-pane.waiting { isolation: isolate; } /* the ring stays inside its own card, under any card on top of it */
+.orch-pane.waiting::before {
+  content: ""; position: absolute; inset: 0; z-index: 30; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 0 22px color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: wait-breathe 2.4s ease-in-out infinite;
+}
+@keyframes wait-breathe { 50% { opacity: .3; } }
 
 /* Free 2D Maestri Canvas mode & Background Presets */
 .orch-canvas.free {
