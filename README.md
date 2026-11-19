@@ -42,9 +42,9 @@ vault (or set it in **Settings**) and restart. Run it from the repo folder: Bun 
   waits on the Home; the page lists them all. Remove what is useless or out of date; known ones leave on their own.
 - **Agents**: give a task to any CLI or API agent and watch it run. The canvas takes the whole screen, and every
   card is a window: real terminals, agent TUIs (Claude Code, Antigravity), stickies and notes. Right-click opens a
-  card's or the canvas's menu, `Delete` closes the selected cards, and a minimap shows where you are. **Sessions**
-  (top right, or `A`) lists every agent session; its pill says how many are waiting for you. A terminal gets its
-  screen back when you reload the page. Wire two terminal cards and the programs in them can talk with
+  card's or the canvas's menu, `Delete` closes the selected cards, and a minimap shows where you are. Agents waiting
+  for you show on Home and ring a notification. A terminal gets its screen back when you reload the page. Wire two
+  terminal cards and the programs in them can talk with
   `overlook peers`, `overlook send <card> "…"` and `overlook read <card>`. Ctrl+Alt+/ lists the canvas's shortcuts.
 - **Keys**: `/` search, `C` capture, `V` Classic or Minimal, `F` full screen (no browser tabs), `←`/`→` the previous
   or next page.

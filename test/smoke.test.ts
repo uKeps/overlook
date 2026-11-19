@@ -236,8 +236,6 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appCss).toContain(".quota-actions");
   expect(appCss).toContain(".capture-tabs");
   expect(appCss).toContain("#capture-agent-panel");
-  expect(appCss).toContain(".orch-item-actions");
-  expect(appCss).toContain(".orch-dismiss-btn");
   expect(appJs).toContain('"capture-save"');
   expect(appJs).toContain('function detectQuota(');
   expect(appJs).toContain('function renderQuotaBanner(');
@@ -247,7 +245,6 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(appJs).toContain('function setCaptureMode(');
   expect(appJs).toContain('runOptions(false, "capture")');
   expect(appJs).toContain('runChoice("capture")');
-  expect(appJs).toContain('"orch-dismiss"');
   expect(appJs).toContain('"overlook:dismissed-sessions"');
   expect(appJs).toContain('api("/api/note/agent"');
   expect(appJs).toContain('api("/api/task/retry"');
@@ -272,7 +269,7 @@ test("the page and its assets are served and the frontend parses", async () => {
   expect(html).toContain('id="capture-submit-btn"');
 });
 
-test("effort selection in capture modal and dismiss chat in fleet sidebar", () => {
+test("effort selection in capture modal", () => {
   const html = readFileSync(`${ROOT}/index.html`, "utf8");
   expect(html).toContain('<select class="pick" id="capture-agent" aria-label="Agent"></select>');
   expect(html).toContain('<select class="pick" id="capture-model" aria-label="Model" hidden></select>');
@@ -283,20 +280,12 @@ test("effort selection in capture modal and dismiss chat in fleet sidebar", () =
   const css = readFileSync(`${ROOT}/app.css`, "utf8");
   expect(css).toContain("#capture-agent-panel");
   expect(css).toContain("#capture-effort button.on");
-  expect(css).toContain(".orch-item-actions");
-  expect(css).toContain(".orch-dismiss-btn");
-  expect(css).toContain("var(--bad)");
-  expect(css).toContain("min-width: 40px");
-  expect(css).toContain("min-height: 40px");
 
   const js = readFileSync(`${ROOT}/app.js`, "utf8");
-  expect(js).toContain('data-act="orch-dismiss"');
-  expect(js).toContain('"orch-dismiss"');
   expect(js).toContain('"overlook:dismissed-sessions"');
   expect(js).toContain('dismissedSessions.has(');
   expect(js).toContain('runOptions(false, "capture")');
   expect(js).toContain('runChoice("capture")');
-  expect(js).toContain('api("/api/task/delete"');
   expect(js).toContain('const paneKey = (p) => (p ? `${p.kind}:${p.id}` : "");');
 });
 
@@ -1769,29 +1758,18 @@ test("adversarial verification: task persistence across reload, retryTask 404 re
   }
 });
 
-test("adversarial verification: floating fleet sidebar, extended canvas panes, 8-dir resize, and header dblclick", async () => {
+test("adversarial verification: extended canvas panes, 8-dir resize, and header dblclick", async () => {
   const appJs = readFileSync(`${ROOT}/app.js`, "utf8");
   const appCss = readFileSync(`${ROOT}/app.css`, "utf8");
 
   // 1. Assert required styles and structure for minimalist toolbar and floating fleet
   expect(appCss).toContain(".orch-cluster-prompt");
-  expect(appCss).toContain(".orch-fleet-wrap");
-  expect(appCss).toContain(".orch-fleet-wrap.float:is(:hover, :focus-within, .open) .orch-fleet");
-  expect(appCss).toContain(".orch-fleet-head");
-  expect(appCss).toContain(".orch-fleet-pill");
-  expect(appCss).toContain(".orch-work.rail-float");
-  expect(appCss).toContain(".orch-work.rail-float .orch-fleet");
   expect(appCss).toContain(".orch-resize.e");
   expect(appCss).toContain(".orch-resize.w");
   expect(appCss).toContain(".orch-resize.s");
   expect(appCss).toContain(".orch-resize.n");
 
   // 2. Assert JS handlers and state management
-  expect(appJs).toContain("orchRailMode");
-  expect(appJs).toContain('"orch-rail-mode"');
-  expect(appJs).toContain('"orch-rail-open"');
-  expect(appJs).toContain("saveRailMode");
-  expect(appJs).toContain('"overlook.rail-mode"');
   expect(appJs).toContain('["nw", "ne", "sw", "se", "n", "s", "e", "w"]');
   expect(appJs).toContain("Math.min(2600,");
   expect(appJs).toContain("Math.min(1800,");
