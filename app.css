@@ -2036,24 +2036,21 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-pane > .orch-head > .win-title.editing { opacity: 1; }
 .orch-plane.free .orch-pane[data-kind="terminal"].collapsed { height: 28px !important; }
 .orch-pane[data-kind="terminal"].collapsed > .orch-head { border-radius: 12px; }
-/* On the canvas a terminal or a browser has no strip at all: its name sits on the canvas just above the card, like a
-   frame's name; it's still the handle (drag the name, or Alt+drag anywhere). Sized against the zoom, so it reads the
-   same as the canvas zooms out. A browser's name is always in view, with − □ × on that line while the pointer is over
-   it, and its address bar is the card's top. A terminal is the terminal only: its name shows while the pointer is over
-   it or it waits for you, and git and the buttons are in its right-click menu. Folded, maximized or tiled, the card
-   keeps the strip on itself. */
-.orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) { overflow: visible; }
+/* On the canvas a terminal or a browser is just that, like the app it stands for: a terminal, or a browser (its toolbar
+   on top), with nothing on or around it. Its head is an invisible strip along the top edge, under the edge that resizes:
+   drag there (the cursor says so), or Alt+drag anywhere, to move it. Its name, git and − □ × are in its right-click menu
+   and in Sessions; a card that waits for you still gets its ring. Folded, maximized or tiled, it keeps its strip. */
 .orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) > .orch-head {
-  position: absolute; left: 0; right: 0; bottom: 100%; height: auto; padding: 0 0 8px 2px;
-  background: none; border: 0; border-radius: 0; overflow: visible; font-size: clamp(11px, calc(12px / var(--z, 1)), 22px);
+  position: absolute; z-index: 9; top: 5px; left: 10px; right: 10px; height: 8px; padding: 0;
+  background: none; border: 0; border-radius: 0; overflow: hidden;
 }
-.orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) > .orch-head > .win-title { flex: 0 1 auto; font-size: inherit; }
-.orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) > .orch-head > .win-title { opacity: 1; }
-.orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) > .orch-head > :not(.win-title) { display: none; }
-.orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) > .orch-feed { border-radius: calc(10px - var(--bw, 1px)); } /* inside its border */
+.orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) > .orch-head > :not(.win-title.editing) { display: none; }
+.orch-plane.free .orch-pane:is([data-kind="terminal"], [data-kind="browser"]):not(.collapsed) > .orch-head:has(> .win-title.editing) { height: 28px; top: -34px; overflow: visible; } /* a rename shows its field above */
 .orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) > .orch-feed { border-radius: 12px; }
 .orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed):has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 12px 12px 0 0; }
-.orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) .orch-term-view .xterm { padding-top: 10px; } /* no strip above it now */
+.orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) .orch-term-view .xterm { padding-top: 14px; } /* clear of the strip */
+.orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) > .orch-feed { border-radius: calc(10px - var(--bw, 1px)); } /* inside its border */
+.orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) .orch-br-bar { height: 46px; padding-top: 8px; } /* its controls clear of the strip */
 /* Git in a terminal's title bar: branch, uncommitted changes, the branch's PR and its CI. The title gives way to it, and
    the branch name to the PR; it takes the pointer (tooltips, the PR link), a drag on it still moves the card. */
 .orch-head:has(> .git-chip) > .win-title { min-width: 40px; }
