@@ -1,4 +1,4 @@
-// The browser card: one headless Chromium-family browser (Brave, Chromium or Chrome from the PATH; BROWSER_BIN picks
+// The browser card: one windowless Chromium-family browser (Brave, Chromium or Chrome from the PATH; BROWSER_BIN picks
 // another) driven over the DevTools protocol, no dependency. Each card is one of its tabs: its screen is streamed to the
 // card as JPEG frames (Page.startScreencast, only when something changes), the card's mouse and keys go back as input
 // events, and agents wired to the card drive the same tab (overlook browser ...). Its own profile, so logins made in the
@@ -27,7 +27,10 @@ function devtools(): Promise<string> {
     if (!bin) throw new Error("no Chromium-family browser on the PATH (brave, chromium, google-chrome): set BROWSER_BIN");
     mkdirSync(PROFILE, { recursive: true });
     rmSync(`${PROFILE}/DevToolsActivePort`, { force: true });
-    proc = Bun.spawn([bin, "--headless=new", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", `--user-data-dir=${PROFILE}`,
+    // Not --headless: its HeadlessChrome user agent, navigator.webdriver and software GPU get it stopped by bot checks
+    // (a Cloudflare "verify you are human" box never passes). On Linux a normal browser drawing to no window looks real.
+    const hidden = process.platform === "linux" ? ["--ozone-platform=headless", "--window-size=1920,1080"] : ["--headless=new"];
+    proc = Bun.spawn([bin, ...hidden, "--disable-blink-features=AutomationControlled", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", `--user-data-dir=${PROFILE}`,
       "--no-first-run", "--no-default-browser-check", "--mute-audio", "--disable-features=Translate,MediaRouter", "about:blank"], { stdout: "ignore", stderr: "ignore" });
     proc.exited.then(() => { proc = null; base = null; for (const t of tabs.values()) drop(t); });
     for (let i = 0; i < 100; i++) {
