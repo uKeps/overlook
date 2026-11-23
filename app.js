@@ -4980,6 +4980,8 @@ function service(id) {
     <button class="btn glass" data-act="reload" aria-label="Reload" data-tip="Reload">${icon("reload", 15)}</button>
     <a class="btn glass" href="${esc(tab)}" target="_blank" aria-label="Open in a tab" data-tip="Open in tab">${icon("ext", 15)}</a>
     <button class="btn glass ${isFull ? "on" : ""}" data-act="svc-full" aria-label="${isFull ? "Exit full screen" : "Toggle full screen"}" data-tip="${isFull ? "Exit full screen (Esc)" : "Full screen"}">${icon("expand", 15)}</button>`;
+  const sw = $("#svcbar .svc-switch"), onTab = sw?.querySelector(".svc-tab.on");
+  if (sw && onTab) try { sw.scrollTo({ left: Math.max(0, onTab.offsetLeft - (sw.clientWidth - onTab.clientWidth) / 2) }); } catch {}
   main.innerHTML = `<div class="frame ${s.width ? "phone" : ""}" style="${s.width ? `--w:${s.width}px` : s.max ? `max-width:${s.max}px;margin:0 auto` : ""}">
       ${!src ? `<p class="empty">${esc(s.name)} isn't published on Tailscale ("tailnet" field in services.json).</p>`
         : s.ok ? `<iframe id="svcf" src="${esc(src)}" title="${esc(s.name)}"></iframe>` : `<p class="empty">${esc(s.name)} is down.</p>`}</div>`;
