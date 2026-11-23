@@ -43,7 +43,7 @@ const I = {
   max: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
-  rect: '<rect x="4" y="5" width="16" height="14" rx="2"/>', circle: '<circle cx="12" cy="12" r="8"/>',
+  rect: '<rect x="4" y="5" width="16" height="14" rx="2"/>', restore: '<path d="M8 7V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-2"/><rect x="4" y="8" width="13" height="12" rx="1.5"/>', circle: '<circle cx="12" cy="12" r="8"/>',
   arrowR: '<path d="M5 19 19 5M10 5h9v9"/>', front: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/>',
   back: '<rect x="4" y="4" width="12" height="12" rx="2"/><path d="M20 8v11a1 1 0 0 1-1 1H8"/>', eraser: '<path d="m7 21-4-4a2 2 0 0 1 0-3L14 3a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3L11 21z"/><path d="M7 21h14M9 9l6 6"/>',
   trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
@@ -1440,6 +1440,52 @@ function openTui(item) {
 }
 // Brings a card into view (centered on the free canvas, at the current zoom), focuses it and flashes it.
 // stay: the card is already where you look (opened at a right-click): focus it without moving the view.
+// Maximize a card, or put it back. On the free canvas it grows from its spot to the whole canvas and shrinks back there:
+// one layout change at each end, a transform and a clip in between (FLIP). The card is laid out at the full size from
+// the start, scaled and clipped down to its spot, so nothing inside it stretches; its terminal or page keeps its size
+// while it moves (.max-anim holds their fit) and resizes once, when it lands.
+const MAX_MS = 260;
+let maxHeldT = 0;
+function toggleMax(k) {
+  const plane = $("#orch-plane"), canvas = $("#orch-canvas"), p = orchPanes.find((x) => paneKey(x) === k);
+  const card = plane?.querySelector(`.orch-pane[data-key="${CSS.escape(k)}"]`), going = orchMax !== k;
+  const set = () => { orchMax = going ? k : ""; orchActive = k; orchSigs.clear(); agentsBody(); };
+  if (!card || !p || !canvas || orchMode !== "free" || calm.matches || p.collapsed || (going && orchMax) || card.classList.contains("max-anim")) return set();
+  const z = orchZoom, rad = getComputedStyle(card).borderTopLeftRadius;
+  let M, w = card.offsetWidth, h = card.offsetHeight;
+  if (going) {
+    // the full size: the canvas inside the padding a maximized card gets
+    const r = canvas.getBoundingClientRect(), W = canvas.clientWidth, H = canvas.clientHeight;
+    canvas.classList.add("tiled");
+    const cs = getComputedStyle(canvas), pad = (s) => parseFloat(cs[`padding${s}`]) || 0;
+    M = { left: r.left + canvas.clientLeft + pad("Left"), top: r.top + canvas.clientTop + pad("Top"), width: W - pad("Left") - pad("Right"), height: H - pad("Top") - pad("Bottom") };
+    canvas.classList.remove("tiled");
+  } else M = card.getBoundingClientRect();
+  // a page keeps its picture at the size it has until a frame comes at the new one (draw() lets go)
+  clearTimeout(maxHeldT);
+  card.querySelectorAll(".orch-br-view canvas").forEach((c) => { c.style.setProperty("--hw", `${c.offsetWidth}px`); c.style.setProperty("--hh", `${c.offsetHeight}px`); c.classList.add("held"); });
+  card.classList.add("max-anim");
+  if (!going) { set(); w = p.w; h = p.h; } // back on the canvas, the others with it (they fade in below)
+  orchActive = k;
+  plane.querySelectorAll(".orch-pane").forEach((n) => n.classList.toggle("active", n === card));
+  const O = plane.getBoundingClientRect(), L = (M.left - O.left) / z, T = (M.top - O.top) / z;
+  Object.assign(card.style, { left: `${L}px`, top: `${T}px`, width: `${M.width}px`, height: `${M.height}px` });
+  const atSpot = { transformOrigin: "0 0", transform: `translate(${p.x - L}px, ${p.y - T}px)`, clipPath: `inset(0 ${M.width - w}px ${M.height - h}px 0 round ${rad})` };
+  const atMax = { transformOrigin: "0 0", transform: `scale(${1 / z})`, clipPath: `inset(0 round ${rad})` };
+  const opt = { duration: MAX_MS, easing: "cubic-bezier(.2, .8, .2, 1)" };
+  const rest = [...plane.children].filter((n) => n !== card);
+  rest.forEach((n) => n.animate([{ opacity: 1 }, { opacity: 0 }], { ...opt, direction: going ? "normal" : "reverse", fill: going ? "forwards" : "none" }));
+  const a = card.animate(going ? [atSpot, atMax] : [atMax, atSpot], { ...opt, fill: "forwards" });
+  a.onfinish = () => {
+    card.classList.remove("max-anim");
+    if (going) set(); // the card takes the whole canvas; the others go
+    else Object.assign(card.style, { left: `${p.x}px`, top: `${p.y}px`, width: `${p.w}px`, height: `${p.h}px` });
+    a.cancel(); // same task as the layout change: no frame shows between them
+    if (p.kind === "terminal") terms.get(p.id)?.fit?.fit();
+    brs.get(p.id)?.fit?.();
+    maxHeldT = setTimeout(() => card.querySelectorAll("canvas.held").forEach((c) => c.classList.remove("held")), 1000); // no new frame came
+  };
+}
 function focusPane(k, stay = false) {
   const p = orchPanes.find((x) => paneKey(x) === k);
   if (!p) return;
@@ -1575,7 +1621,7 @@ async function mountTerminalPane(card, p) {
         const cell = st.term?._core?._renderService?.dimensions?.css?.cell;
         // a hidden box (minimized card, maximized neighbour) measures 0: keep the size, or the PTY shrinks to 2x1 and
         // the scrollback rewraps to 2 columns for good
-        if (!cell?.width || !cell?.height || !st.term.element || !st.el.clientWidth || !st.el.clientHeight) return;
+        if (!cell?.width || !cell?.height || !st.term.element || !st.el.clientWidth || !st.el.clientHeight || st.el.closest(".max-anim")) return;
         const w = st.el.clientWidth - 2 * PX, h = st.el.clientHeight - 2 * PY;
         const cols = Math.max(2, Math.floor(w / cell.width)), rows = Math.max(1, Math.floor(h / cell.height));
         const rx = Math.max(0, w - cols * cell.width) / 2, ry = Math.max(0, h - rows * cell.height) / 2;
@@ -2156,7 +2202,7 @@ function flashCard(k, cls = "pane-flash", ms = 700) {
 }
 // The browser card: a real headless browser on the server (browser.ts) whose screen streams in as JPEG frames over
 // /ws/browser; the card's mouse, wheel and keys go back as input. Agents wired to it drive the same page.
-const brs = new Map(); // card id -> { ws, ro }
+const brs = new Map(); // card id -> { ws, ro, fit }
 function addBrowser(at) {
   const p = { kind: "browser", id: `br${++orchSeq}`, url: "about:blank" };
   if (!addAt(p, at)) return;
@@ -2228,7 +2274,7 @@ function mountBrowser(feed, p) {
   let vp = [0, 0], sent = "";
   const fit = () => {
     const w = view.clientWidth, h = view.clientHeight, z = p.zoom || 1;
-    if (!w || !h) return;
+    if (!w || !h || view.closest(".max-anim")) return; // a card growing or shrinking resizes its page once, at the end
     const vw = Math.round(p.mobile ? Math.min(BR_PHONE, w / z) : w / z), vh = Math.round(h / z);
     cv.style.width = p.mobile ? `${vw * z}px` : "";
     view.classList.toggle("phone", !!p.mobile);
@@ -2272,7 +2318,7 @@ function mountBrowser(feed, p) {
     drawing = true;
     try {
       const bmp = await createImageBitmap(new Blob([buf], { type: "image/jpeg" }));
-      if (cv.width !== bmp.width || cv.height !== bmp.height) { cv.width = bmp.width; cv.height = bmp.height; }
+      if (cv.width !== bmp.width || cv.height !== bmp.height) { cv.width = bmp.width; cv.height = bmp.height; cv.classList.remove("held"); } // the page came at its new size
       g.drawImage(bmp, 0, 0); bmp.close();
       if (!live) { live = true; view.classList.add("framed"); state(); }
     } catch {}
@@ -2296,7 +2342,7 @@ function mountBrowser(feed, p) {
   ws.onclose = (e) => { if (e.code !== 1000 && brs.get(p.id)?.ws === ws && !down) { down = "off"; loading(false); state(); } };
   const ro = new ResizeObserver(fit);
   ws.onopen = () => { sent = ""; ro.observe(view); for (const m of queue.splice(0)) out(m); };
-  brs.set(p.id, { ws, ro });
+  brs.set(p.id, { ws, ro, fit });
   tools(); showUrl(); state();
   const mods = (e) => (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
   // Where the pointer is in the page's CSS pixels.
@@ -2527,7 +2573,7 @@ function applyCanvasTransform() {
   if (canvas) {
     const [bgId, , , baseStep] = bgEntry(orchBg);
     canvas.dataset.bg = bgId;
-    if (free && baseStep > 0) {
+    if (orchMode === "free" && baseStep > 0) { // a maximized card keeps the canvas's background still under it
       let step = baseStep;
       while (step * orchZoom < 16) step *= 2;
       const px = Math.round(step * orchZoom * 100) / 100;
@@ -3144,7 +3190,7 @@ window.addEventListener("keydown", (e) => {
     ArrowLeft: () => keys.length && focusPane(keys[(i - 1 + keys.length) % keys.length]),
     ArrowDown: () => stepCanvas(1),
     ArrowUp: () => stepCanvas(-1),
-    Enter: () => { if (orchActive) { orchMax = orchMax ? "" : orchActive; orchSigs.clear(); agentsBody(); setTimeout(() => focusPane(orchActive), 80); } },
+    Enter: () => { if (orchActive) { const k = orchActive; toggleMax(k); setTimeout(() => focusPane(k, true), MAX_MS + 40); } },
     KeyT: () => newTermPane(),
     KeyN: () => newAgentTerm(defaultAgent()),
     KeyW: () => orchActive && ACTIONS["orch-unpin"]({ dataset: { key: orchActive } }),
@@ -3708,7 +3754,7 @@ function noteStyle(key, patch) {
 }
 const winHead = (key, title0, sub, acts = "", title = orchPanes.find((x) => paneKey(x) === key)?.name || title0) => `<div class="win-title" title="${esc(title)}"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="orch-acts">${acts}<span class="win-ctl">
     <button type="button" class="btn orch-icon-btn" data-act="orch-collapse" data-key="${esc(key)}" title="Minimize to the title bar" aria-label="Minimize">${icon("minus", 12)}</button>
-    <button type="button" class="btn orch-icon-btn" data-act="orch-max" data-key="${esc(key)}" title="Maximize (Ctrl+Alt+Enter)" aria-label="Maximize">${icon("rect", 11)}</button>
+    ${orchMax === key ? `<button type="button" class="btn orch-icon-btn" data-act="orch-max" data-key="${esc(key)}" title="Restore (Esc)" aria-label="Restore">${icon("restore", 11)}</button>` : `<button type="button" class="btn orch-icon-btn" data-act="orch-max" data-key="${esc(key)}" title="Maximize (Ctrl+Alt+Enter)" aria-label="Maximize">${icon("rect", 11)}</button>`}
     <button type="button" class="btn orch-icon-btn win-close" data-act="orch-unpin" data-key="${esc(key)}" title="Close (Ctrl+Alt+W)" aria-label="Close">${icon("x", 12)}</button>
   </span></div>`;
 // A re-render while the user is selecting text in a card would wipe the selection: wait for the next tick.
@@ -3726,7 +3772,7 @@ function paintHud(hud, isFree) {
     + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
-    + (isFree ? "" : sep + b("orch-mode", "grid", "Canvas: free windows, pan and zoom", 'data-m="free"')
+    + (isFree ? "" : sep + b("orch-mode", "grid", orchMax && orchMode === "free" ? "Back to the canvas (Esc)" : "Canvas: free windows, pan and zoom", 'data-m="free"')
       + (orchPanes.length === 2 && !orchMax ? b("orch-dir", orchDir === "rows" ? "cols" : "split", "Side by side / stacked") : "") + full);
   // the selection shows from two cards up (one card is simply the card you clicked)
   const view = `<span class="hud-sel" id="orch-sel-cnt" ${orchSelected.size > 1 ? "" : "hidden"}>${orchSelected.size} selected</span>
@@ -4336,8 +4382,9 @@ async function orchPaint(force) {
   regrow.forEach((p) => treeLayout(p));
   if ((closed && slideHome(orchPanes)) || regrow.size) { slidePanes(); orchSigs.clear(); saveCanvas(); }
   const isFree = orchMode === "free" && !orchMax;
-  canvas.className = `orch-canvas ${isFree ? `free tool-${orchTool}` : "tiled"}`;
-  plane.className = `orch-plane ${isFree ? "free" : vis.length === 1 ? "single" : vis.length === 2 ? `split-${orchDir}` : "grid"}`;
+  // a card maximized on the free canvas lies over it: the canvas keeps its background, where it was
+  canvas.className = `orch-canvas ${isFree ? `free tool-${orchTool}` : orchMax && orchMode === "free" ? "tiled free tool-select" : "tiled"}`;
+  plane.className = `orch-plane ${isFree ? "free" : vis.length === 1 ? "single" : vis.length === 2 ? `split-${orchDir}` : "grid"}${orchMax ? " maxed" : ""}`;
   applyCanvasTransform();
   paintHud(hud, isFree);
   await Promise.all(vis.map(async (p, idx) => {
@@ -4387,10 +4434,7 @@ async function orchPaint(force) {
         const key = card.dataset.key;
         if (e.target.closest("button, a, select, input, textarea")) return;
         if (card.dataset.kind === "sticky" && !orchMax) return renamePane(p);
-        orchMax = orchMax === key ? "" : key;
-        orchActive = key;
-        orchSigs.clear();
-        agentsBody();
+        toggleMax(key);
       });
       bindPaneDragResize(card, p);
       if (bornKeys.delete(key)) {
@@ -4417,7 +4461,8 @@ async function orchPaint(force) {
     card.dataset.kind = p.kind;
     card.dataset.from = p.spawnedBy || ""; // the pane is gone once it closes: the tree's regrow reads its parent here
     if (card.querySelector(".win-rename")) return; // being renamed: a repaint would wipe the field
-    if (isFree) {
+    if (card.classList.contains("max-anim")) {} // growing or shrinking: toggleMax owns its box until it lands
+    else if (isFree) {
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`;
       card.style.width = `${p.w}px`; card.style.height = `${p.h}px`;
     } else {
@@ -5393,6 +5438,7 @@ const ACTIONS = {
     }
   },
   "orch-mode": (el) => {
+    if (orchMax && orchMode === "free" && (el.dataset.m || el.dataset.mode) === "free") return toggleMax(orchMax);
     orchMode = (el.dataset.m || el.dataset.mode) === "free" ? "free" : "tile";
     orchMax = "";
     document.querySelectorAll('[data-act="orch-mode"]').forEach((b) => b.classList.toggle("on", (b.dataset.m || b.dataset.mode) === orchMode));
@@ -5481,13 +5527,7 @@ const ACTIONS = {
     if (openTui(item)) return;
     addPane(item);
   },
-  "orch-max": (el) => {
-    const k = el.dataset.key;
-    orchMax = orchMax === k ? "" : k;
-    orchActive = k;
-    orchSigs.clear();
-    agentsBody();
-  },
+  "orch-max": (el) => toggleMax(el.dataset.key),
   "note-style": (el) => noteStyle(el.dataset.key, el.dataset.size !== undefined ? { size: el.dataset.size } : { tone: el.dataset.tone }),
   "orch-unpin": async (el) => {
     const k = el.dataset.key;
@@ -5636,6 +5676,7 @@ document.addEventListener("keydown", (e) => {
       updateSelectionUI();
       return;
     }
+    if (orchMax) { e.preventDefault(); toggleMax(orchMax); return; }
     if (document.body.classList.contains("canvas-full")) {
       e.preventDefault();
       canvasFull(false);

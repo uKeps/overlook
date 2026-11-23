@@ -1912,6 +1912,8 @@ body.canvas-full .orch-work { gap: 0; }
 .git-pr[href]:hover { text-decoration: underline; text-underline-offset: 2px; }
 .git-pr[data-ci="running"] { --ci: var(--warn); } .git-pr[data-ci="passed"] { --ci: var(--ok); }
 .git-pr[data-ci="failed"] { --ci: var(--bad); } .git-pr[data-ci="merged"] { --ci: var(--p3); }
+/* Maximized, a card keeps its name and − □ × in view: □ (or Esc, or a double-click on its bar) puts it back. */
+.orch-plane.maxed .orch-pane > .orch-head > * { opacity: 1; }
 /* the window surface: the theme background at 95% over the blur; the text stays at full strength */
 .orch-pane[data-kind="terminal"] > :is(.orch-feed, .orch-talk) { background: color-mix(in srgb, var(--win-bg) 95%, transparent); }
 .orch-pane[data-kind="terminal"] > .orch-feed { flex: 1; min-height: 0; max-height: none; padding: 0; gap: 0; display: flex; overflow: clip; border-radius: 0 0 12px 12px; }
@@ -2521,6 +2523,8 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .orch-br-view.framed canvas { opacity: 1; }
 /* mobile width: the page as a phone-wide column in the middle of the card */
 .orch-br-view.phone { display: flex; justify-content: center; }
+/* held at its size while its card grows or shrinks, until a frame comes at the new size (toggleMax, draw()) */
+.orch-br-view canvas.held { flex: none; width: var(--hw) !important; height: var(--hh) !important; }
 .orch-br-view.phone canvas { flex: none; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
 /* starting, blank, disconnected, couldn't start: a quiet note over the page */
 .orch-br-msg {
