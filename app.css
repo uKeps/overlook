@@ -1041,6 +1041,15 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 }
 @keyframes wait-breathe { 50% { outline-color: var(--accent); outline-offset: 6px; } }
 .orch-pane.waiting .win-title b::after { content: " · waiting for you"; color: var(--accent); font-weight: 500; }
+/* a terminal at work (its Claude busy, a command in its shell): a calm ring in the terminal colour that breathes while
+   it runs; one whose Claude just ended its turn: a steady green ring until you look at it (focus counts) */
+.orch-pane.running:not(.pane-in, .pane-sprout, .pane-out, .pane-flash) {
+  outline: 2px solid var(--accent-2); outline-offset: 3px;
+  animation: run-breathe 2.4s ease-in-out infinite;
+}
+@keyframes run-breathe { 50% { outline-color: color-mix(in srgb, var(--accent-2) 35%, transparent); } }
+.orch-pane.finished:not(.pane-in, .pane-sprout, .pane-out, .pane-flash) { outline: 2px solid color-mix(in srgb, var(--ok) 75%, transparent); outline-offset: 3px; }
+.orch-pane.finished .win-title b::after { content: " · done"; color: var(--ok); font-weight: 500; }
 
 /* Free 2D Maestri Canvas mode & Background Presets */
 .orch-canvas.free {
@@ -2070,7 +2079,11 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 }
 .cv-map svg { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
 .cv-map .mb { fill: color-mix(in srgb, var(--ink) 55%, transparent); cursor: pointer; transition: filter .15s; }
-.cv-map .mb.m-terminal { fill: var(--accent-2); }
+.cv-map .mb.m-terminal { fill: color-mix(in srgb, var(--accent-2) 35%, transparent); }
+.cv-map .mb.s-run { fill: var(--accent-2); animation: map-run 1.6s ease-in-out infinite; }
+@keyframes map-run { 50% { opacity: .4; } }
+.cv-map .mb.s-wait { fill: var(--accent); }
+.cv-map .mb.s-done { fill: var(--ok); }
 .cv-map .mb.m-sticky { fill: var(--warn); }
 .cv-map .mb:is(.m-task, .m-agent) { fill: var(--accent); }
 .cv-map .mb.on { stroke: #fff; stroke-width: 1.5; }

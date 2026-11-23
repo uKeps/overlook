@@ -713,6 +713,12 @@ const panesWaiting = () => listPtys().flatMap((t) => {
   return needs === null ? [] : [{ id: t.id, needs }];
 });
 setInterval(() => { try { notePaneAgents(); } catch {} }, 5000);
+// What a canvas terminal is doing, for its ring and its minimap block: its Claude asks you something (wait), ended its
+// turn since you last looked (done) or works (run); a plain shell runs while a command holds its foreground. Another
+// agent (agy) says nothing about it: no state.
+const paneState = (t: ReturnType<typeof listPtys>[number], needs?: string) =>
+  !t.running ? undefined : needs ? "wait" : needs === "" ? "done" : paneStatus[t.id] ? (paneStatus[t.id].status === "busy" ? "run" : undefined)
+  : !paneAgents[t.id] && !t.prompt ? "run" : undefined;
 // Git on a terminal card: its branch, what changed, and the branch's PR with its CI. The folder comes from the pane (its
 // agent's, else its shell's current one), never from the client. git is cheap (10 s cache); gh is slow and rate-limited
 // (60 s per folder and branch, 3 at a time). Anything missing (not a repo, no gh, no PR) just leaves its part out.
@@ -1093,7 +1099,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/settings") return json(settings());
   // Why /ws/pty would refuse these parameters (a browser can't read a refused upgrade's reason).
   if (p === "/api/pty/check") { const id = url.searchParams.get("id") ?? ""; if (getPty(id)?.code === undefined && getPty(id)) return json({ ok: true }); const s = await ptySpec(url.searchParams); return typeof s === "string" ? new Response(s, { status: 400 }) : json({ ok: true }); }
-  if (p === "/api/pty") { const waiting = new Map(panesWaiting().map((w) => [w.id, w.needs])); return json({ sessions: listPtys().map((t) => ({ ...t, agent: paneAgents[t.id]?.proc, needs: waiting.get(t.id), cost: paneAgents[t.id] && sessionCost(`c:${paneAgents[t.id].session}`) })), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) }); }
+  if (p === "/api/pty") { const waiting = new Map(panesWaiting().map((w) => [w.id, w.needs])); return json({ sessions: listPtys().map((t) => ({ ...t, agent: paneAgents[t.id]?.proc, needs: waiting.get(t.id), state: paneState(t, waiting.get(t.id)), cost: paneAgents[t.id] && sessionCost(`c:${paneAgents[t.id].session}`) })), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) }); }
   if (p === "/api/git") return json(await panesGit((url.searchParams.get("panes") ?? "").split(",").filter(Boolean)));
   if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {

@@ -2677,12 +2677,22 @@ async function takeSpawns() {
 }
 // Wires an agent just used to message another (from /api/pty handoffs, polled with the canvas) are drawn flowing.
 let hotWires = new Set(), paneCosts = new Map();
+// What each terminal does (run, wait, done; /api/pty state): a ring on its card and its colour on the minimap, so among
+// many cards the ones working or just finished show at a glance. Polled with the canvas (2 s), not with S (10 s).
+let paneStates = new Map();
+const markState = (card, s) => { card.classList.toggle("running", s === "run"); card.classList.toggle("waiting", s === "wait"); card.classList.toggle("finished", s === "done"); };
+function markStates() {
+  for (const p of orchPanes) if (p.kind === "terminal") { const c = $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"]`); if (c) markState(c, paneStates.get(p.id)); }
+  paintMap();
+}
 async function pollHandoffs() {
   if (!allPanes().some((p) => p.kind === "terminal")) { hotWires = new Set(); return; }
   if (allLinks().length && Date.now() - wiresAt > 30_000) syncWires(true); // the server forgets a canvas it hasn't heard from in 90 s (or restarted)
   const r = await api("/api/pty").catch(() => null);
   doneCards(r?.sessions || []);
   paneCosts = new Map((r?.sessions || []).filter((t) => t.cost).map((t) => [t.id, t.cost]));
+  const states = new Map((r?.sessions || []).filter((t) => t.state).map((t) => [t.id, t.state]));
+  if (r && [...states].join() !== [...paneStates].join()) { paneStates = states; markStates(); }
   const next = new Set((r?.handoffs || []).filter((h) => Date.now() - h.at < 6000).map((h) => [h.from.includes(":") ? h.from : `terminal:${h.from}`, `terminal:${h.to}`].sort().join("|")));
   if ([...next].join() !== [...hotWires].join()) { hotWires = next; drawLinks(); }
 }
@@ -2778,7 +2788,8 @@ function paintMap() {
   const blocks = orchPanes.filter((p) => typeof p.x === "number").map((p) => {
     const [x, y, w, h] = box(p.x, p.y, p.w, p.collapsed ? 34 : p.h);
     const tint = p.kind === "sticky" ? ` style="fill:${NOTE_TONES.find(([t]) => t === (p.tone || ""))?.[2] || "var(--accent)"}"` : ""; // a note in its own colour
-    return `<rect class="mb m-${p.kind}${paneKey(p) === orchActive ? " on" : ""}"${tint} data-key="${esc(paneKey(p))}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(4, w / 4, h / 4).toFixed(1)}"><title>${esc(paneLabel(p))}</title></rect>`;
+    const st = p.kind === "terminal" && paneStates.get(p.id);
+    return `<rect class="mb m-${p.kind}${st ? ` s-${st}` : ""}${paneKey(p) === orchActive ? " on" : ""}"${tint} data-key="${esc(paneKey(p))}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(4, w / 4, h / 4).toFixed(1)}"><title>${esc(paneLabel(p))}</title></rect>`;
   }).join("");
   const ink = sketchEls.map((e) => {
     if (e.points) return `<polyline class="map-ink" points="${e.points.map((p) => [(e.x + p[0]) * k + ox, (e.y + p[1]) * k + oy].map((n) => n.toFixed(1)).join(",")).join(" ")}"/>`;
@@ -4533,7 +4544,7 @@ async function orchPaint(force) {
     card.classList.toggle("active", key === orchActive);
     card.classList.toggle("collapsed", !!p.collapsed && isFree);
     card.classList.toggle("done", !!p.doneAt);
-    card.classList.toggle("waiting", p.kind === "terminal" && !!S.panesWaiting?.some((w) => w.id === p.id)); // its Claude waits for you
+    markState(card, p.kind === "terminal" ? paneStates.get(p.id) : undefined);
     card.classList.toggle("selected", orchSelected.has(key));
     card.classList.toggle("locked", !!p.locked && isFree);
     card.dataset.kind = p.kind;
