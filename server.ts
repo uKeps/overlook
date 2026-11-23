@@ -953,7 +953,7 @@ if (cmd === "today") {
 }
 
 const json = (x: unknown) => (x ? Response.json(x) : new Response("not found", { status: 404 }));
-const STATIC = new Set(["/app.js", "/app.css"]);
+const STATIC = new Set(["/app.js", "/app.css", "/manifest.webmanifest", "/icon.png"]);
 // Minimal OAuth landing page (escaped text: the message may come from Pinterest).
 const page = (t: string, msg: string) => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${t}</title>
 <body style="background:#121212;color:#EAE8E3;font:15px/1.6 system-ui;display:grid;place-items:center;min-height:90vh;margin:0;padding:24px">
@@ -1093,7 +1093,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/settings") return json(settings());
   // Why /ws/pty would refuse these parameters (a browser can't read a refused upgrade's reason).
   if (p === "/api/pty/check") { const id = url.searchParams.get("id") ?? ""; if (getPty(id)?.code === undefined && getPty(id)) return json({ ok: true }); const s = await ptySpec(url.searchParams); return typeof s === "string" ? new Response(s, { status: 400 }) : json({ ok: true }); }
-  if (p === "/api/pty") return json({ sessions: listPtys().map((t) => ({ ...t, cost: paneAgents[t.id] && sessionCost(`c:${paneAgents[t.id].session}`) })), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) });
+  if (p === "/api/pty") { const waiting = new Map(panesWaiting().map((w) => [w.id, w.needs])); return json({ sessions: listPtys().map((t) => ({ ...t, agent: paneAgents[t.id]?.proc, needs: waiting.get(t.id), cost: paneAgents[t.id] && sessionCost(`c:${paneAgents[t.id].session}`) })), handoffs: handoffs.filter((h) => Date.now() - h.at < 10_000) }); }
   if (p === "/api/git") return json(await panesGit((url.searchParams.get("panes") ?? "").split(",").filter(Boolean)));
   if (p === "/api/ghostty-theme") return json(await ghosttyTheme());
   if (p === "/api/terminals") {
@@ -1215,6 +1215,7 @@ Bun.serve({
       if (!sameOrigin(req)) return new Response("forbidden", { status: 403 });
       if (!/^[\w-]{1,80}$/.test(id)) return new Response("bad id", { status: 400 });
       const spec = getPty(id)?.code === undefined && getPty(id) ? null : await ptySpec(q);
+      if (q.has("attach") && spec !== null) return new Response("that terminal is gone", { status: 410 }); // the phone opens live ones only, never a new shell
       if (typeof spec === "string") return new Response(spec, { status: 400 });
       if (server.upgrade(req, { data: { id, spec, cols: dim(q.get("cols"), 80), rows: dim(q.get("rows"), 24) } })) return undefined;
       return new Response("upgrade failed", { status: 400 });

@@ -2573,3 +2573,26 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .orch-pane.done .win-title b::before { content: "✓ "; color: var(--accent); }
 .orch-pane.done .orch-head { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { .orch-pane.done { transition: none; } }
+
+/* The phone's Agents page (phoneAgents in app.js): the PC's live terminals as a list, one at a time full screen. */
+.phone { padding: 0 2px calc(110px + var(--safe-bottom, 0px)); }
+.ph-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ph-item { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 16px; min-height: 60px;
+  border-radius: 14px; background: var(--glass); border: 1px solid var(--line); color: var(--ink); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.ph-item:active { background: var(--glass-2); }
+.ph-item > span { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.ph-item b { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-item small { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-badge { font-style: normal; font-size: 12px; padding: 3px 9px; border-radius: 99px; background: var(--glass-2); color: var(--muted); white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.ph-badge.wait { background: var(--accent); color: var(--accent-ink); }
+.ph-empty { color: var(--muted); text-align: center; padding: 40px 0; }
+.ph-term { position: fixed; left: 0; right: 0; top: 0; height: 100dvh; z-index: 1000; display: flex; flex-direction: column; background: #121212; }
+.ph-bar { display: flex; align-items: center; gap: 6px; padding: calc(6px + var(--safe-top, 0px)) 10px 6px; color: var(--ink); }
+.ph-bar b { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-back { all: unset; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; cursor: pointer; }
+.ph-back:active { background: var(--glass-2); }
+.ph-screen { flex: 1; min-height: 0; overflow: hidden; padding: 4px 6px; }
+.ph-keys { display: flex; gap: 6px; padding: 6px 8px calc(6px + var(--safe-bottom, 0px)); overflow-x: auto; scrollbar-width: none; }
+.ph-keys button { all: unset; flex: none; min-width: 44px; height: 38px; padding: 0 10px; box-sizing: border-box; display: grid; place-items: center;
+  border-radius: 9px; background: var(--glass-2); color: var(--ink); font: 500 14px var(--mono); -webkit-tap-highlight-color: transparent; }
+.ph-keys button:active { background: var(--accent); color: var(--accent-ink); }

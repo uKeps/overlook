@@ -680,7 +680,7 @@ export function closePty(id: string) {
   setTimeout(() => { if (t.code === undefined) try { t.proc.kill(9); } catch {} }, 3000);
   return ptys.delete(id);
 }
-export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, running: t.code === undefined,
+export const listPtys = () => [...ptys.values()].map((t) => ({ id: t.id, title: t.title, name: nameOf(t), cwd: t.cwd, running: t.code === undefined,
   done: t.doneAt && (t.typed ?? 0) < t.doneAt ? t.doneAt : 0, typed: t.typed ?? 0 }));
 // Whether a Claude TUI in a canvas terminal waits for you, from its session file (~/.claude/sessions/<pid>.json): what
 // for (Claude Code's own "waiting": a permission prompt, a question), "" when its turn ended (idle) after you last typed

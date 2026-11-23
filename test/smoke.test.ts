@@ -2812,3 +2812,17 @@ test("service header layout: Minimal search stays in flow in body.app and svcbar
   expect(scrollTarget(240, 4, 90)).toBe(0);
   expect(scrollTarget(240, 380, 110)).toBe(315);
 });
+
+test("the phone opens only live terminals (attach never starts a shell), and the app has a manifest", async () => {
+  const opened = await new Promise((res) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/pty?id=t_phone_gone&attach=1&cols=40&rows=20`, { headers: { origin: BASE } } as any);
+    ws.onopen = () => { ws.close(); res(true); };
+    ws.onerror = ws.onclose = () => res(false);
+  });
+  expect(opened).toBe(false);
+  const r = await (await fetch(`${BASE}/api/pty`)).json();
+  expect(r.sessions.some((t: any) => t.id === "t_phone_gone")).toBe(false);
+  const m = await (await fetch(`${BASE}/manifest.webmanifest`)).json();
+  expect(m.display).toBe("standalone");
+  expect((await fetch(`${BASE}/icon.png`)).headers.get("content-type")).toContain("image/png");
+});
