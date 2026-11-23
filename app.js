@@ -1662,6 +1662,7 @@ async function mountTerminalPane(card, p) {
           $("#orch-plane")?.querySelectorAll(".orch-pane").forEach((n) => { if (n !== pane) n.classList.remove("active"); });
         }
         st.term.options.cursorBlink = true;
+        termSend(st, "\0" + JSON.stringify({ cols: st.term.cols, rows: st.term.rows })); // the phone may have resized the PTY meanwhile
       });
       st.el.addEventListener("focusout", () => { st.el.closest(".orch-pane")?.classList.remove("typing"); st.term.options.cursorBlink = false; });
     });
@@ -3070,8 +3071,85 @@ function fleetItems() {
 }
 
 // The task form is drawn once; the 10 s refresh redraws only #agents-body, so what you type survives.
+// The phone: the canvas is no use on a small touch screen, and it lives in each browser (the PC's cards aren't there).
+// There the Agents page lists the server's live terminals instead (the PC card's name, waiting for you or not), and one
+// opens full screen on the same PTY: the phone takes the PTY's size while open, the PC card takes it back when clicked.
+const phoneMq = matchMedia("(max-width: 700px) and (pointer: coarse)");
+let phoneClose = null;
+// What an iPhone keyboard lacks, for a TUI: Shift+Tab switches Claude's mode, ^C stops it.
+const PH_KEYS = [["Esc", "\x1b"], ["Tab", "\t"], ["⇧Tab", "\x1b[Z"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"], ["^C", "\x03"]];
+function phoneAgents() {
+  main.innerHTML = `<div class="phone"><div class="ph"><h1>Agents</h1></div><ul class="ph-list" id="ph-list"><li class="ph-empty">Loading…</li></ul></div>`;
+  let list = [];
+  $("#ph-list").addEventListener("click", (e) => { const b = e.target.closest("[data-ph]"); if (b) phoneTerm(list.find((t) => t.id === b.dataset.ph)); });
+  const paint = async () => {
+    const r = await api("/api/pty").catch(() => null), ul = $("#ph-list");
+    if (!ul || !r) return;
+    // waiting for you first (a question, or its turn ended: needs ""), then the last typed in
+    list = r.sessions.filter((t) => t.running).sort((a, b) => (b.needs !== undefined) - (a.needs !== undefined) || b.typed - a.typed);
+    ul.innerHTML = list.length ? list.map((t) => `<li><button type="button" class="ph-item" data-ph="${esc(t.id)}">
+        <span><b>${esc(t.name || t.title || "Terminal")}</b><small>${esc(cwdLabel(t.cwd))}${t.agent ? ` · ${esc(t.agent)}` : ""}</small></span>
+        ${t.needs ? `<i class="ph-badge wait">${esc(t.needs)}</i>` : t.needs === "" ? `<i class="ph-badge">Your turn</i>` : ""}
+      </button></li>`).join("") : `<li class="ph-empty">No terminal open on the PC</li>`;
+  };
+  paint(); orchTimer = setInterval(paint, 3000);
+}
+async function phoneTerm(t) {
+  if (!t) return;
+  phoneClose?.();
+  const box = document.createElement("div");
+  box.className = "ph-term";
+  box.innerHTML = `<header class="ph-bar"><button type="button" class="ph-back" aria-label="Back">${icon("l", 20)}</button><b>${esc(t.name || t.title || "Terminal")}</b></header>
+    <div class="ph-screen"></div>
+    <div class="ph-keys">${PH_KEYS.map(([l], i) => `<button type="button" data-k="${i}">${esc(l)}</button>`).join("")}</div>`;
+  document.body.appendChild(box);
+  const screen = box.querySelector(".ph-screen"), vv = window.visualViewport;
+  let ws = null, term = null, gone = false;
+  const send = (d) => { if (ws?.readyState === 1) ws.send(d); };
+  const fit = () => {
+    const cell = term?._core?._renderService?.dimensions?.css?.cell;
+    if (!cell?.width || !screen.clientWidth) return;
+    const cols = Math.max(20, Math.floor((screen.clientWidth - 12) / cell.width)), rows = Math.max(5, Math.floor((screen.clientHeight - 8) / cell.height));
+    if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+  };
+  // iOS shrinks the visual viewport for the keyboard, not the layout one: the view follows it, the prompt stays above the keys.
+  const size = () => { box.style.height = `${vv ? vv.height : innerHeight}px`; box.style.top = `${vv ? vv.offsetTop : 0}px`; fit(); };
+  const connect = () => {
+    const q = new URLSearchParams({ id: t.id, cols: term.cols, rows: term.rows, attach: "1" });
+    const s = ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws/pty?${q}`);
+    s.onmessage = (e) => term.write(e.data);
+    s.onclose = (e) => { if (!gone && ws === s) term.write(`\r\n\x1b[2m[${e.code === 4001 ? "it ended" : "disconnected · tap here to reconnect"}]\x1b[0m\r\n`); };
+  };
+  // Back from the lock screen or another app the socket is usually gone: open it again (the server replays the screen).
+  const back = () => { if (!document.hidden && term && ws?.readyState > 1) { term.reset(); connect(); } };
+  const close = () => {
+    gone = true; ws?.close(1000); term?.dispose(); box.remove();
+    vv?.removeEventListener("resize", size); document.removeEventListener("visibilitychange", back);
+    if (phoneClose === close) phoneClose = null;
+  };
+  phoneClose = close;
+  box.querySelector(".ph-back").onclick = close;
+  // pointerdown with preventDefault: the terminal keeps the focus, so the keyboard stays up
+  box.querySelector(".ph-keys").addEventListener("pointerdown", (e) => { const b = e.target.closest("[data-k]"); if (!b) return; e.preventDefault(); send(PH_KEYS[b.dataset.k][1]); });
+  screen.addEventListener("click", back);
+  const [x, look] = await termLoad().catch(() => []);
+  if (gone || !x) return;
+  term = new x.Terminal({
+    fontFamily: `${look.fontFamily ? `"${look.fontFamily}", ` : ""}"JetBrainsMono Nerd Font Mono", "JetBrains Mono", "Symbols Nerd Font Mono", monospace`,
+    fontSize: 13, scrollback: 5000, cursorBlink: true, theme: look.theme || {},
+  });
+  if (look.theme?.background) box.style.background = look.theme.background;
+  term.open(screen);
+  size();
+  vv?.addEventListener("resize", size); document.addEventListener("visibilitychange", back);
+  term.onData(send);
+  term.onResize(({ cols, rows }) => send("\0" + JSON.stringify({ cols, rows })));
+  connect();
+  term.focus();
+}
 function agents() {
   clearInterval(orchTimer); orchSigs.clear();
+  if (phoneMq.matches) return phoneAgents();
   document.querySelectorAll("#cwd-pop").forEach((n) => n.remove());
   const ready = (S.runners || []).filter((r) => r.ready);
   const roleRow = ORCH_ROLES.find(([k]) => k === orchRole) || ORCH_ROLES[0];
@@ -5228,7 +5306,7 @@ function render() {
   if (!D) return;
   if (cwdOpen) { cwdOpen = false; cwdPaneKey = ""; paintCwdPop(); }
   if (document.activeElement?.closest?.("#dockwrap, .crumb")) document.activeElement.blur(); // a floating dock folds after you pick a page; no ring left on the name
-  graphStop?.(); graphStop = null; clearInterval(orchTimer);
+  graphStop?.(); graphStop = null; clearInterval(orchTimer); phoneClose?.();
   const { pg, arg } = route();
   // the canvas's layout stays on the canvas; leaving it from the dock keeps the browser in full screen
   if (pg !== "agents" && document.body.classList.contains("canvas-full")) { appFull ||= !!document.fullscreenElement; canvasFull(false); }
