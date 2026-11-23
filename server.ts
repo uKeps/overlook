@@ -1222,7 +1222,7 @@ Bun.serve({
       // A browser card: frames and the page's address out, its input in (browser.ts).
       if (ws.data.browser) {
         attach(ws.data.browser, ws.data.url, (m) => { try { ws.send(m); } catch {} })
-          .then((detach) => { if (ws.data.closed) detach(); else ws.data.detach = detach; })
+          .then((a) => { if (ws.data.closed) a.detach(); else Object.assign(ws.data, a); })
           .catch((e) => { try { ws.send(JSON.stringify({ t: "error", why: String(e?.message || e) })); ws.close(4002, "no browser"); } catch {} });
         return;
       }
@@ -1246,7 +1246,7 @@ Bun.serve({
       if (getPty(id) === t && spec === null) resizePty(t, cols, rows);
     },
     message(ws: any, m: string | Buffer) {
-      if (ws.data.browser) { input(ws.data.browser, String(m)).catch(() => {}); return; }
+      if (ws.data.browser) { const s = String(m); if (s === "drawn") ws.data.drawn?.(); else input(ws.data.browser, s).catch(() => {}); return; }
       const t = getPty(ws.data.id), s = String(m);
       if (!t || t.code !== undefined) return;
       // "\0" + JSON is a resize from the pane; everything else is keystrokes.

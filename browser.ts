@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 
 const ROOT = import.meta.dir, PROFILE = `${ROOT}/cache/browser-profile`, SHOTS = `${ROOT}/cache/shots`, IDLE = 10 * 60_000;
-type Sub = (m: string | Uint8Array) => void;
+type Sub = { out: (m: string | Uint8Array) => void; busy: number; stale?: Uint8Array };
 type Tab = {
   id: string; target: string; ws: WebSocket; seq: number; calls: Map<number, (r: any) => void>; subs: Set<Sub>;
   url: string; title: string; icon: string; back: boolean; fwd: boolean; loading: boolean;
@@ -51,7 +51,24 @@ function call(t: Tab, method: string, params: object = {}): Promise<any> {
     setTimeout(() => { if (t.calls.delete(id)) res({ error: { message: `${method} timed out` } }); }, 15_000);
   });
 }
-const send = (t: Tab, m: string | Uint8Array) => { for (const s of t.subs) s(m); };
+const send = (t: Tab, m: string) => { for (const s of t.subs) s.out(m); };
+// A frame goes to a card only once it has drawn the one before (it says "drawn"); a busy card keeps only the newest.
+// Without that a page that animates (cursor.com: 15 frames of ~77 KB a second) piled frames up in a slow socket (another
+// PC over the tailnet) and the card showed the page, and what clicks did, seconds late. The browser is still acked at
+// once: acked late, its capturer backs off and sends nothing for seconds. A card silent for FRAME_WAIT gets frames anyway
+// (an app.js from before "drawn").
+const FRAME_WAIT = 2000;
+export function frame(t: Pick<Tab, "subs">, f: Uint8Array) {
+  const now = Date.now();
+  for (const s of t.subs) {
+    if (!s.busy || now - s.busy > FRAME_WAIT) { s.busy = now; s.stale = undefined; s.out(f); }
+    else s.stale = f;
+  }
+}
+export function drawn(s: Sub) {
+  s.busy = 0;
+  if (s.stale) { s.busy = Date.now(); s.out(s.stale); s.stale = undefined; }
+}
 // The page's address, title, icon and whether back/forward can go anywhere (the card greys out its buttons).
 async function meta(t: Tab) {
   const h = (await call(t, "Page.getNavigationHistory")).result;
@@ -105,7 +122,7 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
       if (m.id) { t.calls.get(m.id)?.(m); t.calls.delete(m.id); return; }
       if (m.method === "Page.screencastFrame") {
         call(t, "Page.screencastFrameAck", { sessionId: m.params.sessionId });
-        send(t, Buffer.from(m.params.data, "base64"));
+        frame(t, Buffer.from(m.params.data, "base64"));
       } else if (m.method === "Page.frameNavigated" && !m.params.frame.parentId) { t.url = m.params.frame.url; look(t); }
       else if (m.method === "Page.navigatedWithinDocument") { t.url = m.params.url; look(t); }
       else if (m.method === "Page.loadEventFired" || m.method === "Page.domContentEventFired") look(t);
@@ -143,17 +160,18 @@ async function cast(t: Tab) {
   await call(t, "Page.stopScreencast");
   await call(t, "Page.startScreencast", { format: "jpeg", quality: 72, maxWidth: Math.round(t.w * t.z), maxHeight: Math.round(t.h * t.z), everyNthFrame: 1 });
   const r = await call(t, "Page.captureScreenshot", { format: "jpeg", quality: 72 });
-  if (r.result?.data) send(t, Buffer.from(r.result.data, "base64"));
+  if (r.result?.data) frame(t, Buffer.from(r.result.data, "base64"));
 }
 
-// A card's socket: frames and the page's address to it, its input to the tab. Returns how to detach.
-export async function attach(id: string, url: string, sub: Sub) {
-  const t = await tabFor(id, url);
+// A card's socket: frames and the page's address to it, its input to the tab. Returns how to detach, and what to call
+// when the card has drawn a frame.
+export async function attach(id: string, url: string, out: Sub["out"]) {
+  const t = await tabFor(id, url), sub: Sub = { out, busy: 0 };
   t.subs.add(sub); t.used = Date.now();
   meta(t);
-  if (t.loading) sub(JSON.stringify({ t: "load", on: true }));
-  await cast(t);
-  return () => { t.subs.delete(sub); t.used = Date.now(); if (!t.subs.size) call(t, "Page.stopScreencast"); };
+  if (t.loading) out(JSON.stringify({ t: "load", on: true }));
+  cast(t); // not awaited: the socket takes `drawn` before the first frame comes, or the card's answer to it was lost
+  return { detach: () => { t.subs.delete(sub); t.used = Date.now(); if (!t.subs.size) call(t, "Page.stopScreencast"); }, drawn: () => drawn(sub) };
 }
 
 const VK: Record<string, number> = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, " ": 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
