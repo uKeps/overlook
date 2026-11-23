@@ -2276,6 +2276,7 @@ function mountBrowser(feed, p) {
       g.drawImage(bmp, 0, 0); bmp.close();
       if (!live) { live = true; view.classList.add("framed"); state(); }
     } catch {}
+    if (ws.readyState === 1) ws.send("drawn"); // the server sends the next frame only now (browser.ts frame())
     drawing = false;
     if (next) { const n = next; next = null; draw(n); }
   };
