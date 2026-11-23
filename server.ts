@@ -18,13 +18,19 @@ import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTas
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
 const PORT = Number(process.env.PORT) || 3333;
 let cfgPort = PORT;
-// Machine name on Tailscale, read at startup: survives renaming the machine.
-const TAILNET = (() => {
-  try { return JSON.parse(Bun.spawnSync(["tailscale", "status", "--json"]).stdout.toString()).Self.DNSName.replace(/\.$/, ""); } catch { return ""; }
-})();
+// Machine name on Tailscale, read on first use and retried every 30 s until found: at boot Overlook can start
+// before tailscaled is up, and a name read too early locked the phone out with 403 until a restart.
+let tailnetName = "", tailnetTried = 0;
+const tailnet = () => {
+  if (!tailnetName && Date.now() - tailnetTried > 30_000) {
+    tailnetTried = Date.now();
+    try { tailnetName = JSON.parse(Bun.spawnSync(["tailscale", "status", "--json"]).stdout.toString()).Self.DNSName.replace(/\.$/, ""); } catch {}
+  }
+  return tailnetName;
+};
 // Accepted Host: loopback on the right port or the tailnet name (blocks DNS rebinding without locking out the phone).
 const hostOk = (h: string, port: number) =>
-  h === `127.0.0.1:${port}` || h === `localhost:${port}` || (!!TAILNET && (h === TAILNET || h.startsWith(`${TAILNET}:`)));
+  h === `127.0.0.1:${port}` || h === `localhost:${port}` || (!!tailnet() && (h === tailnet() || h.startsWith(`${tailnet()}:`)));
 let VAULT = basename(ROOT);
 setVaultRoot(() => ROOT); // wired vault notes are read from (and written to) the vault Overlook shows
 
@@ -958,7 +964,7 @@ loadTasks(import.meta.dir);
 for (const sig of ["SIGINT", "SIGTERM"] as const)
   process.once(sig, () => { for (const t of taskList()) if (!t.end) stopTask(t.id); process.kill(process.pid, sig); });
 startScheduler(ROOT, import.meta.dir);
-startPinterest(`${TAILNET ? `https://${TAILNET}` : `http://127.0.0.1:${PORT}`}/auth/pinterest/callback`); // Tailscale HTTPS redirect
+startPinterest(`${tailnet() ? `https://${tailnet()}` : `http://127.0.0.1:${PORT}`}/auth/pinterest/callback`); // Tailscale HTTPS redirect
 
 let excalidrawJs: Promise<string> | null = null;
 // Notes are written by agents that read the web: raw HTML shows as text, and a link keeps only a safe scheme.
@@ -1304,7 +1310,7 @@ function ensureProxies(list = serviceList()) {
             for (const c of cookies) rh.append("set-cookie", c.replace(/;\s*secure\b/gi, "").replace(/;\s*domain=[^;]+/gi, ""));
           }
           const csp = rh.get("content-security-policy");
-          if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT}${TAILNET ? ` https://${TAILNET}` : ""}`));
+          if (csp) rh.set("content-security-policy", csp.replace("frame-ancestors 'none'", `frame-ancestors http://127.0.0.1:${PORT} http://localhost:${PORT}${tailnet() ? ` https://${tailnet()}` : ""}`));
           const ct = rh.get("content-type") ?? "";
           if (req.method !== "HEAD" && /text\/html|javascript|application\/json/i.test(ct)) {
             const proxyOrigin = `http://${host}`;
