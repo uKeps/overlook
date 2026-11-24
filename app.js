@@ -1319,6 +1319,48 @@ function saveCanvas() {
     localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio,
       canvas: canvasId, canvases: canvases.map((c) => (c.panes ? { ...c, panes: c.panes.map(({ ctx, ...p }) => p) } : c)) }));
   } catch {}
+  histNote();
+}
+// Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) on the canvas: one history for the cards, their wires and the drawing, so a stroke, a
+// moved card and a closed note undo in the order they happened. A snapshot per change (saveCanvas, the drawing's save);
+// changes 300 ms apart or less are one step. Switching canvases starts a fresh one.
+// ponytail: whole snapshots (the drawing's points included), 100 deep; diffs if a big drawing makes that heavy.
+const HIST_VOL = ["ctx", "doneAt", "keep", "url", "title", "icon", "draft"]; // runtime state, not something you did
+let histCur = null, histAt = 0, histPast = [], histNext = [];
+const histNow = () => JSON.stringify({ panes: orchPanes.map((p) => Object.fromEntries(Object.entries(p).filter(([k]) => !HIST_VOL.includes(k)))), links: orchLinks, sketch: sketchEls });
+// reset: this canvas's state is where its history starts
+function histNote(reset) {
+  if (histCur === null && !reset) return;
+  const s = histNow();
+  if (reset) { histPast = []; histNext = []; }
+  else if (s !== histCur) {
+    if (Date.now() - histAt > 300) { histPast.push(histCur); histPast.splice(0, histPast.length - 100); }
+    histNext = []; histAt = Date.now();
+  }
+  histCur = s;
+}
+async function histStep(back) {
+  const from = back ? histPast : histNext, to = back ? histNext : histPast;
+  if (!from.length) return toast(back ? "Nothing to undo" : "Nothing to redo");
+  const s = JSON.parse(from.at(-1)), keys = new Set(s.panes.map(paneKey)), gone = orchPanes.filter((p) => !keys.has(paneKey(p)));
+  if (!(await closeLiveOk(gone.map(paneKey))) || from !== (back ? histPast : histNext)) return; // a canvas switch meanwhile
+  from.pop(); to.push(histCur);
+  for (const p of gone) if (p.kind === "terminal") termClose(p.id);
+  // a card still here keeps its object (and its runtime state); one that comes back is added as it was
+  const live = new Map(orchPanes.map((p) => [paneKey(p), p]));
+  orchPanes = s.panes.map((p) => { const v = live.get(paneKey(p)); if (!v) return p; for (const k of Object.keys(v)) if (!HIST_VOL.includes(k)) delete v[k]; return Object.assign(v, p); });
+  orchLinks = s.links;
+  if (!keys.has(orchActive)) orchActive = "";
+  if (!keys.has(orchMax)) orchMax = "";
+  orchSelected.clear(); updateSelectionUI();
+  if (JSON.stringify(s.sketch) !== JSON.stringify(sketchEls)) {
+    sketchEls = s.sketch;
+    try { localStorage.setItem(SKETCH_KEY, JSON.stringify(sketchEls)); } catch {}
+    if (sketchApi) sketchApi.updateScene({ elements: sketchEls, appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
+    else if (sketchEls.length) mountSketch();
+  }
+  histCur = histNow();
+  saveCanvas(); orchSigs.clear(); agentsBody(); orchPaint(true); drawMap();
 }
 function setCanvasBg(v, silent = false) {
   orchBg = VALID_BGS.has(v) ? v : "dots";
@@ -1950,6 +1992,7 @@ function addSketchLayer(canvas) {
   canvas.querySelector("#orch-plane").insertAdjacentHTML("afterend", `<div class="orch-sketch ${sketchOn ? "on" : ""}" id="orch-sketch"></div><div class="cv-island orch-sketchbar" id="orch-sketchbar" role="toolbar" aria-label="Drawing tools" ${sketchOn ? "" : "hidden"}></div>`);
   if (sketchOn) paintSketchBar();
   if (sketchOn || sketchEls.length) mountSketch();
+  if (histCur === null) histNote(true);
 }
 async function mountSketch() {
   const el = $("#orch-sketch");
@@ -1973,7 +2016,7 @@ async function mountSketch() {
         if (sig === last || cid !== canvasId) return;
         last = sig; sketchEls = live;
         try { localStorage.setItem(SKETCH_KEY, JSON.stringify(live)); } catch {}
-        syncWires(); drawMap();
+        syncWires(); drawMap(); histNote();
       }, 400);
     },
     // Panning or zooming inside the drawing moves the canvas with it.
@@ -2152,6 +2195,15 @@ window.addEventListener("keydown", (e) => {
   if (!sketchOn || e.key !== "Escape" || ctxEl || sketchApi?.getAppState().editingTextElement || document.querySelector("dialog[open]")) return;
   e.preventDefault(); e.stopPropagation();
   setSketch(false);
+}, true);
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: the canvas's history (histStep), the drawing's included, before Excalidraw sees them; a
+// field keeps its own undo, a terminal its ^Z, a browser card its page's. Elsewhere Ctrl+Z brings back a deleted to-do.
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || (e.code !== "KeyZ" && e.code !== "KeyY")) return;
+  if (e.target.closest?.("input, textarea, select, [contenteditable], .orch-br-view") || document.querySelector("dialog[open]") || sketchApi?.getAppState().editingTextElement) return;
+  const back = e.code === "KeyZ" && !e.shiftKey;
+  if (route().pg === "agents") { e.preventDefault(); e.stopPropagation(); histStep(back); }
+  else if (back && tdGone) { e.preventDefault(); ACTIONS["td-undo"](); }
 }, true);
 // Alt + drag on the empty canvas: a quick freehand stroke without entering drawing (shown live, then added to the sketch).
 function quickInk(e, canvas) {
@@ -3885,7 +3937,7 @@ function paintHud(hud, isFree) {
   const sep = '<span class="orch-hud-sep"></span>', isFull = document.body.classList.contains("canvas-full");
   const full = b("canvas-full", "expand", isFull ? "Leave full screen (Esc)" : "Full screen (Ctrl+Alt+Z)", "", isFull);
   const tools = (isFree ? b("orch-tool", "select", "Select (S) · drag to select several", 'data-tool="select"', orchTool === "select") + b("orch-tool", "hand", "Pan (H, or hold Space)", 'data-tool="pan"', orchTool === "pan") + sep : "")
-    + b("draw-card", "agents", "New agent: drag where it goes (Ctrl+Alt+N)", 'data-kind="agent"', drawing?.kind === "agent") + b("draw-card", "terminal", "New terminal: drag where it goes (Ctrl+Alt+T)", 'data-kind="terminal"', drawing?.kind === "terminal") + b("draw-card", "notes", "New note: drag where it goes", 'data-kind="sticky"', drawing?.kind === "sticky") + b("draw-card", "globe", "New browser: drag where it goes", 'data-kind="browser"', drawing?.kind === "browser") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
+    + b("draw-card", "agents", "New agent: drag where it goes (Ctrl+Alt+N)", 'data-kind="agent"', drawing?.kind === "agent") + b("draw-card", "terminal", "New terminal: drag where it goes (Ctrl+Alt+T)", 'data-kind="terminal"', drawing?.kind === "terminal") + b("draw-card", "notes", "New note: drag where it goes", 'data-kind="sticky"', drawing?.kind === "sticky") + b("draw-card", "globe", "New browser: drag where it goes", 'data-kind="browser"', drawing?.kind === "browser") + (serviceItems().length ? b("orch-svc-menu", "services", "Open a service") : "") + b("orch-sketch", "edit", sketchOn ? "Stop drawing (Esc)" : "Draw on the canvas (D)", "", sketchOn)
     + b("orch-vault-note", "book", "Open a vault note")
     + sep + b("orch-deck-show", "spark", "New task: a prompt for one or more agents", "", !!$("#run")?.classList.contains("show"))
     // the split has no bottom-right island (it would cover a card): its layout and full screen join the tools
@@ -4364,6 +4416,7 @@ function switchCanvas(id, dir) {
   for (const k of ["panes", "links", "panX", "panY", "zoom", "active", "max", "sketch"]) delete next[k];
   canvasId = id; orchSelected.clear(); orchSigs.clear(); mapXf = null;
   try { localStorage.setItem(SKETCH_KEY, JSON.stringify(sketchEls)); } catch {}
+  histCur = null; // addSketchLayer starts this canvas's history
   saveCanvas();
   const cv = $("#orch-canvas"), sk = $("#orch-sketch");
   if (cv) { sk?.unmount?.(); sk?.remove(); $("#orch-sketchbar")?.remove(); addSketchLayer(cv); }
@@ -5580,6 +5633,7 @@ const ACTIONS = {
   },
   "draw-card": (el) => (drawing?.kind === el.dataset.kind ? endDraw() : drawCard(el.dataset.kind)),
   "orch-bg-menu": (el) => ctxAt(el, bgItems()),
+  "orch-svc-menu": (el) => ctxAt(el, serviceItems()),
   "orch-bg": (el) => setCanvasBg(el.dataset.bg || el.dataset.v),
   "set-canvas-bg": (el) => { setCanvasBg(el.dataset.v); if (route().pg === "settings") settingsPage(); },
   "orch-dir": () => {
