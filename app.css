@@ -1165,12 +1165,13 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   --note: var(--accent); --fs-k: 1;
   --fs: clamp(12px, calc(var(--fs-k) * (8px + 2cqi)), 40px);
   --win-bg: color-mix(in srgb, var(--note) 8%, color-mix(in srgb, var(--surface) 86%, #000));
-  border-color: color-mix(in srgb, var(--note) 14%, rgba(255, 255, 255, .05)); border-radius: 12px;
+  --frame: color-mix(in srgb, var(--note) 14%, rgba(255, 255, 255, .05));
+  border-color: var(--frame); border-radius: 12px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035), 0 10px 28px rgba(0, 0, 0, .34);
-  transition: border-color .18s var(--ease), box-shadow .18s var(--ease), background-color .18s var(--ease);
+  transition: border-color .18s var(--ease), outline-color .18s var(--ease), box-shadow .18s var(--ease), background-color .18s var(--ease);
 }
-.orch-pane[data-kind="sticky"].active { border-color: color-mix(in srgb, var(--note) 40%, transparent); }
-.orch-plane.free .orch-pane[data-kind="sticky"].selected { border-color: color-mix(in srgb, var(--note) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--note) 30%, transparent), 0 16px 40px rgba(0, 0, 0, .45); }
+.orch-pane[data-kind="sticky"].active { --frame: color-mix(in srgb, var(--note) 40%, transparent); border-color: color-mix(in srgb, var(--note) 40%, transparent); }
+.orch-plane.free .orch-pane[data-kind="sticky"].selected { --frame: color-mix(in srgb, var(--note) 70%, transparent); border-color: color-mix(in srgb, var(--note) 70%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--note) 30%, transparent), 0 16px 40px rgba(0, 0, 0, .45); }
 .orch-pane[data-tone="yellow"] { --note: var(--p5); }
 .orch-pane[data-tone="green"] { --note: var(--p4); }
 .orch-pane[data-tone="blue"] { --note: var(--p2); }
@@ -1753,12 +1754,17 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   border: var(--bw, 1px) solid rgba(255, 255, 255, .13);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 16px 44px rgba(0, 0, 0, .5);
   container-type: inline-size; container-name: pane;
-  transition: border-color .15s, box-shadow .15s;
+  transition: border-color .15s, outline-color .15s, box-shadow .15s;
 }
-.orch-pane.active { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 22px 60px rgba(0, 0, 0, .62); }
+/* On the free canvas the frame is an outline: its width follows the zoom (--bw) and, unlike a border, takes no room, so a
+   zoom doesn't change what's inside (a browser card resized its page on every zoom step, and the page flickered). The
+   colour rules below set --frame along with border-color (the split keeps the border). Low specificity: the flash and
+   "wrote" rings (outlines too) win over it. */
+:where(.orch-plane.free) .orch-pane:where(:not([data-kind="terminal"])) { border-width: 0; outline: var(--bw, 1px) solid var(--frame, rgba(255, 255, 255, .13)); outline-offset: calc(-1 * var(--bw, 1px)); }
+.orch-pane.active { --frame: color-mix(in srgb, var(--accent) 60%, transparent); border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 22px 60px rgba(0, 0, 0, .62); }
 .orch-plane.free .orch-pane { overflow: visible; }
 .orch-plane.free .orch-pane.active { z-index: 6; }
-.orch-plane.free .orch-pane.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 22px 60px rgba(0, 0, 0, .62); }
+.orch-plane.free .orch-pane.selected { --frame: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 22px 60px rgba(0, 0, 0, .62); }
 /* minimize: the window folds to its title bar (free canvas) */
 .orch-plane.free .orch-pane.collapsed { height: 34px !important; min-height: 0; }
 .orch-pane.collapsed > :not(.orch-head):not(.orch-port) { display: none !important; }
@@ -1919,7 +1925,7 @@ body.canvas-full .orch-work { gap: 0; }
 .orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) > .orch-feed { border-radius: 12px; }
 .orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed):has(> .orch-talk:not([style*="none"])) > .orch-feed { border-radius: 12px 12px 0 0; }
 .orch-plane.free .orch-pane[data-kind="terminal"]:not(.collapsed) .orch-term-view .xterm { padding-top: 14px; } /* clear of the strip */
-.orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) > .orch-feed { border-radius: calc(10px - var(--bw, 1px)); } /* inside its border */
+.orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) > .orch-feed { border-radius: 10px; } /* the card's corners (its frame is an outline over them) */
 .orch-plane.free .orch-pane[data-kind="browser"]:not(.collapsed) .orch-br-bar { height: 46px; padding-top: 8px; } /* its controls clear of the strip */
 /* Git in a terminal's title bar: branch, uncommitted changes, the branch's PR and its CI. The title gives way to it, and
    the branch name to the PR; it takes the pointer (tooltips, the PR link), a drag on it still moves the card. */
@@ -2489,7 +2495,7 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 
 /* The sketch layer: Excalidraw over the whole canvas, its own UI hidden (our .orch-sketchbar replaces it). Off, every
    click goes through to the cards; on, it takes the pointer. */
-.orch-sketch { position: absolute; inset: 0; z-index: 5; }
+.orch-sketch { position: absolute; inset: 0; z-index: 5; transform-origin: 0 0; }
 .orch-sketch[hidden] { display: none; }
 .orch-sketch:not(.on), .orch-sketch:not(.on) * { pointer-events: none !important; }
 .orch-sketch .excalidraw { --color-surface-lowest: transparent; background: transparent; }
