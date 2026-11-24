@@ -1,0 +1,4 @@
+{
+  "name": "overlook",
+  "description": "Hands an agy card on the Overlook canvas what the user wired to it (notes, terminals, browsers) as a system message before the model runs, instead of typing it into the terminal."
+}
