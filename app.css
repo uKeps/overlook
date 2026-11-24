@@ -2609,3 +2609,28 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .ph-keys button { all: unset; flex: none; min-width: 44px; height: 38px; padding: 0 10px; box-sizing: border-box; display: grid; place-items: center;
   border-radius: 9px; background: var(--glass-2); color: var(--ink); font: 500 14px var(--mono); -webkit-tap-highlight-color: transparent; }
 .ph-keys button:active { background: var(--accent); color: var(--accent-ink); }
+
+/* A phone (body.phone, from app.js): the few things used there, big targets, little scrolling. A tab bar along the
+   bottom instead of the dock, no week strip, the to-do first and roomy, its rows quiet (a tap opens a task). */
+body.phone { padding-left: max(18px, var(--safe-left)); padding-right: max(18px, var(--safe-right)); padding-bottom: calc(86px + var(--safe-bottom)); }
+body.phone .top .crumb { max-width: none; }
+body.phone #cal, body.phone .top :is(.full-btn, .ui-btn, .svcbar, .clock) { display: none; }
+body.phone main { padding-top: 6px; }
+body.phone .dockwrap { left: 0; right: 0; bottom: 0; translate: none; display: block; width: 100%; max-width: none; padding: 0; }
+body.phone .dock { width: 100%; max-width: none; box-sizing: border-box; border-radius: 0; padding: 4px 4px calc(4px + var(--safe-bottom)); gap: 0; justify-content: space-around; overflow: visible;
+  border-top: 1px solid var(--line); box-shadow: none; background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+body.phone .dock :is(a, button) { flex: 1; min-width: 0; width: auto; height: 54px; display: grid; grid-template-rows: 26px auto; place-items: center; align-content: center; gap: 2px;
+  border: 0; border-radius: 12px; background: none; transform: none; color: var(--faint); font: 500 11px var(--body); -webkit-tap-highlight-color: transparent; }
+body.phone .dock :is(a, button):hover { background: none; transform: none; }
+body.phone .dock :is(a, button).on { color: var(--accent); background: none; border: 0; }
+body.phone .dock :is(a, button):active { background: var(--glass-2); }
+body.phone .dock a.on::after, body.phone .dock [data-tip]:hover::before { display: none; }
+body.phone .dock .badge { position: absolute; top: 3px; left: calc(50% + 6px); right: auto; font-style: normal; }
+body.phone .toast { bottom: calc(90px + var(--safe-bottom)); }
+body.phone .td-home { margin: 10px auto 24px; gap: 28px; }
+body.phone .td-hello h1 { font-size: 24px; }
+body.phone .td-hello p { margin-top: 4px; }
+body.phone .td-add input { font-size: 16px; } /* under 16px iOS zooms the page in on focus */
+body.phone .td-task .td-acts { display: none; }
+body.phone .td-task .td-meta { display: flex; opacity: 1; }
+body.phone :is(.td-nt, .td-sep) { display: none; } /* recent notes: the Notes tab has them */

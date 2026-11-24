@@ -1,6 +1,11 @@
 // Overlook. Hash routes, data from /api (vault) and /api/system (agents, services, tasks).
 const $ = (s, el = document) => el.querySelector(s);
 const main = $("#main");
+// A phone (narrow and touch) gets its own layout (body.phone, app.css): a tab bar, the to-do first, no week strip, and
+// on Agents a list of the PC's terminals instead of the canvas.
+const phoneMq = matchMedia("(max-width: 700px) and (pointer: coarse)");
+document.body.classList.toggle("phone", phoneMq.matches);
+phoneMq.addEventListener("change", () => { document.body.classList.toggle("phone", phoneMq.matches); topBar(); render(); });
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const fold = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 const LOCALE = "en-US";
@@ -143,6 +148,15 @@ function topBar() {
   const badges = due().length + run + S.services.filter((s) => !s.ok).length;
   const here = { "": ["home", "Home"], notes: ["notes", "Notes"], n: ["notes", "Notes"], w: ["notes", "Notes"], review: ["review", "Review"], graph: ["graph", "Graph"],
     agents: ["agents", "Agents"], a: ["agents", "Agents"], t: ["agents", "Agents"], services: ["services", "Services"], images: ["services", "Images"], s: ["services", "Service"], settings: ["settings", "Settings"] }[pg] || ["home", "Home"];
+  // The phone: a tab bar of the few pages used there, labelled; the rest under More.
+  if (phoneMq.matches) {
+    const tab = (id, name, ic, on, badge = 0) => `<a href="#/${id}" class="${on ? "on" : ""}">${icon(ic, 22)}<span>${name}</span>${badge ? `<i class="badge">${badge}</i>` : ""}</a>`;
+    $("#dockwrap").classList.remove("float"); document.body.classList.remove("dock-float");
+    $("#dock").innerHTML = tab("", "Today", "home", !pg) + tab("agents", "Agents", "agents", ["agents", "a", "t"].includes(pg), S.panesWaiting?.length || 0)
+      + tab("notes", "Notes", "notes", ["notes", "n", "w"].includes(pg)) + tab("review", "Review", "review", pg === "review", due().length)
+      + `<button type="button" data-act="phone-more" class="${["services", "s", "images", "settings", "graph"].includes(pg) ? "on" : ""}">${icon("menu", 22)}<span>More</span></button>`;
+    return;
+  }
   $("#dockwrap").classList.toggle("float", dockMode === "float");
   document.body.classList.toggle("dock-float", dockMode === "float");
   const ub = $("#ui-btn");
@@ -468,7 +482,7 @@ const move = (d) => { idx = (idx + d + SG.length) % SG.length; place(); };
 // Tasks live in Tasks.md in the vault (todos.ts). The page shows today's focus (from the daily note) and today's tasks
 // (late ones roll in), adds a task from one typed line ("pagar o servidor dia 15 todo mês"), and edits one in place when
 // clicked. Upcoming, someday and done fold into one line. Beside it, "Today": the calendar, the agents, the vault.
-let tdOpen = "", tdMore = false, tdTimer = 0, tdGone = null;
+let tdOpen = "", tdMore = phoneMq.matches, tdTimer = 0, tdGone = null;
 const tdAll = () => D.todos || [];
 const tdDay = (d) => {
   const n = daysBetween(D.today, d);
@@ -3085,7 +3099,6 @@ function fleetItems() {
 // The phone: the canvas is no use on a small touch screen, and it lives in each browser (the PC's cards aren't there).
 // There the Agents page lists the server's live terminals instead (the PC card's name, waiting for you or not), and one
 // opens full screen on the same PTY: the phone takes the PTY's size while open, the PC card takes it back when clicked.
-const phoneMq = matchMedia("(max-width: 700px) and (pointer: coarse)");
 let phoneClose = null;
 // What an iPhone keyboard lacks, for a TUI: Shift+Tab switches Claude's mode, ^C stops it.
 const PH_KEYS = [["Esc", "\x1b"], ["Tab", "\t"], ["⇧Tab", "\x1b[Z"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"], ["^C", "\x03"]];
@@ -5373,6 +5386,13 @@ const ACTIONS = {
     D = await api("/api"); toast("Moved to .trash"); location.hash = "#/notes";
   },
   cmdk: () => cmdkOpen(),
+  "phone-more": (el) => ctxAt(el, [
+    { label: "Search", ic: "search", run: () => cmdkOpen() },
+    { label: "Capture", ic: "spark", run: () => ACTIONS.capture() },
+    "-",
+    ...(S.services.length ? [{ label: "Services", ic: "services", run: () => { location.hash = "#/services"; } }] : []),
+    { label: "Settings", ic: "settings", run: () => { location.hash = "#/settings"; } },
+  ]),
   "start-day": async () => {
     const agent = (S.runners || []).find((r) => r.ready)?.id;
     if (!agent) return toast("No agent is ready: add one in Settings");
