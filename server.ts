@@ -11,6 +11,7 @@ import { Database } from "bun:sqlite";
 import { startPinterest, sync, pinterestState, authorizeUrl, authorizeCallback, saveEnv, magick } from "./pinterest";
 import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
+import { pushStore, validSub } from "./push";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
 import { attach, input, safeUrl } from "./browser";
 import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, ptyBrowser, ptyDone, ptyClose, setVaultRoot, handoffs, withCanvas, waitsForYou, GHOSTTY_TERM } from "./tasks";
@@ -712,7 +713,30 @@ const panesWaiting = () => listPtys().flatMap((t) => {
   const s = paneStatus[t.id], needs = s && t.running && !t.done ? waitsForYou(s, s.base, t.typed) : null;
   return needs === null ? [] : [{ id: t.id, needs }];
 });
-setInterval(() => { try { notePaneAgents(); } catch {} }, 5000);
+setInterval(() => { try { notePaneAgents(); pushWaiting(); } catch {} }, 5000);
+// Web Push (push.ts): what rings on the phone with Overlook closed. An agent that starts waiting for you or ends its turn,
+// once per status, unless you typed there in the last minute (you're at it, on the PC); a to-do when its time comes.
+const push = pushStore(`${import.meta.dir}/cache`), pushed = new Set<string>();
+function pushWaiting() {
+  if (!push.count()) return;
+  const ptys = new Map(listPtys().map((t) => [t.id, t]));
+  for (const w of panesWaiting()) {
+    const t = ptys.get(w.id), k = `${w.id}:${paneStatus[w.id]?.statusUpdatedAt}`;
+    if (!t || pushed.has(k) || Date.now() - t.typed < 60_000) continue;
+    pushed.add(k);
+    push.send({ title: t.name || t.title || "An agent", body: w.needs ? `Waiting for you: ${w.needs}` : "Finished its turn", tag: `agent-${w.id}`, url: "/#/agents" });
+  }
+}
+setInterval(async () => {
+  if (!push.count()) return;
+  const now = new Date(), mins = now.getHours() * 60 + now.getMinutes();
+  for (const t of await readTodos(TODOS()).catch(() => [])) {
+    const at = t.time ? Number(t.time.slice(0, 2)) * 60 + Number(t.time.slice(3)) : NaN, k = `todo:${t.id}:${t.due}:${t.time}`;
+    if (t.done || t.due !== today() || !(mins >= at && mins - at <= 10) || pushed.has(k)) continue;
+    pushed.add(k);
+    push.send({ title: t.text, body: `${t.time} · Overlook`, tag: `todo-${t.id}`, url: "/" });
+  }
+}, 30_000);
 // What a canvas terminal is doing, for its ring and its minimap block: its Claude asks you something (wait), ended its
 // turn since you last looked (done) or works (run); a plain shell runs while a command holds its foreground. Another
 // agent (agy) says nothing about it: no state.
@@ -959,7 +983,7 @@ if (cmd === "today") {
 }
 
 const json = (x: unknown) => (x ? Response.json(x) : new Response("not found", { status: 404 }));
-const STATIC = new Set(["/app.js", "/app.css", "/manifest.webmanifest", "/icon.png"]);
+const STATIC = new Set(["/app.js", "/app.css", "/manifest.webmanifest", "/icon.png", "/sw.js"]);
 // Minimal OAuth landing page (escaped text: the message may come from Pinterest).
 const page = (t: string, msg: string) => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${t}</title>
 <body style="background:#121212;color:#EAE8E3;font:15px/1.6 system-ui;display:grid;place-items:center;min-height:90vh;margin:0;padding:24px">
@@ -1072,6 +1096,10 @@ async function handle(req: Request, port: number) {
     }
     // To-dos (Tasks.md): every change answers with the whole list, so the page just redraws it.
     if (p === "/api/focus/done") return typeof b.text === "string" && (await focusDone(b.text)) ? json({ focus: await section(L.focus) }) : new Response("not in today's focus", { status: 400 });
+    // A browser's push subscription (its push service's address and keys), from Overlook's own pages only.
+    if (p.startsWith("/api/push/") && !sameOrigin(req)) return new Response("forbidden", { status: 403 });
+    if (p === "/api/push/subscribe") { if (!validSub(b)) return new Response("not a push subscription", { status: 400 }); push.add(b); return json({ ok: true }); }
+    if (p === "/api/push/test") return json({ sent: await push.send({ title: "Overlook", body: "Notifications are on", tag: "test", url: "/" }) });
     if (p === "/api/todos/parse") return json(parseTask(String(b.text ?? "").slice(0, 400), today()));
     if (p === "/api/todos/add" || p === "/api/todos/edit" || p === "/api/todos/delete") {
       const r = p.endsWith("/add") ? await addTodo(TODOS(), String(b.text ?? "").slice(0, 400), today())
@@ -1119,6 +1147,7 @@ async function handle(req: Request, port: number) {
   if (p === "/api/note") return json(await note(url.searchParams.get("path") ?? ""));
   if (p === "/api/search") return json(await search(url.searchParams.get("q") ?? ""));
   if (p === "/api/todos") return json({ today: today(), todos: await readTodos(TODOS()) });
+  if (p === "/api/push/key") return json({ key: await push.key(), subs: push.count() });
   if (p === "/api/agent") return json(await agent(url.searchParams.get("key") ?? ""));
   if (p === "/api/task") return json(getTask(url.searchParams.get("id") ?? ""));
   if (p === "/api/dirs") { const d = listDirs(ROOT, url.searchParams.get("path") ?? undefined, url.searchParams.get("hidden") === "1"); return d ? json(d) : new Response("invalid cwd", { status: 400 }); }

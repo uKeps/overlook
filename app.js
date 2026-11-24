@@ -18,6 +18,7 @@ let D = null; // vault
 let S = { agents: [], services: [], runners: [], tasks: [] }; // system
 
 const I = {
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   notes: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
   review: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
@@ -3102,6 +3103,20 @@ function fleetItems() {
 let phoneClose = null;
 // What an iPhone keyboard lacks, for a TUI: Shift+Tab switches Claude's mode, ^C stops it.
 const PH_KEYS = [["Esc", "\x1b"], ["Tab", "\t"], ["⇧Tab", "\x1b[Z"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"], ["^C", "\x03"]];
+// Notifications that ring with Overlook closed (Web Push, push.ts): this browser subscribes, the server keeps it and sends
+// a test one. An iPhone only allows it in the Home Screen app.
+async function pushOn() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window))
+    return toast(/iPhone|iPad/.test(navigator.userAgent) ? "Add Overlook to the Home Screen first (Share → Add to Home Screen) and open it from there" : "This browser can't get notifications");
+  if (await Notification.requestPermission() !== "granted") return toast("Notifications are off for Overlook in the phone's settings");
+  const reg = await navigator.serviceWorker.register("/sw.js");
+  await navigator.serviceWorker.ready;
+  const { key } = await api("/api/push/key"), raw = Uint8Array.from(atob(key.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+  const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw }));
+  await api("/api/push/subscribe", sub.toJSON());
+  const r = await api("/api/push/test", {});
+  toast(r.sent ? "Notifications are on: a test one is on its way" : "Subscribed, but the test one didn't go out");
+}
 function phoneAgents() {
   main.innerHTML = `<div class="phone"><div class="ph"><h1>Agents</h1></div><ul class="ph-list" id="ph-list"><li class="ph-empty">Loading…</li></ul></div>`;
   let list = [];
@@ -5389,6 +5404,7 @@ const ACTIONS = {
   "phone-more": (el) => ctxAt(el, [
     { label: "Search", ic: "search", run: () => cmdkOpen() },
     { label: "Capture", ic: "spark", run: () => ACTIONS.capture() },
+    { label: "Notifications", ic: "bell", run: () => pushOn().catch((e) => toast(e.message || "Couldn't turn notifications on")) },
     "-",
     ...(S.services.length ? [{ label: "Services", ic: "services", run: () => { location.hash = "#/services"; } }] : []),
     { label: "Settings", ic: "settings", run: () => { location.hash = "#/settings"; } },
