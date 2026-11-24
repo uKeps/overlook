@@ -2219,11 +2219,11 @@ function flashCard(k, cls = "pane-flash", ms = 700) {
 // The browser card: a real headless browser on the server (browser.ts) whose screen streams in as JPEG frames over
 // /ws/browser; the card's mouse, wheel and keys go back as input. Agents wired to it drive the same page.
 const brs = new Map(); // card id -> { ws, ro, fit }
-function addBrowser(at) {
-  const p = { kind: "browser", id: `br${++orchSeq}`, url: "about:blank" };
+function addBrowser(at, url = "about:blank", name = "") {
+  const p = { kind: "browser", id: `br${++orchSeq}`, url, ...(name && { name }) };
   if (!addAt(p, at)) return;
   saveCanvas();
-  setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-br-url`)?.focus(), 120);
+  if (url === "about:blank") setTimeout(() => $(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"] .orch-br-url`)?.focus(), 120);
 }
 // What was typed in the address bar: an address (scheme optional, localhost:port too) or a search.
 const brUrl = (v) => {
@@ -4074,6 +4074,9 @@ const canvasPt = (cx, cy) => {
 };
 const agentItems = () => [...(S.runners || []).filter((r) => r.ready && r.tui).map((r) => ({ label: r.name, ic: "agents", run: () => drawCard("agent", r.id) })),
   "-", { label: "Shell", ic: "terminal", run: () => drawCard("terminal") }];
+// Hosted services (services.json) open as browser cards. That browser runs on the server, so localhost URLs work even
+// when the canvas is opened from another device.
+const serviceItems = (at) => (S.services || []).filter((s) => !s.internal).map((s) => ({ label: s.name, ic: s.icon || "services", run: () => addBrowser(at, s.url, s.name) }));
 const bgItems = () => CANVAS_BGS.map(([k, l]) => ({ label: l, sw: k, on: orchBg === k, run: () => setCanvasBg(k) }));
 const paneLabel = (p) => p.name || (p.kind === "terminal" ? termName(p)
   : p.kind === "sticky" ? (p.text || "").trim().split("\n")[0].slice(0, 40) || "Note"
@@ -4269,12 +4272,13 @@ function renamePane(p) {
   inp.onblur = () => end(true);
 }
 function canvasMenu(cx, cy) {
-  const at = canvasPt(cx, cy), free = orchMode === "free" && !orchMax, any = orchPanes.length > 0;
+  const at = canvasPt(cx, cy), free = orchMode === "free" && !orchMax, any = orchPanes.length > 0, svc = serviceItems(at);
   ctxMenu(cx, cy, [
     { label: "New agent", ic: "agents", sub: agentItems() },
     { label: "New terminal", ic: "terminal", kbd: "Ctrl+Alt+T", run: () => drawCard("terminal") },
     { label: "New note", ic: "notes", run: () => drawCard("sticky") },
     { label: "New browser", ic: "globe", run: () => drawCard("browser") },
+    svc.length && { label: "Open a service", ic: "services", sub: svc },
     { label: "Draw on the canvas", ic: "edit", run: () => setSketch(true) },
     { label: "Open a vault note…", ic: "book", run: () => openVaultNotes(at) },
     closedCards().length && { label: "Reopen a closed agent", ic: "reload", sub: closedCards().map((c) => ({ label: c.name || "Agent", ic: "agents", run: () => reopenCard(c) })) },
