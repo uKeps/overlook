@@ -1,0 +1,6 @@
+#!/bin/sh
+# Overlook's desktop app (desktop/main.cjs): any Electron runs it. ELECTRON_BIN, else `electron`, else the newest
+# electronNN on the PATH (Arch packages them so). PORT / OVERLOOK_APP_URL point it at another Overlook.
+bin=${ELECTRON_BIN:-$(command -v electron || for b in $(ls /usr/bin/electron[0-9]* 2>/dev/null | sort -V); do :; done; echo "$b")}
+[ -n "$bin" ] && [ -x "$bin" ] || { echo "No Electron found: install one (e.g. your distro's electron package) or set ELECTRON_BIN" >&2; exit 1; }
+exec "$bin" --ozone-platform-hint=auto "$(dirname "$(readlink -f "$0")")" "$@"

@@ -129,6 +129,10 @@ the first one in the file that can run here. `agents.example.json` has one of ea
 - **Phone access**: the server only listens on 127.0.0.1, but accepts your Tailscale machine name, so
   `tailscale serve --bg 3333` opens it to your devices over HTTPS.
 - **ImageMagick** (`magick`) downscales and caches images; without it, originals are served.
+- **Desktop app**: `desktop/run` opens Overlook in a window of its own with any Electron you have (`electron`,
+  your distro's `electronNN`, or `ELECTRON_BIN`). There a browser card is a real browser: sound, video, popups
+  (sign-ins), downloads, uploads, text selection, a right-click menu with Inspect. The web page keeps working as
+  before. `PORT` or `OVERLOOK_APP_URL` points it at another Overlook.
 
 ## Run on login (Linux, systemd)
 

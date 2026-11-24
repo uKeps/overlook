@@ -1,0 +1,7 @@
+{
+  "name": "overlook",
+  "productName": "Overlook",
+  "desktopName": "overlook.desktop",
+  "private": true,
+  "main": "main.cjs"
+}

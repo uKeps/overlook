@@ -1,0 +1,22 @@
+// In every browser card's page (isolated from it): the keys and mouse buttons a browser handles itself. Back/forward and
+// reload act here; Ctrl+L and zoom go to the card (its address bar, its zoom).
+const { ipcRenderer } = require("electron");
+addEventListener("mouseup", (e) => {
+  if (e.button === 3) history.back();
+  else if (e.button === 4) history.forward();
+  else return;
+  e.preventDefault();
+}, true);
+addEventListener("keydown", (e) => {
+  const c = (e.ctrlKey || e.metaKey) && !e.altKey, alt = e.altKey && !e.ctrlKey && !e.metaKey;
+  const act = alt && e.key === "ArrowLeft" ? () => history.back()
+    : alt && e.key === "ArrowRight" ? () => history.forward()
+    : e.key === "F5" || (c && e.code === "KeyR") ? () => location.reload()
+    : c && e.code === "KeyL" ? () => ipcRenderer.sendToHost("url")
+    : c && ["Equal", "NumpadAdd"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", 1)
+    : c && ["Minus", "NumpadSubtract"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", -1)
+    : c && ["Digit0", "Numpad0"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", 0) : null;
+  if (!act) return;
+  e.preventDefault(); e.stopPropagation();
+  act();
+}, true);
