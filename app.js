@@ -2268,6 +2268,14 @@ function flashCard(k, cls = "pane-flash", ms = 700) {
   card?.classList.add(cls); setTimeout(() => card?.classList.remove(cls), ms); // not "flash": the Home's card uses that name
   return card;
 }
+// The mouse's back/forward buttons (4 and 5) on a browser card, or with one clicked into, go to its page, not Overlook's.
+for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "auxclick"]) addEventListener(type, (e) => {
+  if (e.button !== 3 && e.button !== 4) return;
+  const v = e.target.closest?.(".orch-br-view") || document.activeElement?.closest?.(".orch-br-view");
+  if (!v) return;
+  e.preventDefault(); e.stopPropagation();
+  if (type === "pointerup") v.dispatchEvent(new CustomEvent("br-nav", { detail: e.button === 3 ? "back" : "fwd" }));
+}, true);
 // The browser card: a real headless browser on the server (browser.ts) whose screen streams in as JPEG frames over
 // /ws/browser; the card's mouse, wheel and keys go back as input. Agents wired to it drive the same page.
 const brs = new Map(); // card id -> { ws, ro, fit }
@@ -2405,6 +2413,9 @@ function mountBrowser(feed, p) {
       if (changed) { saveCanvasSoon(); syncWires(); }
     } else if (m.t === "load") loading(m.on);
     else if (m.t === "gone") { down = "off"; loading(false); state(); }
+    // a page it opened (a sign-in popup, a link to a new tab): a card of its own beside this one, gone when that closes
+    else if (m.t === "popup") { const q = { kind: "browser", id: m.id, url: "about:blank", w: 520, h: 680 }; if (typeof p.x === "number") placeBeside(p, q, orchPanes); if (addPane(q)) saveCanvas(); }
+    else if (m.t === "closed") ACTIONS["orch-unpin"]({ dataset: { key: paneKey(p) } });
     else if (m.t === "error") { down = "err"; why = m.why; state(); }
   };
   ws.onclose = (e) => { if (e.code !== 1000 && brs.get(p.id)?.ws === ws && !down) { down = "off"; loading(false); state(); } };
@@ -2447,8 +2458,14 @@ function mountBrowser(feed, p) {
   // Keys typed into the page stay there, Ctrl+Alt ones too (click outside the card for the canvas's shortcuts); AltGr
   // (Ctrl+Alt on Windows) types its character. Ctrl+V pastes the clipboard of this machine, which the headless browser
   // can't read itself; Ctrl+= / Ctrl+- / Ctrl+0 zoom the page.
+  // what the browser itself would do with these keys (they'd go to Overlook's own page otherwise, or nowhere)
+  const navKey = (e) => (e.altKey && !e.ctrlKey && !e.metaKey && e.key === "ArrowLeft" ? "back" : e.altKey && !e.ctrlKey && !e.metaKey && e.key === "ArrowRight" ? "fwd"
+    : e.key === "F5" || ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === "KeyR") ? "reload" : (e.ctrlKey || e.metaKey) && !e.altKey && e.code === "KeyL" ? "url" : "");
+  view.addEventListener("br-nav", (e) => out({ t: e.detail }));
   const key = (e, up) => {
     e.preventDefault(); e.stopPropagation();
+    const nav = navKey(e);
+    if (nav) { if (up) return; if (nav === "url") return urlIn.focus(); out({ t: nav }); if (nav === "reload") loading(true); return; }
     if (e.getModifierState?.("AltGraph") && e.key.length === 1) return out({ t: "key", e: up ? "up" : "down", key: e.key, code: e.code, m: mods(e) & 8 });
     const zk = (e.ctrlKey || e.metaKey) && { "=": 1, "+": 1, "-": -1, "_": -1, "0": 0 }[e.key];
     if (zk !== undefined && zk !== false) { if (!up) zk ? zoomBy(zk) : setView({ zoom: 1 }); return; }
