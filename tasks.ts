@@ -560,6 +560,7 @@ type Pty = {
   id: string; title: string; cwd: string; session: string; proc: Bun.Subprocess; tail: string; subs: Set<(d: string) => void>; ends: Set<() => void>; code?: number;
   token: string; screen?: InstanceType<typeof Headless>; ser?: InstanceType<typeof SerializeAddon>; size: string; resizing?: Timer;
   typed?: number; // when the user last typed into it (wired context isn't typed in over a half-written prompt)
+  hooked?: boolean; // its agent pulls wired context through a hook (claude; agy with integrations/agy), so none is typed in
   doneAt?: number; // when its agent said its task was done (overlook done); a message or the user's typing clears it
 };
 const ptys = new Map<string, Pty>();
@@ -869,7 +870,6 @@ async function give(id: string, fresh: boolean, only?: Set<string>) {
   const seen = seenCtx.get(id) ?? new Map<string, number | bigint>(), now = Date.now();
   seenCtx.set(id, seen);
   const items = itemsOf(id);
-  if (live().length) for (const k of seen.keys()) if (!items.some((i) => i.key === k)) seen.delete(k); // unwired: wiring it again gives it again
   const out: { head: string; text: string; name: string; path?: string }[] = [];
   for (const i of items) {
     if (only && !only.has(i.key)) continue;
@@ -882,8 +882,9 @@ async function give(id: string, fresh: boolean, only?: Set<string>) {
   handoffs.splice(0, Math.max(0, handoffs.length - 50));
   return out;
 }
-export async function ptyContext(from: unknown, token: unknown, fresh: boolean) {
+export async function ptyContext(from: unknown, token: unknown, fresh: boolean, hook = false) {
   const me = callerOf(from, token);
+  if (me && hook) me.hooked = true;
   return me ? give(me.id, fresh) : "unknown pane or token";
 }
 // A note being typed changes every keystroke: it goes once it has rested (SETTLE), not half-written.
@@ -896,7 +897,7 @@ async function deliverWired() {
     const now = Date.now(), names = agentNames();
     for (const t of ptys.values()) {
       const items = itemsOf(t.id);
-      if (!items.length || t.code !== undefined || now - (t.typed ?? 0) < QUIET || !names.has(fgName(t))) continue;
+      if (!items.length || t.hooked || t.code !== undefined || now - (t.typed ?? 0) < QUIET || !names.has(fgName(t))) continue;
       const seen = seenCtx.get(t.id), pending = new Set<string>();
       for (const i of items) {
         const text = await itemText(i), h = stamp(i, text), c = changed.get(`${t.id}|${i.key}`);

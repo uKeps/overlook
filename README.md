@@ -108,6 +108,11 @@ Each `agents.json` entry is one of two kinds:
   `model`, an optional `url`, and `key`, the `.env` variable holding the key. It gets four tools limited to the
   vault's notes (`list_notes`, `search_notes`, `read_note`, `write_note`), and `AGENTS.md` as instructions.
 
+On the canvas, what the user wires to an agent's card (notes, terminals, browsers) reaches it through a hook when
+the agent has one: Claude Code gets it from `canvas` (`--settings`), agy from a plugin installed once with
+`agy plugin install integrations/agy`. Both get it with the next prompt, out of sight. An agent without a hook gets
+it typed in as a prompt once it sits idle.
+
 Any entry can list `models` and `efforts`; the task form then offers them. A request that names no agent goes to
 the first one in the file that can run here. `agents.example.json` has one of each.
 

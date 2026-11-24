@@ -6,8 +6,9 @@
 //   overlook read <card> [lines]      what that card's screen shows
 //   overlook spawn <agent> [--cwd dir] [task…]   open a new card wired to this one (an agent with that task, or `shell`)
 //   overlook note <text…>             put a note card on the canvas, wired to this one
-//   overlook context [--new|--all]   the notes wired to this card (claude's hooks: --new only new or changed ones, --all
-//                                    all of them; both print nothing when there is nothing)
+//   overlook context [--new|--all] [--agy]   the notes wired to this card (the agents' hooks: --new only new or changed
+//                                    ones, --all all of them; both print nothing when there is nothing; --agy prints them
+//                                    as agy's hook output, injected as a system message)
 //   overlook write <note> [--append] <text…>   replace (or add to) the text of a note wired to this card
 //   overlook sketch                   what's drawn on this card's canvas (texts, shapes, arrows as "A → B")
 //   overlook draw [mermaid…]          draw a Mermaid diagram on the canvas, beside this card (or pipe it in on stdin)
@@ -79,11 +80,13 @@ if (cmd === "statusline") {
 // The hook form runs before each of the user's prompts: whatever goes wrong, it prints nothing and exits 0 (an exit 2
 // would block the prompt).
 if (cmd === "context") {
-  const fresh = card === "--new", hook = fresh || card === "--all";
-  const r = url && from && token ? await fetch(url + "/api/pty/context", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, token, fresh }) }).catch(() => null) : null;
+  const fresh = card === "--new", hook = fresh || card === "--all", agy = rest.includes("--agy");
+  const r = url && from && token ? await fetch(url + "/api/pty/context", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, token, fresh, hook }) }).catch(() => null) : null;
   const items: any[] = r?.ok ? (await r.json()).items : [];
-  if (items.length) console.log(`What the user wired to this card on the Overlook canvas, as context for the work${fresh ? " (new or changed since you last saw them)" : ""}:\n\n`
-    + items.map((i) => `${i.head}\n${i.text}`).join("\n\n"));
+  const text = items.length ? `What the user wired to this card on the Overlook canvas, as context for the work${fresh ? " (new or changed since you last saw them)" : ""}:\n\n`
+    + items.map((i) => `${i.head}\n${i.text}`).join("\n\n") : "";
+  if (agy) console.log(JSON.stringify(text ? { injectSteps: [{ systemMessage: { systemMessage: text } }] } : {}));
+  else if (text) console.log(text);
   else if (!hook) console.log(r?.ok ? "Nothing is wired to this card." : "overlook: run this inside a terminal card on the Overlook canvas");
   process.exit(0);
 }

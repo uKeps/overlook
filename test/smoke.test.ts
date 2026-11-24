@@ -2077,6 +2077,25 @@ test("git on a terminal card: the branch, what changed and the branch's PR with 
   await post("/api/pty/close", { id: "t_git" });
 });
 
+test("an agent whose hook pulls wired context gets nothing typed in; --agy prints it as agy's hook output", async () => {
+  const init = await (await fetch(`${BASE}/api/settings`)).json();
+  if (!init.agents.some((a: any) => a.id === "catty")) await post("/api/settings", { agents: [...init.agents, { id: "catty", name: "Catty", process: "cat", run: ["cat"] }] });
+  const c = await openPane("t_hk");
+  c.ws.send("overlook context --all --agy; echo HK_ONE\r"); // what agy's SessionStart hook runs: nothing wired yet
+  await until(c, /[\r\n]\{\}\r?\nHK_ONE/);
+  await fetch(`${BASE}/api/canvas/wires`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: "test-hook", wires: [], names: {}, ctx: { t_hk: [{ key: "sticky:77", name: "Hooked", text: "HOOKED_NOTE" }] } }) });
+  c.ws.send("cat\r"); // an agent in the foreground, idle: a pane without a hook would get the note typed in here
+  await Bun.sleep(14000);
+  expect(c.out).not.toContain("[Overlook:");
+  c.ws.send("\x04");
+  c.ws.send("overlook context --new --agy; echo HK_TWO\r");
+  await until(c, /[\r\n]HK_TWO/);
+  const out = c.out.slice(c.out.lastIndexOf("--agy; echo HK_TWO"));
+  expect(JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1)).injectSteps[0].systemMessage.systemMessage).toContain("HOOKED_NOTE");
+  c.ws.close();
+  await post("/api/pty/close", { id: "t_hk" });
+}, 30000);
+
 test("anything wired reaches any agent: typed in once it rests, terminals included; agents write into wired notes", async () => {
   // A stand-in agent: any program named in agents.json's "process" counts (here cat, which shows what it's given).
   const init = await (await fetch(`${BASE}/api/settings`)).json();

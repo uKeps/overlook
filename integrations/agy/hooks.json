@@ -1,0 +1,6 @@
+{
+  "overlook-context": {
+    "SessionStart": [{ "type": "command", "command": "command -v overlook >/dev/null && overlook context --all --agy || echo {}", "timeout": 10 }],
+    "PreInvocation": [{ "type": "command", "command": "command -v overlook >/dev/null && overlook context --new --agy || echo {}", "timeout": 10 }]
+  }
+}

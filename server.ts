@@ -1072,7 +1072,7 @@ async function handle(req: Request, port: number) {
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/send") { const r = ptySend(b.from, b.token, b.to, b.text); return r === true ? json({ ok: true }) : new Response(r, { status: 400 }); }
-    if (p === "/api/pty/context") { const r = await ptyContext(b.from, b.token, !!b.fresh); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ items: r }); }
+    if (p === "/api/pty/context") { const r = await ptyContext(b.from, b.token, !!b.fresh, !!b.hook); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ items: r }); }
     if (p === "/api/pty/done") { const r = ptyDone(b.from, b.token, b.text); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/close-card") { const r = await ptyClose(b.from, b.token, b.to); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
     if (p === "/api/pty/browser") { const r = await ptyBrowser(b.from, b.token, b.cmd, b.arg); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }
