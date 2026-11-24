@@ -2310,10 +2310,7 @@ function brHead(p) {
   img.src = src;
 }
 const BR_ZOOM = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2], BR_PHONE = 390;
-function mountBrowser(feed, p) {
-  brs.get(p.id)?.ws.close(); brs.get(p.id)?.ro.disconnect();
-  feed.innerHTML = `<div class="orch-br">
-      <div class="orch-br-bar">
+const brBar = () => `<div class="orch-br-bar">
         <button type="button" class="orch-br-btn" data-br="back" title="Back" aria-label="Back" disabled>${icon("l", 15)}</button>
         <button type="button" class="orch-br-btn" data-br="fwd" title="Forward" aria-label="Forward" disabled>${icon("r", 15)}</button>
         <button type="button" class="orch-br-btn" data-br="reload" title="Reload" aria-label="Reload">${icon("reload", 13)}</button>
@@ -2321,7 +2318,86 @@ function mountBrowser(feed, p) {
         <button type="button" class="orch-br-zoom" data-brz="reset" title="Back to 100% (Ctrl+0)" hidden></button>
         <button type="button" class="orch-br-btn" data-brz="menu" title="Page width and zoom" aria-label="Page width and zoom"></button>
         <i class="orch-br-load" aria-hidden="true"></i>
-      </div>
+      </div>`;
+// In the desktop app (desktop/): the card is a real browser, Electron's <webview> in its own persistent session: sound,
+// video, popups, downloads, uploads, text selection, its right-click menu. The web page streams the server's (below).
+// ponytail: agents' `overlook browser` still drive the server's tab, not this one; and the page reloads when the canvas is
+// rebuilt (leaving #/agents, switching canvases). Next: the server drives the webview over CDP.
+const DESKTOP = !!window.overlookDesktop, wvCards = new Map(); // a webview's webContents id -> its card
+DESKTOP && window.overlookDesktop.onOpen((from, url) => {
+  const p = wvCards.get(from), q = { kind: "browser", id: `br${++orchSeq}`, url, w: p?.w || 960, h: p?.h || 640 };
+  if (p && typeof p.x === "number") placeBeside(p, q, orchPanes);
+  if (addPane(q)) saveCanvas();
+});
+function mountWebview(feed, p) {
+  const start = p.url && /^(https?:\/\/|about:blank$)/i.test(p.url) ? p.url : "about:blank";
+  feed.innerHTML = `<div class="orch-br">${brBar()}<div class="orch-br-view wv"><webview src="${esc(start)}" partition="persist:browser" allowpopups></webview></div></div>`;
+  const view = feed.querySelector(".orch-br-view"), wv = view.querySelector("webview"), bar = feed.querySelector(".orch-br-bar");
+  const urlIn = feed.querySelector(".orch-br-url"), disp = feed.querySelector(".orch-br-disp");
+  const [backB, fwdB] = ["back", "fwd"].map((k) => bar.querySelector(`[data-br="${k}"]`)), zoomB = bar.querySelector('[data-brz="reset"]'), menuB = bar.querySelector('[data-brz="menu"]');
+  let ready = false;
+  const showUrl = () => {
+    const u = p.url === "about:blank" ? "" : p.url || "", m = /^https?:\/\/(?:www\.)?([^/?#]*)(.*)$/i.exec(u);
+    if (document.activeElement !== urlIn) urlIn.value = u;
+    disp.innerHTML = m ? `<b>${esc(m[1])}</b>${m[2] && m[2] !== "/" ? `<span>${esc(m[2])}</span>` : ""}` : esc(u);
+  };
+  const nav = () => {
+    if (ready) { backB.disabled = !wv.canGoBack(); fwdB.disabled = !wv.canGoForward(); }
+    showUrl(); brHead(p); saveCanvasSoon(); syncWires();
+  };
+  const tools = () => {
+    const z = p.zoom || 1;
+    zoomB.hidden = z === 1; zoomB.textContent = `${Math.round(z * 100)}%`;
+    menuB.innerHTML = icon(p.mobile ? "phone" : "monitor", 14);
+    menuB.classList.toggle("on", !!p.mobile || z !== 1);
+    view.classList.toggle("phone", !!p.mobile);
+    if (ready) wv.setZoomFactor(z);
+  };
+  const setView = (o) => { Object.assign(p, o); if (p.zoom === 1) delete p.zoom; if (!p.mobile) delete p.mobile; tools(); saveCanvasSoon(); };
+  const zoomBy = (d) => { const i = BR_ZOOM.indexOf(p.zoom || 1); setView({ zoom: d ? BR_ZOOM[Math.max(0, Math.min(BR_ZOOM.length - 1, (i < 0 ? 5 : i) + d))] : 1 }); };
+  const loading = (on) => {
+    if (on) { bar.classList.remove("loading", "loaded"); void bar.offsetWidth; bar.classList.add("loading"); }
+    else if (bar.classList.contains("loading")) { bar.classList.remove("loading"); bar.classList.add("loaded"); }
+  };
+  wv.addEventListener("dom-ready", () => { if (!ready) { ready = true; wvCards.set(wv.getWebContentsId(), p); tools(); } nav(); });
+  wv.addEventListener("did-start-loading", () => loading(true));
+  wv.addEventListener("did-stop-loading", () => loading(false));
+  const went = (e) => { if (e.isMainFrame === false) return; p.url = e.url; nav(); };
+  wv.addEventListener("did-navigate", went);
+  wv.addEventListener("did-navigate-in-page", went);
+  wv.addEventListener("page-title-updated", (e) => { p.title = e.title; nav(); });
+  wv.addEventListener("page-favicon-updated", (e) => { const f = e.favicons?.find((u) => /^https?:/.test(u)); if (f && f !== p.icon) { p.icon = f; nav(); } });
+  wv.addEventListener("ipc-message", (e) => { if (e.channel === "url") urlIn.focus(); else if (e.channel === "zoom") zoomBy(e.args[0]); });
+  wv.addEventListener("destroyed", () => { for (const [k, v] of wvCards) if (v === p) wvCards.delete(k); });
+  urlIn.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { const u = brUrl(urlIn.value); if (u && ready) { wv.loadURL(u); wv.focus(); } }
+    if (e.key === "Escape") { showUrl(); urlIn.value = p.url === "about:blank" ? "" : p.url || ""; wv.focus(); }
+  });
+  urlIn.addEventListener("focus", () => urlIn.select());
+  urlIn.addEventListener("blur", showUrl);
+  const menu = () => [
+    { label: "Desktop width", ic: "monitor", on: !p.mobile, run: () => setView({ mobile: false }) },
+    { label: `Mobile width (${BR_PHONE}px)`, ic: "phone", on: !!p.mobile, run: () => setView({ mobile: true }) },
+    "-",
+    { label: "Zoom in", ic: "plus", kbd: "Ctrl+=", off: (p.zoom || 1) >= BR_ZOOM.at(-1), run: () => zoomBy(1) },
+    { label: "Zoom out", ic: "minus", kbd: "Ctrl+-", off: (p.zoom || 1) <= BR_ZOOM[0], run: () => zoomBy(-1) },
+    { label: `Actual size (${Math.round((p.zoom || 1) * 100)}%)`, ic: "search", kbd: "Ctrl+0", off: !p.zoom, run: () => zoomBy(0) },
+  ];
+  bar.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-br], [data-brz]");
+    if (!b || !ready) return;
+    if (b.dataset.brz === "menu") return ctxAt(b, menu());
+    if (b.dataset.brz === "reset") zoomBy(0);
+    else ({ back: () => wv.goBack(), fwd: () => wv.goForward(), reload: () => wv.reload() })[b.dataset.br]?.();
+  });
+  tools(); showUrl();
+  if (start === "about:blank") setTimeout(() => urlIn.focus(), 120);
+}
+function mountBrowser(feed, p) {
+  if (DESKTOP) return mountWebview(feed, p);
+  brs.get(p.id)?.ws.close(); brs.get(p.id)?.ro.disconnect();
+  feed.innerHTML = `<div class="orch-br">${brBar()}
       <div class="orch-br-view" tabindex="0"><canvas></canvas><div class="orch-br-msg"></div></div>
     </div>`;
   const view = feed.querySelector(".orch-br-view"), cv = view.querySelector("canvas"), g = cv.getContext("2d"), msg = view.querySelector(".orch-br-msg");

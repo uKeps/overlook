@@ -2559,6 +2559,9 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 /* held at its size while its card grows or shrinks, until a frame comes at the new size (toggleMax, draw()) */
 .orch-br-view canvas.held { flex: none; width: var(--hw) !important; height: var(--hh) !important; }
 .orch-br-view.phone canvas { flex: none; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
+/* the desktop app's real browser (mountWebview) */
+.orch-br-view.wv webview { display: flex; width: 100%; height: 100%; background: #fff; }
+.orch-br-view.wv.phone webview { flex: none; width: 390px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
 /* starting, blank, disconnected, couldn't start: a quiet note over the page */
 .orch-br-msg {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; text-align: center;
