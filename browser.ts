@@ -3,6 +3,7 @@
 // card as JPEG frames (Page.startScreencast, only when something changes), the card's mouse and keys go back as input
 // events, and agents wired to the card drive the same tab (overlook browser ...). Its own profile, so logins made in the
 // card stay, apart from the user's own browser. Tabs nobody watches close after 10 min; the browser, once it has none.
+// Its sound plays on this machine (the server's speakers), not on a phone or another PC watching the card.
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 
 const ROOT = import.meta.dir, PROFILE = `${ROOT}/cache/browser-profile`, SHOTS = `${ROOT}/cache/shots`, IDLE = 10 * 60_000;
@@ -32,7 +33,7 @@ function devtools(): Promise<string> {
     // (a Cloudflare "verify you are human" box never passes). On Linux a normal browser drawing to no window looks real.
     const hidden = process.platform === "linux" ? ["--ozone-platform=headless", "--window-size=1920,1080"] : ["--headless=new"];
     proc = Bun.spawn([bin, ...hidden, "--disable-blink-features=AutomationControlled", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", `--user-data-dir=${PROFILE}`,
-      "--no-first-run", "--no-default-browser-check", "--mute-audio", "--disable-features=Translate,MediaRouter", "about:blank"], { stdout: "ignore", stderr: "ignore" });
+      "--no-first-run", "--no-default-browser-check", "--disable-features=Translate,MediaRouter", "about:blank"], { stdout: "ignore", stderr: "ignore" });
     proc.exited.then(() => { proc = null; base = null; for (const t of tabs.values()) drop(t); });
     for (let i = 0; i < 100; i++) {
       if (existsSync(`${PROFILE}/DevToolsActivePort`)) {
