@@ -12,6 +12,7 @@ type Tab = {
   url: string; title: string; icon: string; back: boolean; fwd: boolean; loading: boolean;
   w: number; h: number; z: number; mobile: boolean; used: number; ready: Promise<void>;
   win?: number; fw: number; fh: number; // its window, and what the window's frame takes around the page
+  pop?: boolean; // a page another card's page opened: its card goes when it closes
 };
 let proc: ReturnType<typeof Bun.spawn> | null = null, base: Promise<string> | null = null, lastTab = Date.now();
 const tabs = new Map<string, Tab>(), opening = new Map<string, Promise<Tab>>();
@@ -84,7 +85,7 @@ function drop(t: Tab) {
   tabs.delete(t.id);
   try { t.ws.close(); } catch {}
   for (const r of t.calls.values()) r({ error: { message: "the tab closed" } });
-  send(t, JSON.stringify({ t: "gone" }));
+  send(t, JSON.stringify({ t: t.pop ? "closed" : "gone" }));
 }
 
 // The title and icon, read again on every navigation (a page back from the back/forward cache fires no load event).
@@ -108,6 +109,28 @@ async function newTab(b: string, url: string) {
   if (!r.result?.targetId) throw new Error(r.error?.message || "the browser didn't open a tab");
   return { id: r.result.targetId as string, webSocketDebuggerUrl: `${b.replace(/^http/, "ws")}/devtools/page/${r.result.targetId}` };
 }
+// A page a card's page opens (window.open, a target=_blank link: LinkedIn's "Sign in with Google" popup) becomes a card of
+// its own: the opener's card hears {t: "popup", id}, adds a browser card with that id, and tabFor takes the page that is
+// already open (so it keeps its opener, and the sign-in can hand its result back) instead of a new tab.
+const adopt = new Map<string, string>(); // card id -> the open page's target
+let watching: WebSocket | null = null;
+async function watch(b: string) {
+  if (watching) return;
+  const { webSocketDebuggerUrl } = await (await fetch(`${b}/json/version`)).json() as any;
+  const ws = watching = new WebSocket(webSocketDebuggerUrl);
+  ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Target.setDiscoverTargets", params: { discover: true } }));
+  ws.onclose = () => { if (watching === ws) watching = null; };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(String(e.data));
+    if (m.method !== "Target.targetCreated") return;
+    const { targetId, openerId, type } = m.params.targetInfo;
+    const from = openerId && type === "page" && [...tabs.values()].find((t) => t.target === openerId && t.subs.size);
+    if (!from) return;
+    const id = `brp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    adopt.set(id, targetId);
+    send(from, JSON.stringify({ t: "popup", id }));
+  };
+}
 // The card's tab (opened at `url` the first time).
 export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
   const have = tabs.get(id);
@@ -115,9 +138,11 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
   if (opening.has(id)) return opening.get(id)!;
   const p = (async () => {
     const b = await devtools();
-    const start = safeUrl(url) || "about:blank", info = await newTab(b, start);
+    watch(b).catch(() => {});
+    const pop = adopt.get(id); adopt.delete(id);
+    const start = safeUrl(url) || "about:blank", info = pop ? { id: pop, webSocketDebuggerUrl: `${b.replace(/^http/, "ws")}/devtools/page/${pop}` } : await newTab(b, start);
     const ws = new WebSocket(info.webSocketDebuggerUrl);
-    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: start, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, fw: 0, fh: 0, used: Date.now(), ready: Promise.resolve() };
+    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: start, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, fw: 0, fh: 0, used: Date.now(), ready: Promise.resolve(), pop: !!pop };
     t.ready = new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error("couldn't reach the tab")); });
     ws.onclose = () => { if (tabs.get(id) === t) drop(t); };
     ws.onmessage = (ev) => {
@@ -143,6 +168,7 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
     const win = (await call(t, "Browser.getWindowForTarget", { targetId: t.target })).result, vp = (await call(t, "Page.getLayoutMetrics")).result?.cssLayoutViewport;
     if (win?.windowId && vp?.clientWidth) { t.win = win.windowId; t.fw = Math.max(0, win.bounds.width - vp.clientWidth); t.fh = Math.max(0, win.bounds.height - vp.clientHeight); }
     await size(t, t.w, t.h);
+    if (pop) { t.url = (await call(t, "Runtime.evaluate", { expression: "location.href", returnByValue: true })).result?.result?.value || t.url; look(t); } // it loaded before we came
     return t;
   })().finally(() => opening.delete(id));
   opening.set(id, p);
@@ -177,6 +203,13 @@ export async function attach(id: string, url: string, out: Sub["out"]) {
   return { detach: () => { t.subs.delete(sub); t.used = Date.now(); if (!t.subs.size) call(t, "Page.stopScreencast"); }, drawn: () => drawn(sub) };
 }
 
+// Virtual key codes by the physical key (e.code). From the character they were wrong for punctuation: "." got 46
+// (Delete), "(" 40 (ArrowDown), "%" 37 (ArrowLeft), so the page saw those keys instead.
+const VK_CODE: Record<string, number> = { Semicolon: 186, Equal: 187, Comma: 188, Minus: 189, Period: 190, Slash: 191, Backquote: 192,
+  BracketLeft: 219, Backslash: 220, BracketRight: 221, Quote: 222, IntlBackslash: 226, IntlRo: 193, NumpadDecimal: 110, NumpadAdd: 107,
+  NumpadSubtract: 109, NumpadMultiply: 106, NumpadDivide: 111, NumpadComma: 194, Space: 32 };
+export const vkOf = (k: string, code: string) => VK[k] ?? VK_CODE[code] ?? (/^Key[A-Z]$/.test(code) ? code.charCodeAt(3) : /^Digit\d$/.test(code) ? code.charCodeAt(5)
+  : /^Numpad\d$/.test(code) ? 96 + Number(code[6]) : /^F(\d{1,2})$/.test(code) ? 111 + Number(code.slice(1)) : /^[a-z0-9]$/i.test(k) ? k.toUpperCase().charCodeAt(0) : 0);
 const VK: Record<string, number> = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, " ": 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46 };
 const MOUSE = new Set(["mousePressed", "mouseReleased", "mouseMoved"]), BTN = new Set(["left", "middle", "right", "none"]);
@@ -205,7 +238,7 @@ export async function input(id: string, raw: string) {
 }
 // A key as the page would get it: printable ones (without Ctrl/Alt/Meta) type their character; the rest are raw keys.
 async function key(t: Tab, k: string, code: string, up: boolean, mods: number) {
-  const printable = k.length === 1 && !(mods & 7), vk = VK[k] ?? (k.length === 1 ? k.toUpperCase().charCodeAt(0) : 0);
+  const printable = k.length === 1 && !(mods & 7), vk = vkOf(k, code);
   const base = { key: k, code, modifiers: mods, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
   if (up) return call(t, "Input.dispatchKeyEvent", { type: "keyUp", ...base });
   return call(t, "Input.dispatchKeyEvent", printable || k === "Enter" ? { type: "keyDown", text: k === "Enter" ? "\r" : k, ...base } : { type: "rawKeyDown", ...base });
