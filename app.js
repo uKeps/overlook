@@ -1981,10 +1981,25 @@ let sketchApi = null, sketchOn = false, sketchColor = SKETCH_COLORS[0][0], sketc
 const sketchBox = (e) => { const xs = e.points ? e.points.map((p) => e.x + p[0]) : [e.x, e.x + e.width], ys = e.points ? e.points.map((p) => e.y + p[1]) : [e.y, e.y + e.height]; return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }; };
 const sketchView = () => ({ scrollX: orchPanX / orchZoom, scrollY: orchPanY / orchZoom, zoom: { value: orchZoom } });
 const sameView = (a, b) => Math.abs(a.scrollX - b.scrollX) < 0.05 && Math.abs(a.scrollY - b.scrollY) < 0.05 && Math.abs(a.zoom.value - b.zoom.value) < 1e-4;
-function syncSketchView() {
-  if (!sketchApi) return;
-  const v = sketchView();
-  if (!sameView(sketchApi.getAppState(), v)) sketchApi.updateScene({ appState: v });
+// While the view moves (a pinch, a glide, a drag), the drawing follows as a CSS transform of what Excalidraw last drew, and
+// Excalidraw is told the new view once the view rests: re-rendering every shape each frame (~35 ms) made the zoom lag and
+// the drawing trail the cards. `now`: tell it at once (drawing is about to start).
+let sketchRest = 0;
+function syncSketchView(now) {
+  const el = $("#orch-sketch");
+  if (!sketchApi || !el) return;
+  const st = sketchApi.getAppState(), v = sketchView();
+  clearTimeout(sketchRest);
+  if (sameView(st, v)) { el.style.transform = ""; return; }
+  const settle = () => {
+    sketchApi?.updateScene({ appState: sketchView() });
+    // the transform goes once Excalidraw has drawn the new view (it paints on the next frame)
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (sketchApi && sameView(sketchApi.getAppState(), sketchView())) el.style.transform = ""; }));
+  };
+  if (now) return settle();
+  const z0 = st.zoom.value, k = orchZoom / z0;
+  el.style.transform = `translate(${orchPanX - st.scrollX * z0 * k}px, ${orchPanY - st.scrollY * z0 * k}px) scale(${k})`;
+  sketchRest = setTimeout(settle, 140);
 }
 // The canvas DOM is rebuilt on every visit: a fresh layer each time, Excalidraw only once there's something to show.
 function addSketchLayer(canvas) {
@@ -2039,6 +2054,7 @@ async function setSketch(on, tool = "freedraw") {
   paintSketchBar();
   await mountSketch();
   for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
+  syncSketchView(true); // strokes land where they're drawn, not where a resting view would put them
   sketchApi?.setActiveTool({ type: tool }); // the pen from the toolbar or D; the selection when a shape was clicked
   paintSketchBar(tool);
   sketchApi?.refresh();
@@ -2718,15 +2734,18 @@ function glideView(x, y, z = orchZoom, ms = 420) {
 }
 // The wheel and drags change the view at their own rate (a trackpad: 120+ events a second); it's drawn once a frame.
 const applyCanvasSoon = () => { viewRaf ||= requestAnimationFrame(() => { viewRaf = 0; applyCanvasTransform(); }); };
+let zRest = 0;
 function applyCanvasTransform() {
   const plane = $("#orch-plane"), zLbl = $("#orch-zoom-lbl"), canvas = $("#orch-canvas");
   const free = orchMode === "free" && !orchMax;
   // the pan is kept exact (a trackpad's fractional steps add up) and drawn on whole pixels, so text stays sharp
   const px0 = Math.round(orchPanX), py0 = Math.round(orchPanY);
   if (plane) plane.style.transform = free && orchPanes.length ? `translate(${px0}px, ${py0}px) scale(${orchZoom})` : "";
-  // --z sets the cards' border width (--bw): in 5% steps, so a pinch doesn't re-lay out every card on every frame
+  // --z sets the cards' frame width (--bw), in 5% steps, once the zoom rests: every card inherits it, so each change
+  // restyles the whole canvas (~5 ms, most of a 144 Hz frame); mid-pinch a frame a bit thin or thick doesn't show
   const zq = String(Math.round(orchZoom * 20) / 20);
-  if (plane && plane.style.getPropertyValue("--z") !== zq) plane.style.setProperty("--z", zq);
+  clearTimeout(zRest);
+  if (plane && plane.style.getPropertyValue("--z") !== zq) zRest = setTimeout(() => plane.style.setProperty("--z", zq), plane.style.getPropertyValue("--z") ? 150 : 0);
   const sk = $("#orch-sketch");
   if (sk) { sk.hidden = !free; syncSketchView(); }
   // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
@@ -2910,9 +2929,13 @@ function doneCards(sessions) {
 // Click a card to go to it, click elsewhere to centre the view there, drag (the frame, or anywhere) to move, wheel to
 // zoom. mapXf maps canvas coordinates to the map; it eases toward mapGoal, during a drag too, so the map zooms live.
 let mapXf = null, mapGoal = null, mapRaf = 0;
+// The map's and the canvas's sizes come from a ResizeObserver: read every frame right after the view's styles changed,
+// clientWidth / getBoundingClientRect forced a layout of the whole canvas (~3 ms, half a frame at 144 Hz: the zoom lagged).
+const sizes = new WeakMap(), sizeRo = new ResizeObserver((es) => { for (const e of es) sizes.set(e.target, [e.contentRect.width, e.contentRect.height]); drawMap(); });
+const sizeOf = (el) => { let s = sizes.get(el); if (!s) { sizes.set(el, (s = [el.clientWidth, el.clientHeight])); sizeRo.observe(el); } return s; };
 const mapView = () => {
-  const r = $("#orch-canvas").getBoundingClientRect();
-  return { x: -orchPanX / orchZoom, y: -orchPanY / orchZoom, w: r.width / orchZoom, h: r.height / orchZoom };
+  const [w, h] = sizeOf($("#orch-canvas"));
+  return { x: -orchPanX / orchZoom, y: -orchPanY / orchZoom, w: w / orchZoom, h: h / orchZoom };
 };
 const mapNear = (a, b) => !!a && !!b && Math.abs(a.k - b.k) < a.k * .002 && Math.abs(a.ox - b.ox) < .3 && Math.abs(a.oy - b.oy) < .3;
 function drawMap() {
@@ -2921,7 +2944,7 @@ function drawMap() {
   const on = orchMapOpen && orchMode === "free" && !orchMax;
   box.hidden = !on;
   if (!on) { mapXf = null; return; }
-  const svg = box.querySelector("svg"), W = svg.clientWidth, H = svg.clientHeight;
+  const svg = box.querySelector("svg"), [W, H] = sizeOf(svg);
   if (!W || !H) return;
   const all = [...orchPanes.filter((p) => typeof p.x === "number"), mapView(), ...sketchEls.map(sketchBox)];
   const x0 = Math.min(...all.map((p) => p.x)), y0 = Math.min(...all.map((p) => p.y));
@@ -2943,7 +2966,7 @@ function mapEase() {
 function paintMap() {
   const svg = $("#orch-map svg");
   if (!svg || !mapXf) return;
-  const { k, ox, oy } = mapXf, W = svg.clientWidth, H = svg.clientHeight, v = mapView();
+  const { k, ox, oy } = mapXf, [W, H] = sizeOf(svg), v = mapView();
   const box = (x, y, w, h) => [x * k + ox, y * k + oy, Math.max(3, w * k), Math.max(3, h * k)].map((n) => Math.round(n * 10) / 10);
   const blocks = orchPanes.filter((p) => typeof p.x === "number").map((p) => {
     const [x, y, w, h] = box(p.x, p.y, p.w, p.collapsed ? 34 : p.h);
