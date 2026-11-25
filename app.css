@@ -1958,6 +1958,13 @@ body.canvas-full .orch-work { gap: 0; }
 
 /* ---------- Canvas page: the canvas is the whole screen; the header, the week strip and the dock step aside ---------- */
 body.canvas-page { padding: 0; }
+/* The desktop app keeps the canvas in the page (agents()): on the canvas the page area steps aside; elsewhere the canvas
+   stays laid out at full size (terminals keep their columns, webviews their page) but unseen and out of reach. */
+.canvas-host { display: none; }
+body.desk-canvas .canvas-host { display: block; }
+body.desk-canvas.canvas-page #main { display: none; }
+body.desk-canvas:not(.canvas-page) .canvas-host { position: fixed; inset: 0; z-index: -1; opacity: 0; pointer-events: none; }
+body.desk-canvas:not(.canvas-page) .canvas-host * { pointer-events: none !important; }
 body.canvas-page :is(.top, .cal) { display: none !important; }
 body.canvas-page main { max-width: none !important; margin: 0 !important; padding: 0 !important; }
 body.canvas-page .orch-shell { height: 100dvh; min-height: 0; gap: 0; }
