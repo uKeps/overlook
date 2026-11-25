@@ -113,6 +113,27 @@ ipcMain.handle("wv-target", async (e, id) => {
   catch { return null; }
   finally { try { wc.debugger.detach(); } catch {} }
 });
+// Ads and trackers blocked in every browser card, as Brave's Shields do: Ghostery's engine with its prebuilt ads +
+// tracking lists (EasyList, uBlock's filters...), on requests and on the page (cosmetic filters, a preload). The lists
+// are fetched once and cached in userData, refreshed when a day old. The card's menu turns it off and on (shields.json).
+let blocker = null;
+const SHIELDS = () => path.join(app.getPath("userData"), "shields.json");
+const shieldsOn = () => { try { return JSON.parse(fs.readFileSync(SHIELDS(), "utf8")).on !== false; } catch { return true; } };
+async function shields(on) {
+  const ses = session.fromPartition("persist:browser");
+  if (!on) return void (blocker?.isBlockingEnabled(ses) && blocker.disableBlockingInSession(ses));
+  if (!blocker) {
+    const { ElectronBlocker } = require("@ghostery/adblocker-electron"), cache = path.join(app.getPath("userData"), "adblock.bin");
+    try { if (Date.now() - fs.statSync(cache).mtimeMs > 86_400_000) fs.rmSync(cache); } catch {}
+    blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile });
+  }
+  if (!blocker.isBlockingEnabled(ses)) blocker.enableBlockingInSession(ses);
+}
+ipcMain.handle("shields", async (e, on) => {
+  if (e.sender !== win?.webContents) return null;
+  if (typeof on === "boolean") { fs.writeFileSync(SHIELDS(), JSON.stringify({ on })); await shields(on).catch((err) => console.error("ad blocking:", err.message)); }
+  return shieldsOn();
+});
 ipcMain.handle("import-logins", (e) => (e.sender === win?.webContents ? importLogins() : { error: "not allowed" }));
 // A card's page as a JPEG, for the canvas to show in its place while it zooms (freezeWebviews in app.js). Encoded here: the
 // page's own toDataURL is a PNG made on the canvas's thread (~45 ms a card).
@@ -154,6 +175,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   const ses = session.fromPartition("persist:browser");
   ses.setPermissionRequestHandler(askPermission);
+  if (shieldsOn()) shields(true).catch((e) => console.error("ad blocking:", e.message));
   // a plain Chrome user agent: with "Electron/…" in it Google refuses to sign in ("this browser may not be secure")
   ses.setUserAgent(ses.getUserAgent().replace(/\s(Electron|overlook)\/\S+/gi, ""));
   win = new BrowserWindow({
