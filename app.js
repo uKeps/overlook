@@ -2751,6 +2751,37 @@ function glideView(x, y, z = orchZoom, ms = 420) {
   step(t0);
 }
 // The wheel and drags change the view at their own rate (a trackpad: 120+ events a second); it's drawn once a frame.
+// In the desktop app a browser card's page (a <webview>: a process of its own) re-rasters on every zoom step: two cards
+// kept the GPU ~75% busy through a pinch and frames dropped. While the zoom changes, a snapshot of each page stands in
+// for it and the page is hidden (nothing to raster); 150 ms after the zoom rests the live page is back, at the new scale.
+let wvZoom = 0, wvRest = 0;
+function freezeWebviews() {
+  clearTimeout(wvRest);
+  wvRest = setTimeout(thawWebviews, 150);
+  for (const wv of document.querySelectorAll("#orch-plane webview:not(.frozen)")) {
+    let id;
+    try { id = wv.getWebContentsId(); } catch { continue; } // its page isn't up yet
+    wv.classList.add("frozen");
+    window.overlookDesktop.capture(id).then((jpg) => {
+      if (!jpg || !wv.classList.contains("frozen")) return;
+      const img = new Image();
+      img.className = "wv-shot";
+      img.src = URL.createObjectURL(new Blob([jpg], { type: "image/jpeg" }));
+      img.decode().then(() => {
+        if (!wv.classList.contains("frozen")) return URL.revokeObjectURL(img.src);
+        Object.assign(img.style, { left: `${wv.offsetLeft}px`, top: `${wv.offsetTop}px`, width: `${wv.offsetWidth}px`, height: `${wv.offsetHeight}px` });
+        wv.after(img);
+        // hidden once the snapshot is on screen: swapping both in one frame cost a ~28 ms frame
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (wv.classList.contains("frozen")) wv.style.visibility = "hidden"; }));
+      }, () => URL.revokeObjectURL(img.src));
+    }, () => {});
+  }
+}
+function thawWebviews() {
+  for (const wv of document.querySelectorAll("webview.frozen")) { wv.classList.remove("frozen"); wv.style.visibility = ""; }
+  const shots = document.querySelectorAll(".wv-shot"); // kept a moment over the page, until it has drawn at the new scale
+  setTimeout(() => shots.forEach((s) => { URL.revokeObjectURL(s.src); s.remove(); }), 120);
+}
 const applyCanvasSoon = () => { viewRaf ||= requestAnimationFrame(() => { viewRaf = 0; applyCanvasTransform(); }); };
 let zRest = 0;
 function applyCanvasTransform() {
@@ -2759,6 +2790,7 @@ function applyCanvasTransform() {
   // the pan is kept exact (a trackpad's fractional steps add up) and drawn on whole pixels, so text stays sharp
   const px0 = Math.round(orchPanX), py0 = Math.round(orchPanY);
   if (plane) plane.style.transform = free && orchPanes.length ? `translate(${px0}px, ${py0}px) scale(${orchZoom})` : "";
+  if (DESKTOP && orchZoom !== wvZoom) { if (wvZoom && free) freezeWebviews(); wvZoom = orchZoom; }
   // --z sets the cards' frame width (--bw), in 5% steps, once the zoom rests: every card inherits it, so each change
   // restyles the whole canvas (~5 ms, most of a 144 Hz frame); mid-pinch a frame a bit thin or thick doesn't show
   const zq = String(Math.round(orchZoom * 20) / 20);
