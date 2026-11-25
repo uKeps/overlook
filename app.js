@@ -1999,7 +1999,7 @@ const sameView = (a, b) => Math.abs(a.scrollX - b.scrollX) < 0.05 && Math.abs(a.
 let sketchRest = 0;
 function syncSketchView(now) {
   const el = $("#orch-sketch");
-  if (!sketchApi || !el || (!sketchOn && !now)) return; // not drawing: Excalidraw is hidden and keeps still
+  if (!sketchApi || !el || (!sketchOn && !now && !el.classList.contains("live"))) return; // not drawing: Excalidraw is hidden and keeps still
   clearTimeout(sketchRest);
   // Excalidraw back once it has drawn the view (it paints on the next frame)
   const reveal = () => requestAnimationFrame(() => requestAnimationFrame(() => { if (sketchApi && sameView(sketchApi.getAppState(), sketchView())) el.classList.remove("moving"); }));
@@ -2016,6 +2016,8 @@ async function paintSketchSvg(els = sketchEls) {
   if (sig === sketchSvgSig) return;
   sketchSvgSig = sig;
   const lib = live.length ? await loadExcalidraw().catch(() => null) : null;
+  // a server started before this change serves a bundle without exportToSvg: Excalidraw stays up (until it restarts)
+  if (lib && !lib.exportToSvg) return $("#orch-sketch")?.classList.add("live");
   const svg = lib && await lib.exportToSvg({ elements: live, appState: { exportBackground: false, exportWithDarkMode: true }, files: null, exportPadding: 0, skipInliningFonts: true }).catch(() => null);
   const box = $("#orch-sketch-svg");
   if (!box || sig !== sketchSvgSig) return;

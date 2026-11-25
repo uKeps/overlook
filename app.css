@@ -2510,7 +2510,7 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .orch-sketch { position: absolute; inset: 0; z-index: 5; }
 .orch-sketch[hidden], .orch-sketch-svg[hidden] { display: none; }
 /* What shows of the drawing is its SVG, moved with the cards (syncSketchView); Excalidraw only while drawing, the view at rest */
-.orch-sketch:not(.on), .orch-sketch.moving { visibility: hidden; }
+.orch-sketch:not(.on, .live), .orch-sketch.moving { visibility: hidden; }
 .orch-sketch-svg { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 5; transform-origin: 0 0; pointer-events: none; }
 .orch-sketch-svg svg { position: absolute; overflow: visible; }
 .orch-sketch.on:not(.moving) + .orch-sketch-svg { visibility: hidden; }
