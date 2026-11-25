@@ -2361,9 +2361,9 @@ async function setShields(on, reload) {
   toast(v ? "Ads and trackers blocked" : "Ad blocking off");
   reload();
 }
-async function importLogins() {
+async function importLogins(from) {
   toast("Importing your logins…");
-  const r = await window.overlookDesktop.importLogins().catch((e) => ({ error: e.message }));
+  const r = await window.overlookDesktop.importLogins(from).catch((e) => ({ error: e.message }));
   if (r.error) return toast(`Couldn't import: ${esc(r.error)}`);
   toast(`Imported ${r.count} logins from ${esc(r.browser)}`);
   document.querySelectorAll(".orch-br-view.wv webview").forEach((w) => w.reload());
@@ -2504,7 +2504,8 @@ function mountWebview(feed, p) {
     { label: `Actual size (${Math.round((p.zoom || 1) * 100)}%)`, ic: "search", kbd: "Ctrl+0", off: !p.zoom, run: () => zoomBy(0) },
     "-",
     { label: "Block ads and trackers", ic: "shield", on: brShields, run: () => setShields(!brShields, () => cur()?.ready && cur().wv.reload()) },
-    { label: "Import logins from Zen", ic: "lock", run: importLogins },
+    { label: "Import logins from Brave", ic: "lock", run: () => importLogins("brave") },
+    { label: "Import logins from Zen", ic: "lock", run: () => importLogins() },
   ];
   bar.addEventListener("click", (e) => {
     const b = e.target.closest("[data-br], [data-brz]");
