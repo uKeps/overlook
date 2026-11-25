@@ -26,7 +26,7 @@ function contextMenu(wc, p, page) {
     { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
     { label: "Reload", click: () => wc.reload() }, { type: "separator" });
   if (p.linkURL) items.push(
-    ...(page && web(p.linkURL) ? [{ label: "Open link in new tab", click: () => openCard(wc, p.linkURL, "background-tab") }] : []),
+    ...(page && web(p.linkURL) ? [{ label: "Open link in new tab", click: () => openCard(wc, p.linkURL, "background-tab") }, { label: "Open link in private tab", click: () => openCard(wc, p.linkURL, "private") }] : []),
     { label: "Copy link address", click: () => clipboard.writeText(p.linkURL) }, { type: "separator" });
   if (p.mediaType === "image" && p.srcURL) items.push({ label: "Copy image", click: () => wc.copyImageAt(p.x, p.y) }, { label: "Copy image address", click: () => clipboard.writeText(p.srcURL) }, { type: "separator" });
   if (p.isEditable) items.push({ role: "undo", enabled: p.editFlags.canUndo }, { role: "redo", enabled: p.editFlags.canRedo }, { type: "separator" }, { role: "cut", enabled: p.editFlags.canCut });
@@ -171,16 +171,23 @@ ipcMain.handle("wv-target", async (e, id) => {
 let blocker = null;
 const SHIELDS = () => path.join(app.getPath("userData"), "shields.json");
 const shieldsOn = () => { try { return JSON.parse(fs.readFileSync(SHIELDS(), "utf8")).on !== false; } catch { return true; } };
+// The card browser's sessions: its own (kept on disk) and the private tabs' (in memory only, wiped when the last one closes).
+const SESSIONS = ["persist:browser", "incognito"];
 async function shields(on) {
-  const ses = session.fromPartition("persist:browser");
-  if (!on) return void (blocker?.isBlockingEnabled(ses) && blocker.disableBlockingInSession(ses));
+  if (!on) return void SESSIONS.map((s) => session.fromPartition(s)).forEach((ses) => blocker?.isBlockingEnabled(ses) && blocker.disableBlockingInSession(ses));
   if (!blocker) {
     const { ElectronBlocker } = require("@ghostery/adblocker-electron"), cache = path.join(app.getPath("userData"), "adblock.bin");
     try { if (Date.now() - fs.statSync(cache).mtimeMs > 86_400_000) fs.rmSync(cache); } catch {}
     blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile });
   }
-  if (!blocker.isBlockingEnabled(ses)) blocker.enableBlockingInSession(ses);
+  for (const ses of SESSIONS.map((s) => session.fromPartition(s))) if (!blocker.isBlockingEnabled(ses)) blocker.enableBlockingInSession(ses);
 }
+// The last private tab closed: what it left (cookies, storage, cache) goes, as when a private window closes.
+ipcMain.handle("private-clear", async (e) => {
+  if (e.sender !== win?.webContents) return;
+  const ses = session.fromPartition("incognito");
+  await Promise.all([ses.clearStorageData(), ses.clearCache(), ses.clearAuthCache()]).catch(() => {});
+});
 ipcMain.handle("shields", async (e, on) => {
   if (e.sender !== win?.webContents) return null;
   if (typeof on === "boolean") { fs.writeFileSync(SHIELDS(), JSON.stringify({ on })); await shields(on).catch((err) => console.error("ad blocking:", err.message)); }
@@ -206,7 +213,7 @@ app.on("web-contents-created", (_e, wc) => {
     if (!web(params.src || "about:blank")) return e.preventDefault();
     delete prefs.preloadURL;
     Object.assign(prefs, { preload: GUEST, nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false });
-    params.partition = "persist:browser";
+    params.partition = params.partition === "incognito" ? "incognito" : "persist:browser"; // a private tab's, or the card browser's
   });
   if (wc.getType() === "webview") {
     wc.setWindowOpenHandler(({ url, disposition }) => {
@@ -225,11 +232,12 @@ app.whenReady().then(() => {
   // No application menu: Electron's default one bound Ctrl+W to closing Overlook and Ctrl+R to reloading it, keys a
   // browser card's page (its tabs, its reload) needs. Copy, paste and the rest still work without it.
   Menu.setApplicationMenu(null);
-  const ses = session.fromPartition("persist:browser");
-  ses.setPermissionRequestHandler(askPermission);
+  for (const ses of SESSIONS.map((s) => session.fromPartition(s))) {
+    ses.setPermissionRequestHandler(askPermission);
+    // a plain Chrome user agent: with "Electron/…" in it Google refuses to sign in ("this browser may not be secure")
+    ses.setUserAgent(ses.getUserAgent().replace(/\s(Electron|overlook)\/\S+/gi, ""));
+  }
   if (shieldsOn()) shields(true).catch((e) => console.error("ad blocking:", e.message));
-  // a plain Chrome user agent: with "Electron/…" in it Google refuses to sign in ("this browser may not be secure")
-  ses.setUserAgent(ses.getUserAgent().replace(/\s(Electron|overlook)\/\S+/gi, ""));
   win = new BrowserWindow({
     width: 1440, height: 920, title: "Overlook", autoHideMenuBar: true, backgroundColor: "#141414",
     icon: path.join(__dirname, "..", "icon.png"),

@@ -25,6 +25,7 @@ addEventListener("keydown", (e) => {
     : c && ["Digit0", "Numpad0"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", 0)
     // tabs, as in Brave: new, close, next/previous, the nth (9: the last)
     : c && !e.shiftKey && e.code === "KeyT" ? () => ipcRenderer.sendToHost("tab", "new")
+    : c && e.shiftKey && e.code === "KeyN" ? () => ipcRenderer.sendToHost("tab", "private")
     : c && !e.shiftKey && e.code === "KeyW" ? () => ipcRenderer.sendToHost("tab", "close")
     : c && ((e.key === "Tab" && !e.shiftKey) || e.key === "PageDown") ? () => ipcRenderer.sendToHost("tab", "next")
     : c && ((e.key === "Tab" && e.shiftKey) || e.key === "PageUp") ? () => ipcRenderer.sendToHost("tab", "prev")
