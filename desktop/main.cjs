@@ -101,6 +101,58 @@ async function importLogins() {
   } catch (e) { return { error: String(e?.message || e) }; }
   finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+// "Import logins from Brave": the cookies of your Brave (its default profile) and of the browser the cards used before
+// the desktop app (the server's, in cache/browser-profile: where you signed in to sites from a card), decrypted and set in
+// the card browser's session. Chromium on Linux encrypts them with AES-128-CBC: "v11" with a key from the keyring
+// ("Brave Safe Storage", read with secret-tool), "v10" with a fixed one; since database version 24 the plain text starts
+// with a SHA-256 of the cookie's host. A cookie that doesn't decrypt is left out.
+const BRAVES = [path.join(os.homedir(), ".config/BraveSoftware/Brave-Browser/Default/Cookies"), path.join(__dirname, "..", "cache/browser-profile/Default/Cookies")];
+const CHROME_SAME_SITE = { 0: "no_restriction", 1: "lax", 2: "strict" }; // -1: unspecified
+function braveKeys() {
+  const crypto = require("node:crypto"), key = (pw) => crypto.pbkdf2Sync(pw, "saltysalt", 1, 16, "sha1");
+  let pw = "";
+  try { pw = require("node:child_process").execFileSync("secret-tool", ["lookup", "application", "brave"], { encoding: "utf8", timeout: 10_000 }).trim(); } catch {}
+  return { v10: key("peanuts"), ...(pw && { v11: key(pw) }) };
+}
+async function importBrave() {
+  const files = BRAVES.filter((f) => fs.existsSync(f));
+  if (!files.length) return { error: "No Brave profile found" };
+  const crypto = require("node:crypto"), { DatabaseSync } = require("node:sqlite"), keys = braveKeys(), ses = session.fromPartition("persist:browser"), now = Date.now();
+  let count = 0, err = "";
+  for (const file of files) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "overlook-cookies-")); // 0700
+    try {
+      fs.copyFileSync(file, path.join(tmp, "c")); // the browser keeps it open
+      const db = new DatabaseSync(path.join(tmp, "c"));
+      const ver = Number(db.prepare("SELECT value FROM meta WHERE key = ?").get("version")?.value) || 0;
+      const rows = db.prepare("SELECT host_key, name, value, encrypted_value, path, expires_utc / 1000000 AS expires_s, is_secure, is_httponly, samesite, has_expires FROM cookies").all();
+      db.close();
+      for (const c of rows) {
+        let value = c.value;
+        const enc = Buffer.from(c.encrypted_value || []), key = keys[enc.subarray(0, 3).toString()];
+        if (enc.length) {
+          if (!key) continue;
+          try {
+            const d = crypto.createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, " ")), out = Buffer.concat([d.update(enc.subarray(3)), d.final()]);
+            const hashed = ver >= 24 && out.subarray(0, 32).equals(crypto.createHash("sha256").update(c.host_key).digest());
+            if (ver >= 24 && !hashed) continue; // the wrong key: garbage, not a cookie
+            value = out.subarray(hashed ? 32 : 0).toString("utf8");
+          } catch { continue; }
+        }
+        const exp = c.has_expires ? c.expires_s - 11644473600 : 0; // seconds since 1601 (microseconds, too big to read as a number) -> since 1970
+        if (!c.host_key || (exp && exp * 1000 < now)) continue;
+        const secure = !!c.is_secure, sameSite = CHROME_SAME_SITE[c.samesite] === "no_restriction" && !secure ? "unspecified" : CHROME_SAME_SITE[c.samesite] || "unspecified";
+        count += await ses.cookies.set({
+          url: `${secure ? "https" : "http"}://${c.host_key.replace(/^\./, "")}${c.path || "/"}`, name: c.name, value, path: c.path || "/",
+          secure, httpOnly: !!c.is_httponly, sameSite, ...(exp && { expirationDate: exp }), ...(c.host_key.startsWith(".") && { domain: c.host_key }),
+        }).then(() => 1, (e) => { err ||= String(e?.message || e); return 0; });
+      }
+    } catch (e) { err ||= String(e?.message || e); }
+    finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  await ses.cookies.flushStore();
+  return !count && err ? { error: err } : { browser: "Brave", count };
+}
 // A card's webview → its DevTools target, for the server to attach to (only Overlook's own window asks, for its own guests).
 ipcMain.handle("wv-target", async (e, id) => {
   const wc = e.sender === win?.webContents && webContents.fromId(Number(id));
@@ -134,7 +186,7 @@ ipcMain.handle("shields", async (e, on) => {
   if (typeof on === "boolean") { fs.writeFileSync(SHIELDS(), JSON.stringify({ on })); await shields(on).catch((err) => console.error("ad blocking:", err.message)); }
   return shieldsOn();
 });
-ipcMain.handle("import-logins", (e) => (e.sender === win?.webContents ? importLogins() : { error: "not allowed" }));
+ipcMain.handle("import-logins", (e, from) => (e.sender !== win?.webContents ? { error: "not allowed" } : from === "brave" ? importBrave() : importLogins()));
 // A card's page as a JPEG, for the canvas to show in its place while it zooms (freezeWebviews in app.js). Encoded here: the
 // page's own toDataURL is a PNG made on the canvas's thread (~45 ms a card).
 // A photo of a browser card's page as it shows in the window (the canvas zoom stands it in for the page). Taken from the
