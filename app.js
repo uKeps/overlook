@@ -3834,6 +3834,10 @@ function bindPaneDragResize(card, p) {
       }
       orchActive = curKey;
       updateSelectionUI();
+      // to the front now, not on the repaint after the drop: dragged under the active card, a browser card's page showed
+      // through a terminal's glass (its blur can't reach a webview), the terminal's text over the page
+      document.querySelectorAll("#orch-plane .orch-pane.active").forEach((c) => c !== card && c.classList.remove("active"));
+      card.classList.add("active");
 
       const plane = $("#orch-plane");
       const targets = (orchSelected.has(curKey) && orchSelected.size > 0)
@@ -3883,6 +3887,9 @@ function bindPaneDragResize(card, p) {
     head.addEventListener("pointerdown", startMove);
     // Alt+drag moves a card from anywhere, like a window manager: a bare terminal has no title bar to grab.
     card.addEventListener("pointerdown", (e) => { if (e.altKey && e.button === 0) { e.stopPropagation(); startMove(e); } }, true);
+    // a browser card moves by the empty part of its tab strip, as a browser window does (Alt+drag can't: over its page
+    // the pointer belongs to the page)
+    card.addEventListener("pointerdown", (e) => { if (e.button === 0 && !e.altKey && e.target.classList?.contains("bv-strip")) { e.stopPropagation(); startMove(e); } }, true);
   }
   // Invisible edges and corners: only the cursor says "resize" (no highlight, no tooltip).
   ["nw", "ne", "sw", "se", "n", "s", "e", "w"].forEach((c) => {
