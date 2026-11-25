@@ -2383,7 +2383,14 @@ function mountWebview(feed, p) {
     if (on) { bar.classList.remove("loading", "loaded"); void bar.offsetWidth; bar.classList.add("loading"); }
     else if (bar.classList.contains("loading")) { bar.classList.remove("loading"); bar.classList.add("loaded"); }
   };
-  wv.addEventListener("dom-ready", () => { if (!ready) { ready = true; wvCards.set(wv.getWebContentsId(), p); tools(); } nav(); });
+  wv.addEventListener("dom-ready", () => {
+    if (!ready) {
+      ready = true; wvCards.set(wv.getWebContentsId(), p); tools();
+      // the server drives this page for agents and shows it to a phone (browser.ts deskTab)
+      window.overlookDesktop.wvTarget?.(wv.getWebContentsId()).then((t) => t && api("/api/browser/desktop", { id: p.id, ...t })).catch(() => {});
+    }
+    nav();
+  });
   wv.addEventListener("did-start-loading", () => loading(true));
   wv.addEventListener("did-stop-loading", () => loading(false));
   const went = (e) => { if (e.isMainFrame === false) return; p.url = e.url; nav(); };
@@ -2514,6 +2521,7 @@ function mountBrowser(feed, p) {
       showUrl(); brHead(p); state();
       if (changed) { saveCanvasSoon(); syncWires(); }
     } else if (m.t === "load") loading(m.on);
+    else if (m.t === "vp") vp = [m.w, m.h]; // a desktop card's page keeps its own size: clicks map onto that
     else if (m.t === "gone") { down = "off"; loading(false); state(); }
     // a page it opened (a sign-in popup, a link to a new tab): a card of its own beside this one, gone when that closes
     else if (m.t === "popup") { const q = { kind: "browser", id: m.id, url: "about:blank", w: 520, h: 680 }; if (typeof p.x === "number") placeBeside(p, q, orchPanes); if (addPane(q)) saveCanvas(); }
