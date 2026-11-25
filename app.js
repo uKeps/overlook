@@ -2398,7 +2398,14 @@ function mountWebview(feed, p) {
   wv.addEventListener("did-navigate-in-page", went);
   wv.addEventListener("page-title-updated", (e) => { p.title = e.title; nav(); });
   wv.addEventListener("page-favicon-updated", (e) => { const f = e.favicons?.find((u) => /^https?:/.test(u)); if (f && f !== p.icon) { p.icon = f; nav(); } });
-  wv.addEventListener("ipc-message", (e) => { if (e.channel === "url") urlIn.focus(); else if (e.channel === "zoom") zoomBy(e.args[0]); });
+  wv.addEventListener("ipc-message", (e) => {
+    if (e.channel === "url") urlIn.focus();
+    else if (e.channel === "zoom") zoomBy(e.args[0]);
+    else if (e.channel === "wheel") { // the page's Ctrl + wheel / pinch (guest.cjs): the canvas zooms about that point
+      const m = e.args[0], r = wv.getBoundingClientRect(), k = r.width / (m.w || r.width);
+      $("#orch-canvas")?.dispatchEvent(new WheelEvent("wheel", { deltaX: m.dx, deltaY: m.dy, deltaMode: m.mode, clientX: r.left + m.x * k, clientY: r.top + m.y * k, ctrlKey: true, bubbles: true, cancelable: true }));
+    }
+  });
   wv.addEventListener("destroyed", () => { for (const [k, v] of wvCards) if (v === p) wvCards.delete(k); });
   urlIn.addEventListener("keydown", (e) => {
     e.stopPropagation();
@@ -2754,28 +2761,34 @@ function glideView(x, y, z = orchZoom, ms = 420) {
 // In the desktop app a browser card's page (a <webview>: a process of its own) re-rasters on every zoom step: two cards
 // kept the GPU ~75% busy through a pinch and frames dropped. While the zoom changes, a snapshot of each page stands in
 // for it and the page is hidden (nothing to raster); 150 ms after the zoom rests the live page is back, at the new scale.
-let wvZoom = 0, wvRest = 0;
+let wvZoom = 0, wvRest = 0, wvHold = null;
+// The first zoom step waits for these photos (applyCanvasTransform holds the view a few frames): taken once the scale had
+// changed, the page was mid-redraw and the photo came out black, so the card showed a black page all through the zoom.
+// Resolves once every page is photographed (or after 150 ms).
 function freezeWebviews() {
   clearTimeout(wvRest);
   wvRest = setTimeout(thawWebviews, 150);
-  for (const wv of document.querySelectorAll("#orch-plane webview:not(.frozen)")) {
+  const live = [...document.querySelectorAll("#orch-plane webview:not(.frozen)")];
+  return Promise.race([new Promise((r) => setTimeout(r, 150)), Promise.all(live.map(async (wv) => {
     let id;
-    try { id = wv.getWebContentsId(); } catch { continue; } // its page isn't up yet
+    try { id = wv.getWebContentsId(); } catch { return; } // its page isn't up yet
+    // the part of the page inside the window, photographed from the window and laid over that part
+    const r = wv.getBoundingClientRect(), x0 = Math.max(0, r.left), y0 = Math.max(0, r.top), x1 = Math.min(innerWidth, r.right), y1 = Math.min(innerHeight, r.bottom);
+    if (x1 - x0 < 1 || y1 - y0 < 1) return; // off screen: nothing to stand in for
     wv.classList.add("frozen");
-    window.overlookDesktop.capture(id).then((jpg) => {
-      if (!jpg || !wv.classList.contains("frozen")) return;
-      const img = new Image();
-      img.className = "wv-shot";
-      img.src = URL.createObjectURL(new Blob([jpg], { type: "image/jpeg" }));
-      img.decode().then(() => {
-        if (!wv.classList.contains("frozen")) return URL.revokeObjectURL(img.src);
-        Object.assign(img.style, { left: `${wv.offsetLeft}px`, top: `${wv.offsetTop}px`, width: `${wv.offsetWidth}px`, height: `${wv.offsetHeight}px` });
-        wv.after(img);
-        // hidden once the snapshot is on screen: swapping both in one frame cost a ~28 ms frame
-        requestAnimationFrame(() => requestAnimationFrame(() => { if (wv.classList.contains("frozen")) wv.style.visibility = "hidden"; }));
-      }, () => URL.revokeObjectURL(img.src));
-    }, () => {});
-  }
+    const jpg = await window.overlookDesktop.capture(id, { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }).catch(() => null);
+    if (!jpg || !wv.classList.contains("frozen")) return;
+    const img = new Image();
+    img.className = "wv-shot";
+    img.src = URL.createObjectURL(new Blob([jpg], { type: "image/jpeg" }));
+    try { await img.decode(); } catch { return URL.revokeObjectURL(img.src); }
+    if (!wv.classList.contains("frozen")) return URL.revokeObjectURL(img.src);
+    const k = wv.offsetWidth / r.width; // screen px -> the card's own px (the canvas zoom at the photo)
+    Object.assign(img.style, { left: `${wv.offsetLeft + (x0 - r.left) * k}px`, top: `${wv.offsetTop + (y0 - r.top) * k}px`, width: `${(x1 - x0) * k}px`, height: `${(y1 - y0) * k}px` });
+    wv.after(img);
+    // hidden once the snapshot is on screen: swapping both in one frame cost a ~28 ms frame
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (wv.classList.contains("frozen")) wv.style.visibility = "hidden"; }));
+  }))]);
 }
 function thawWebviews() {
   for (const wv of document.querySelectorAll("webview.frozen")) { wv.classList.remove("frozen"); wv.style.visibility = ""; }
@@ -2789,8 +2802,15 @@ function applyCanvasTransform() {
   const free = orchMode === "free" && !orchMax;
   // the pan is kept exact (a trackpad's fractional steps add up) and drawn on whole pixels, so text stays sharp
   const px0 = Math.round(orchPanX), py0 = Math.round(orchPanY);
+  if (DESKTOP && orchZoom !== wvZoom) {
+    if (wvZoom && free) {
+      if (wvHold) return; // the pages are being photographed: the view waits for them (freezeWebviews)
+      if (plane?.querySelector("webview:not(.frozen)")) { wvHold = freezeWebviews().finally(() => { wvHold = null; applyCanvasTransform(); }); return; }
+      freezeWebviews(); // still zooming: the photos stay up a while longer
+    }
+    wvZoom = orchZoom;
+  }
   if (plane) plane.style.transform = free && orchPanes.length ? `translate(${px0}px, ${py0}px) scale(${orchZoom})` : "";
-  if (DESKTOP && orchZoom !== wvZoom) { if (wvZoom && free) freezeWebviews(); wvZoom = orchZoom; }
   // --z sets the cards' frame width (--bw), in 5% steps, once the zoom rests: every card inherits it, so each change
   // restyles the whole canvas (~5 ms, most of a 144 Hz frame); mid-pinch a frame a bit thin or thick doesn't show
   const zq = String(Math.round(orchZoom * 20) / 20);

@@ -5,5 +5,5 @@ contextBridge.exposeInMainWorld("overlookDesktop", {
   onOpen: (fn) => ipcRenderer.on("br-open", (_e, from, url) => fn(from, url)),
   importLogins: () => ipcRenderer.invoke("import-logins"),
   wvTarget: (id) => ipcRenderer.invoke("wv-target", id),
-  capture: (id) => ipcRenderer.invoke("br-capture", id),
+  capture: (id, rect) => ipcRenderer.invoke("br-capture", id, rect),
 });

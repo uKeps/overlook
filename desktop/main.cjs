@@ -40,13 +40,25 @@ function contextMenu(wc, p, page) {
 const openCard = (guest, url) => guest.hostWebContents?.send("br-open", guest.id, url);
 
 // What a page may use. Overlook itself gets what it asks for; a site asks you, like a browser does.
-const SAFE = new Set(["fullscreen", "clipboard-sanitized-write", "pointerLock", "keyboardLock", "window-management"]);
+// What a page may use: what a browser asks you about (camera, microphone, location, notifications, reading the
+// clipboard, devices, opening another app) is asked once per site and remembered; the rest (storage access for a
+// sign-in, full screen, pointer lock...) is granted, as a browser does, without a prompt.
+const ASK = new Set(["media", "geolocation", "notifications", "clipboard-read", "midi", "midiSysex", "hid", "serial", "usb", "display-capture", "idle-detection", "openExternal"]);
+const PERMS = () => path.join(app.getPath("userData"), "permissions.json");
+let perms = null; // "origin perm" -> true/false
 function askPermission(wc, perm, done, details) {
-  if (SAFE.has(perm)) return done(true);
-  const origin = (() => { try { return new URL(details.requestingUrl || wc.getURL()).host; } catch { return "This page"; } })();
-  const what = perm === "media" ? (details.mediaTypes || []).join(" and ") || "camera or microphone" : perm;
-  dialog.showMessageBox(win, { type: "question", message: `${origin} wants to use: ${what}`, buttons: ["Allow", "Block"], defaultId: 1, cancelId: 1 })
-    .then((r) => done(r.response === 0)).catch(() => done(false));
+  if (!ASK.has(perm)) return done(true);
+  const origin = (() => { try { return new URL(details.requestingUrl || wc.getURL()).origin; } catch { return ""; } })();
+  const what = perm === "media" ? (details.mediaTypes || []).join(" and ") || "camera or microphone" : perm === "openExternal" ? `open ${details.externalURL || "another app"}` : perm;
+  perms ??= (() => { try { return JSON.parse(require("node:fs").readFileSync(PERMS(), "utf8")); } catch { return {}; } })();
+  const key = `${origin} ${perm === "media" ? `media:${(details.mediaTypes || []).sort().join(",")}` : perm}`;
+  if (origin && key in perms) return done(perms[key]);
+  dialog.showMessageBox(win, { type: "question", message: `${origin.replace(/^https?:\/\//, "") || "This page"} wants to use: ${what}`, buttons: ["Allow", "Block"], defaultId: 1, cancelId: 1, checkboxLabel: "Remember for this site", checkboxChecked: true })
+    .then((r) => {
+      const ok = r.response === 0;
+      if (origin && r.checkboxChecked) { perms[key] = ok; try { require("node:fs").writeFileSync(PERMS(), JSON.stringify(perms, null, 1)); } catch {} }
+      done(ok);
+    }).catch(() => done(false));
 }
 
 // "Import logins from Zen": the cookies of your Firefox-family browser copied into the card browser's session, so its
@@ -104,10 +116,14 @@ ipcMain.handle("wv-target", async (e, id) => {
 ipcMain.handle("import-logins", (e) => (e.sender === win?.webContents ? importLogins() : { error: "not allowed" }));
 // A card's page as a JPEG, for the canvas to show in its place while it zooms (freezeWebviews in app.js). Encoded here: the
 // page's own toDataURL is a PNG made on the canvas's thread (~45 ms a card).
-ipcMain.handle("br-capture", async (e, id) => {
+// A photo of a browser card's page as it shows in the window (the canvas zoom stands it in for the page). Taken from the
+// window, not the page: a webview's own capturePage comes out black but for its scrollbar.
+ipcMain.handle("br-capture", async (e, id, rect) => {
   const wc = e.sender === win?.webContents && webContents.fromId(Number(id));
-  if (!wc || wc.hostWebContents !== win.webContents) return null;
-  return (await wc.capturePage()).toJPEG(85);
+  if (!wc || wc.hostWebContents !== win.webContents || !rect) return null;
+  const r = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
+  if (r.width < 1 || r.height < 1) return null;
+  return (await win.webContents.capturePage(r)).toJPEG(85);
 });
 
 app.on("web-contents-created", (_e, wc) => {
