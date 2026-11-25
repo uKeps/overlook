@@ -2507,8 +2507,13 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 
 /* The sketch layer: Excalidraw over the whole canvas, its own UI hidden (our .orch-sketchbar replaces it). Off, every
    click goes through to the cards; on, it takes the pointer. */
-.orch-sketch { position: absolute; inset: 0; z-index: 5; transform-origin: 0 0; }
-.orch-sketch[hidden] { display: none; }
+.orch-sketch { position: absolute; inset: 0; z-index: 5; }
+.orch-sketch[hidden], .orch-sketch-svg[hidden] { display: none; }
+/* What shows of the drawing is its SVG, moved with the cards (syncSketchView); Excalidraw only while drawing, the view at rest */
+.orch-sketch:not(.on), .orch-sketch.moving { visibility: hidden; }
+.orch-sketch-svg { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 5; transform-origin: 0 0; pointer-events: none; }
+.orch-sketch-svg svg { position: absolute; overflow: visible; }
+.orch-sketch.on:not(.moving) + .orch-sketch-svg { visibility: hidden; }
 .orch-sketch:not(.on), .orch-sketch:not(.on) * { pointer-events: none !important; }
 .orch-sketch .excalidraw { --color-surface-lowest: transparent; background: transparent; }
 .orch-sketch .layer-ui__wrapper, .orch-sketch .App-bottom-bar, .orch-sketch .welcome-screen-center,

@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { Excalidraw, convertToExcalidrawElements, restoreElements } from "@excalidraw/excalidraw";
 export { restoreElements }; // fills in a hand-built element (the canvas's Alt quick ink)
+export { exportToSvg, getCommonBounds } from "@excalidraw/excalidraw"; // the drawing as it shows while not drawing
 import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
 export function mount(el, props) {
   const root = createRoot(el);
