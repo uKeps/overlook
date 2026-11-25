@@ -2345,6 +2345,14 @@ DESKTOP && window.overlookDesktop.onOpen((from, url) => {
   if (p && typeof p.x === "number") placeBeside(p, q, orchPanes);
   if (addPane(q)) saveCanvas();
 });
+// Your Zen (or Firefox) cookies into the card browser: its sites open signed in. The cards reload to use them.
+async function importLogins() {
+  toast("Importing your logins…");
+  const r = await window.overlookDesktop.importLogins().catch((e) => ({ error: e.message }));
+  if (r.error) return toast(`Couldn't import: ${esc(r.error)}`);
+  toast(`Imported ${r.count} logins from ${esc(r.browser)}`);
+  document.querySelectorAll(".orch-br-view.wv webview").forEach((w) => w.reload());
+}
 function mountWebview(feed, p) {
   const start = p.url && /^(https?:\/\/|about:blank$)/i.test(p.url) ? p.url : "about:blank";
   feed.innerHTML = `<div class="orch-br">${brBar()}<div class="orch-br-view wv"><webview src="${esc(start)}" partition="persist:browser" allowpopups></webview></div></div>`;
@@ -2399,6 +2407,8 @@ function mountWebview(feed, p) {
     { label: "Zoom in", ic: "plus", kbd: "Ctrl+=", off: (p.zoom || 1) >= BR_ZOOM.at(-1), run: () => zoomBy(1) },
     { label: "Zoom out", ic: "minus", kbd: "Ctrl+-", off: (p.zoom || 1) <= BR_ZOOM[0], run: () => zoomBy(-1) },
     { label: `Actual size (${Math.round((p.zoom || 1) * 100)}%)`, ic: "search", kbd: "Ctrl+0", off: !p.zoom, run: () => zoomBy(0) },
+    "-",
+    { label: "Import logins from Zen", ic: "lock", run: importLogins },
   ];
   bar.addEventListener("click", (e) => {
     const b = e.target.closest("[data-br], [data-brz]");
