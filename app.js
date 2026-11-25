@@ -1502,7 +1502,8 @@ function openTui(item) {
 // one layout change at each end, a transform and a clip in between (FLIP). The card is laid out at the full size from
 // the start, scaled and clipped down to its spot, so nothing inside it stretches; its terminal or page keeps its size
 // while it moves (.max-anim holds their fit) and resizes once, when it lands.
-const MAX_MS = 260;
+// The motion scale of app.css (--ease, --t3, --t4), for the animations made here (Web Animations take no CSS var)
+const EASE = "cubic-bezier(.16, 1, .3, 1)", T3 = 260, T4 = 450;
 let maxHeldT = 0;
 function toggleMax(k) {
   const plane = $("#orch-plane"), canvas = $("#orch-canvas"), p = orchPanes.find((x) => paneKey(x) === k);
@@ -1530,7 +1531,7 @@ function toggleMax(k) {
   Object.assign(card.style, { left: `${L}px`, top: `${T}px`, width: `${M.width}px`, height: `${M.height}px` });
   const atSpot = { transformOrigin: "0 0", transform: `translate(${p.x - L}px, ${p.y - T}px)`, clipPath: `inset(0 ${M.width - w}px ${M.height - h}px 0 round ${rad})` };
   const atMax = { transformOrigin: "0 0", transform: `scale(${1 / z})`, clipPath: `inset(0 round ${rad})` };
-  const opt = { duration: MAX_MS, easing: "cubic-bezier(.2, .8, .2, 1)" };
+  const opt = { duration: T3, easing: EASE };
   const rest = [...plane.children].filter((n) => n !== card);
   rest.forEach((n) => n.animate([{ opacity: 1 }, { opacity: 0 }], { ...opt, direction: going ? "normal" : "reverse", fill: going ? "forwards" : "none" }));
   const a = card.animate(going ? [atSpot, atMax] : [atMax, atSpot], { ...opt, fill: "forwards" });
@@ -1543,6 +1544,44 @@ function toggleMax(k) {
     brs.get(p.id)?.fit?.();
     maxHeldT = setTimeout(() => card.querySelectorAll("canvas.held").forEach((c) => c.classList.remove("held")), 1000); // no new frame came
   };
+}
+// Arrange and the spawn tree move cards (slidePanes): each slides from its old box to its new one (FLIP), laid out once
+// at the larger of the two sizes and clipped from the old size to the new, so nothing inside stretches or refits on the
+// way (.max-anim holds a terminal's or page's fit, and orchPaint leaves its box alone); the real box is set as it lands.
+// A browser card takes its new size at once and slides: its page resizes once, not at a passing size and again on landing.
+function slideCard(card, [x, y, w, h], p) {
+  if (p.kind === "browser") [w, h] = [p.w, p.h];
+  const W = Math.max(w, p.w), H = Math.max(h, p.h), rad = getComputedStyle(card).borderTopLeftRadius;
+  const clip = (cw, ch) => (card.classList.contains("collapsed") ? "none" : `inset(0 ${W - cw}px ${H - ch}px 0 round ${rad})`);
+  card.classList.add("max-anim");
+  Object.assign(card.style, { left: `${p.x}px`, top: `${p.y}px`, width: `${W}px`, height: `${H}px` });
+  const a = card.animate([{ transform: `translate(${x - p.x}px, ${y - p.y}px)`, clipPath: clip(w, h) }, { transform: "none", clipPath: clip(p.w, p.h) }], { duration: T4, easing: EASE, fill: "forwards" });
+  a.onfinish = () => {
+    card.classList.remove("max-anim");
+    Object.assign(card.style, { left: `${p.x}px`, top: `${p.y}px`, width: `${p.w}px`, height: `${p.h}px` });
+    a.cancel(); // same task as the layout change: no frame shows between them
+    if (p.kind === "terminal") terms.get(p.id)?.fit?.fit();
+    brs.get(p.id)?.fit?.();
+  };
+}
+// Minimize rolls a card up into its title bar and Expand rolls it back down: a clip on the card as laid out expanded.
+function foldPane(p, apply) {
+  const card = $("#orch-plane")?.querySelector(`.orch-pane[data-key="${CSS.escape(paneKey(p))}"]`);
+  if (!card || calm.matches || card.classList.contains("max-anim")) return apply();
+  const rad = getComputedStyle(card).borderTopLeftRadius, folding = !p.collapsed;
+  if (folding) {
+    if (card.dataset.folding) return; // already rolling up
+    card.dataset.folding = "";
+    const full = card.offsetHeight;
+    card.classList.add("collapsed"); const bar = card.offsetHeight; card.classList.remove("collapsed");
+    const a = card.animate([{ clipPath: `inset(0 round ${rad})` }, { clipPath: `inset(0 0 ${full - bar}px 0 round ${rad})` }], { duration: T3, easing: EASE, fill: "forwards" });
+    a.onfinish = () => { delete card.dataset.folding; apply(); a.cancel(); };
+  } else {
+    const bar = card.offsetHeight;
+    apply();
+    const full = card.offsetHeight;
+    card.animate([{ clipPath: `inset(0 0 ${full - bar}px 0 round ${rad})` }, { clipPath: `inset(0 round ${rad})` }], { duration: T3, easing: EASE });
+  }
 }
 function focusPane(k, stay = false) {
   const p = orchPanes.find((x) => paneKey(x) === k);
@@ -3635,7 +3674,7 @@ window.addEventListener("keydown", (e) => {
     ArrowLeft: () => keys.length && focusPane(keys[(i - 1 + keys.length) % keys.length]),
     ArrowDown: () => stepCanvas(1),
     ArrowUp: () => stepCanvas(-1),
-    Enter: () => { if (orchActive) { const k = orchActive; toggleMax(k); setTimeout(() => focusPane(k, true), MAX_MS + 40); } },
+    Enter: () => { if (orchActive) { const k = orchActive; toggleMax(k); setTimeout(() => focusPane(k, true), T3 + 40); } },
     KeyT: () => newTermPane(),
     KeyN: () => newAgentTerm(defaultAgent()),
     KeyW: () => orchActive && ACTIONS["orch-unpin"]({ dataset: { key: orchActive } }),
@@ -4918,10 +4957,14 @@ async function orchPaint(force) {
     card.dataset.kind = p.kind;
     card.dataset.from = p.spawnedBy || ""; // the pane is gone once it closes: the tree's regrow reads its parent here
     if (card.querySelector(".win-rename")) return; // being renamed: a repaint would wipe the field
-    if (card.classList.contains("max-anim")) {} // growing or shrinking: toggleMax owns its box until it lands
+    if (card.classList.contains("max-anim")) {} // growing, shrinking or sliding: toggleMax / slideCard own its box until it lands
     else if (isFree) {
-      card.style.left = `${p.x}px`; card.style.top = `${p.y}px`;
-      card.style.width = `${p.w}px`; card.style.height = `${p.h}px`;
+      const was = "arranging" in plane.dataset && ["left", "top", "width", "height"].map((k) => parseFloat(card.style[k]));
+      if (was && was.every(Number.isFinite) && (was[0] !== p.x || was[1] !== p.y || was[2] !== p.w || was[3] !== p.h)) slideCard(card, was, p);
+      else {
+        card.style.left = `${p.x}px`; card.style.top = `${p.y}px`;
+        card.style.width = `${p.w}px`; card.style.height = `${p.h}px`;
+      }
     } else {
       card.style.left = card.style.top = card.style.width = card.style.height = "";
     }
@@ -5965,9 +6008,11 @@ const ACTIONS = {
     const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
     if (!p) return;
     if (orchMode !== "free" || orchMax) return toast("Minimize works on the free canvas");
-    p.collapsed = !p.collapsed;
-    if (p.doneAt) p.keep = true; // looked at: it stays until closed by hand
-    saveCanvas(); orchSigs.clear(); orchPaint(true);
+    foldPane(p, () => {
+      p.collapsed = !p.collapsed;
+      if (p.doneAt) p.keep = true; // looked at: it stays until closed by hand
+      saveCanvas(); orchSigs.clear(); orchPaint(true);
+    });
   },
   "pane-tui": (el) => {
     const p = orchPanes.find((x) => paneKey(x) === el.dataset.key);
