@@ -1,17 +1,39 @@
 # Overlook
 
-A local dashboard for an Obsidian vault, and a canvas for the coding agents you run on it. It reads your
-Markdown straight from disk: no database, no build step, no cloud.
+**A canvas for your coding agents, on top of your notes.** Terminals, Claude Code and Antigravity sessions, real
+browser cards, sticky notes and drawings share one infinite canvas. Wire them together and the agents read each
+other's screens, hand work off and open cards of their own. It runs on your machine, reads your Obsidian vault
+straight from disk (no database, no cloud) and is MIT licensed.
 
-![Home](docs/screenshots/home.jpg)
+[![MIT](https://img.shields.io/badge/license-MIT-e8a87c)](LICENSE)
+[![Bun](https://img.shields.io/badge/runs%20on-Bun-f3efe9)](https://bun.sh)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-8b5cf6)](#contributing)
 
-| Note reader | Agents canvas |
-| --- | --- |
-| ![Note](docs/screenshots/note.jpg) | ![Agents](docs/screenshots/agents.jpg) |
+![Overlook's canvas: agent terminals, a note wired to them, a browser card with tabs and a drawing](docs/screenshots/canvas.gif)
+
+## Why
+
+- **Agents side by side, not in tabs.** Run several Claude Code, agy, Codex or Gemini sessions as cards and see at a
+  glance which one is working, waiting for you or done: its ring and its block on the minimap say so.
+- **Wires are context.** Draw a wire from a note, a terminal or a browser card to an agent and it gets that as
+  context, out of sight. Agents talk over wires: `overlook send`, `overlook read`, and `overlook spawn`, which lets a
+  lead agent open helpers on the canvas and wait for their reports.
+- **A real browser on the canvas.** In the desktop app a browser card is Chromium: tabs, private tabs, ad blocking,
+  your logins, sound and video. Agents drive the page you see (`overlook browser open|read|click|type`).
+- **Draw your reasoning.** Excalidraw sits on the canvas; agents read it (`overlook sketch`) and draw Mermaid
+  diagrams next to their card (`overlook draw`). Ctrl+Z undoes cards, wires and strokes alike.
+- **Your vault, your day.** A to-do that understands "tomorrow 9am every Monday", a note reader with backlinks and a
+  graph, review cards that come back until you know them, quick capture into the daily note.
+- **On your phone.** Over Tailscale: the same terminals full screen, the to-do first, and a notification when an
+  agent waits for you.
+
+| Home | Note reader | Phone |
+| --- | --- | --- |
+| ![Home: today's tasks and what's coming](docs/screenshots/home.jpg) | ![A note with its links](docs/screenshots/note.jpg) | ![The phone layout](docs/screenshots/phone.jpg) |
 
 ## Quick start
 
-Needs [Bun](https://bun.sh) 1.4+.
+Needs [Bun](https://bun.sh) 1.4+. Built and tested on Linux.
 
 ```sh
 git clone https://github.com/uKeps/overlook && cd overlook
@@ -20,7 +42,8 @@ bun install
 bun server.ts
 ```
 
-Open http://127.0.0.1:3333. It starts on the bundled `example-vault/`. Point `VAULT_DIR` in `.env` at your own
+Open http://127.0.0.1:3333, or run `desktop/run` for the desktop app (any Electron: your distro's `electron`
+package, or `ELECTRON_BIN`). It starts on the bundled `example-vault/`. Point `VAULT_DIR` in `.env` at your own
 vault (or set it in **Settings**) and restart. Run it from the repo folder: Bun reads `.env` from there.
 
 ## What's in it
@@ -130,10 +153,11 @@ the first one in the file that can run here. `agents.example.json` has one of ea
   `tailscale serve --bg 3333` opens it to your devices over HTTPS.
 - **ImageMagick** (`magick`) downscales and caches images; without it, originals are served.
 - **Desktop app**: `desktop/run` opens Overlook in a window of its own with any Electron you have (`electron`,
-  your distro's `electronNN`, or `ELECTRON_BIN`). There a browser card is a real browser: sound, video, popups
-  (sign-ins), downloads, uploads, text selection, a right-click menu with Inspect; the card's ⋯ menu → *Import
-  logins from Zen* copies your Zen/Firefox cookies in, so sites open signed in. The web page keeps working as
-  before. `PORT` or `OVERLOOK_APP_URL` points it at another Overlook.
+  your distro's `electronNN`, or `ELECTRON_BIN`). There a browser card is a real browser: tabs (Ctrl+T, Ctrl+W,
+  Ctrl+Tab), private tabs (Ctrl+Shift+N, kept in memory only), ad and tracker blocking, popups for sign-ins,
+  downloads, uploads, sound, video and a right-click menu with Inspect. The card's ≡ menu imports your logins from
+  Zen/Firefox or Brave. The web page keeps working as before. `PORT` or `OVERLOOK_APP_URL` points it at another
+  Overlook.
 
 ## Run on login (Linux, systemd)
 
