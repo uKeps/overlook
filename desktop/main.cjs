@@ -1,8 +1,8 @@
 // Overlook's desktop app: the same page as the web (served by `bun server.ts`) in a window of its own, where a browser
 // card is a real browser (Electron's <webview>, see mountWebview in app.js): sound, video, popups, downloads, uploads,
 // text selection, a right-click menu. The web page keeps the streamed browser card. Start it with desktop/run.
-const { app, BrowserWindow, Menu, clipboard, dialog, shell } = require("electron");
-const path = require("node:path");
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, session, shell } = require("electron");
+const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 
 const BASE = process.env.OVERLOOK_APP_URL || `http://127.0.0.1:${process.env.PORT || 3333}/`;
 const GUEST = path.join(__dirname, "guest.cjs");
@@ -44,6 +44,48 @@ function askPermission(wc, perm, done, details) {
     .then((r) => done(r.response === 0)).catch(() => done(false));
 }
 
+// "Import logins from Zen": the cookies of your Firefox-family browser copied into the card browser's session, so its
+// sites know you. The database is copied first (the browser keeps it open); containers and partitioned cookies stay
+// behind, and so do saved passwords (encrypted with that browser's key).
+const FIREFOXES = [["Zen", ".config/zen"], ["Zen", ".zen"], ["Firefox", ".mozilla/firefox"], ["LibreWolf", ".librewolf"]];
+function firefoxProfile() {
+  for (const [name, dir] of FIREFOXES) {
+    const root = path.join(os.homedir(), dir), read = (f) => { try { return fs.readFileSync(path.join(root, f), "utf8"); } catch { return ""; } };
+    // the profile this install opens (installs.ini), else the one marked Default=1 in profiles.ini
+    const rel = /^Default=(.+)$/m.exec(read("installs.ini"))?.[1] || read("profiles.ini").split(/^\[/m).map((sec) => /^Default=1$/m.test(sec) && /^Path=(.+)$/m.exec(sec)?.[1]).find(Boolean);
+    const dir2 = rel && (path.isAbsolute(rel) ? rel : path.join(root, rel));
+    if (dir2 && fs.existsSync(path.join(dir2, "cookies.sqlite"))) return { name, dir: dir2 };
+  }
+  return null;
+}
+const SAME_SITE = { 0: "no_restriction", 1: "lax", 2: "strict" }; // Firefox's 256: no attribute set
+async function importLogins() {
+  const prof = firefoxProfile();
+  if (!prof) return { error: "No Zen or Firefox profile found" };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "overlook-cookies-")); // 0700
+  try {
+    for (const f of ["cookies.sqlite", "cookies.sqlite-wal"]) { try { fs.copyFileSync(path.join(prof.dir, f), path.join(tmp, f)); } catch {} }
+    const { DatabaseSync } = require("node:sqlite"), db = new DatabaseSync(path.join(tmp, "cookies.sqlite"));
+    const rows = db.prepare("SELECT name, value, host, path, expiry, isSecure, isHttpOnly, sameSite FROM moz_cookies WHERE originAttributes = ''").all();
+    db.close();
+    const ses = session.fromPartition("persist:browser"), now = Date.now();
+    let count = 0;
+    for (const c of rows) {
+      const exp = c.expiry > 1e11 ? c.expiry / 1000 : c.expiry; // milliseconds in recent Firefox, seconds before
+      if (!c.host || exp * 1000 < now) continue;
+      const secure = !!c.isSecure, sameSite = SAME_SITE[c.sameSite] === "no_restriction" && !secure ? "unspecified" : SAME_SITE[c.sameSite] || "unspecified";
+      count += await ses.cookies.set({
+        url: `${secure ? "https" : "http"}://${c.host.replace(/^\./, "")}${c.path || "/"}`, name: c.name, value: c.value, path: c.path || "/",
+        secure, httpOnly: !!c.isHttpOnly, expirationDate: exp, sameSite, ...(c.host.startsWith(".") && { domain: c.host }),
+      }).then(() => 1, () => 0);
+    }
+    await ses.cookies.flushStore();
+    return { browser: prof.name, count };
+  } catch (e) { return { error: String(e?.message || e) }; }
+  finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+ipcMain.handle("import-logins", (e) => (e.sender === win?.webContents ? importLogins() : { error: "not allowed" }));
+
 app.on("web-contents-created", (_e, wc) => {
   // A browser card's page: a sandboxed guest in its own persistent session, with the guest preload (back/forward keys
   // and mouse buttons) and nothing else.
@@ -67,8 +109,10 @@ app.on("web-contents-created", (_e, wc) => {
 });
 
 app.whenReady().then(() => {
-  const { session } = require("electron");
-  session.fromPartition("persist:browser").setPermissionRequestHandler(askPermission);
+  const ses = session.fromPartition("persist:browser");
+  ses.setPermissionRequestHandler(askPermission);
+  // a plain Chrome user agent: with "Electron/…" in it Google refuses to sign in ("this browser may not be secure")
+  ses.setUserAgent(ses.getUserAgent().replace(/\s(Electron|overlook)\/\S+/gi, ""));
   win = new BrowserWindow({
     width: 1440, height: 920, title: "Overlook", autoHideMenuBar: true, backgroundColor: "#141414",
     icon: path.join(__dirname, "..", "icon.png"),
