@@ -2034,6 +2034,8 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 .ns-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
 .ns-foot .btn { height: 30px; padding: 0 12px; }
 .orch-empty small { display: block; margin-top: 6px; font-size: 12px; color: var(--faint); }
+/* a new card being drawn, or its sheet, covers the hint: the hint steps out of the way */
+.orch-canvas:has(.draw-layer) .orch-empty, body:has(.ns-sheet) .orch-empty { visibility: hidden; }
 
 /* ---------- The right-click menu (also what the floating buttons open) ---------- */
 .ctx-menu {
