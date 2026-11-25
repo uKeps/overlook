@@ -102,6 +102,13 @@ ipcMain.handle("wv-target", async (e, id) => {
   finally { try { wc.debugger.detach(); } catch {} }
 });
 ipcMain.handle("import-logins", (e) => (e.sender === win?.webContents ? importLogins() : { error: "not allowed" }));
+// A card's page as a JPEG, for the canvas to show in its place while it zooms (freezeWebviews in app.js). Encoded here: the
+// page's own toDataURL is a PNG made on the canvas's thread (~45 ms a card).
+ipcMain.handle("br-capture", async (e, id) => {
+  const wc = e.sender === win?.webContents && webContents.fromId(Number(id));
+  if (!wc || wc.hostWebContents !== win.webContents) return null;
+  return (await wc.capturePage()).toJPEG(85);
+});
 
 app.on("web-contents-created", (_e, wc) => {
   // A browser card's page: a sandboxed guest in its own persistent session, with the guest preload (back/forward keys

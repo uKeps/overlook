@@ -1052,6 +1052,9 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
 .orch-pane.finished .win-title b::after { content: " · done"; color: var(--ok); font-weight: 500; }
 
 /* Free 2D Maestri Canvas mode & Background Presets */
+/* --bg-lod changes at every zoom step (applyCanvasTransform): not inherited, the cards aren't restyled each time (~3 ms) */
+@property --bg-lod { syntax: "*"; inherits: false; }
+@property --bg-eff-alpha { syntax: "*"; inherits: false; }
 .orch-canvas.free {
   --bg-step: 22px;
   --bg-dot-alpha: 18%;
@@ -2569,6 +2572,7 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .orch-br-view.phone canvas { flex: none; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
 /* the desktop app's real browser (mountWebview) */
 .orch-br-view.wv webview { display: flex; width: 100%; height: 100%; background: #fff; }
+.orch-br-view.wv .wv-shot { position: absolute; pointer-events: none; } /* stands in for the page while the canvas zooms */
 .orch-br-view.wv.phone webview { flex: none; width: 390px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
 /* starting, blank, disconnected, couldn't start: a quiet note over the page */
 .orch-br-msg {
