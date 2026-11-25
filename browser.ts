@@ -14,6 +14,7 @@ type Tab = {
   w: number; h: number; z: number; mobile: boolean; used: number; ready: Promise<void>;
   win?: number; fw: number; fh: number; // its window, and what the window's frame takes around the page
   pop?: boolean; // a page another card's page opened: its card goes when it closes
+  desk?: boolean; // the desktop app's webview for the card (deskTab): never closed or resized from here
 };
 let proc: ReturnType<typeof Bun.spawn> | null = null, base: Promise<string> | null = null, lastTab = Date.now();
 const tabs = new Map<string, Tab>(), opening = new Map<string, Promise<Tab>>();
@@ -132,20 +133,34 @@ async function watch(b: string) {
     send(from, JSON.stringify({ t: "popup", id }));
   };
 }
+// In the desktop app a card is its own webview: the app registers it (its DevTools port and the page's target) and the
+// card's tab is that page, so agents and a phone drive and see what's on the desktop card, not a hidden copy.
+const desk = new Map<string, { ws: string; target: string }>();
+export function deskTab(id: string, port: unknown, target: unknown) {
+  if (!/^\d{2,5}$/.test(String(port)) || !/^[\w-]{8,64}$/.test(String(target))) return false;
+  const t = tabs.get(id);
+  if (t && t.target !== target) {
+    if (!t.desk) fetch(`${t.ws.url.replace(/^ws(s?):\/\/([^/]+).*$/, "http$1://$2")}/json/close/${t.target}`).catch(() => {}); // the hidden copy goes
+    drop(t);
+  }
+  desk.set(id, { ws: `ws://127.0.0.1:${port}/devtools/page/${target}`, target: String(target) });
+  return true;
+}
 // The card's tab (opened at `url` the first time).
 export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
   const have = tabs.get(id);
   if (have) return have.ready.then(() => have);
   if (opening.has(id)) return opening.get(id)!;
   const p = (async () => {
-    const b = await devtools();
-    watch(b).catch(() => {});
+    const d = desk.get(id), b = d ? "" : await devtools();
+    if (b) watch(b).catch(() => {});
     const pop = adopt.get(id); adopt.delete(id);
-    const start = safeUrl(url) || "about:blank", info = pop ? { id: pop, webSocketDebuggerUrl: `${b.replace(/^http/, "ws")}/devtools/page/${pop}` } : await newTab(b, start);
+    const start = safeUrl(url) || "about:blank";
+    const info = d ? { id: d.target, webSocketDebuggerUrl: d.ws } : pop ? { id: pop, webSocketDebuggerUrl: `${b.replace(/^http/, "ws")}/devtools/page/${pop}` } : await newTab(b, start);
     const ws = new WebSocket(info.webSocketDebuggerUrl);
-    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: start, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, fw: 0, fh: 0, used: Date.now(), ready: Promise.resolve(), pop: !!pop };
+    const t: Tab = { id, target: info.id, ws, seq: 0, calls: new Map(), subs: new Set(), url: start, title: "", icon: "", back: false, fwd: false, loading: false, w: 900, h: 600, z: 1, mobile: false, fw: 0, fh: 0, used: Date.now(), ready: Promise.resolve(), pop: !!pop, desk: !!d };
     t.ready = new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error("couldn't reach the tab")); });
-    ws.onclose = () => { if (tabs.get(id) === t) drop(t); };
+    ws.onclose = () => { if (tabs.get(id) === t) drop(t); if (d && desk.get(id) === d) desk.delete(id); }; // a closed webview is gone for good
     ws.onmessage = (ev) => {
       const m = JSON.parse(String(ev.data));
       if (m.id) { t.calls.get(m.id)?.(m); t.calls.delete(m.id); return; }
@@ -163,6 +178,7 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
     await t.ready;
     tabs.set(id, t);
     await call(t, "Page.enable");
+    if (d) { t.url = (await call(t, "Runtime.evaluate", { expression: "location.href", returnByValue: true })).result?.result?.value || t.url; look(t); await size(t, t.w, t.h); return t; }
     // The window's page area is what gets painted and captured, whatever the emulated viewport: a window smaller than
     // the card's page clipped it (the card showed the page's top-left corner stretched, and clicks landed elsewhere).
     // size() keeps the page area at the card's size; the frame around it (headless still has one) is measured here.
@@ -179,6 +195,13 @@ export function tabFor(id: string, url = "about:blank"): Promise<Tab> {
 // w × h in the page's CSS pixels; z is the card's page zoom (the page renders at z device pixels per CSS pixel, so frames
 // stay the card's size); mobile lays the page out as a phone would (viewport meta, no scrollbars), touch stays off.
 async function size(t: Tab, w: number, h: number, z = t.z, mobile = t.mobile) {
+  if (t.desk) { // the desktop card sizes its page: frames come at that size, and the card maps clicks onto it
+    const vp = (await call(t, "Page.getLayoutMetrics")).result?.cssLayoutViewport;
+    if (vp?.clientWidth) { t.w = vp.clientWidth; t.h = vp.clientHeight; }
+    t.z = 1; send(t, JSON.stringify({ t: "vp", w: t.w, h: t.h }));
+    if (t.subs.size) await cast(t);
+    return;
+  }
   t.z = Math.max(0.25, Math.min(3, z)); t.mobile = mobile;
   t.w = Math.max(200, Math.min(4000, Math.round(w))); t.h = Math.max(150, Math.min(3000, Math.round(h)));
   if (t.win) await call(t, "Browser.setWindowBounds", { windowId: t.win, bounds: { width: t.w + t.fw, height: t.h + t.fh } });
@@ -302,7 +325,7 @@ export const tabInfo = (id: string) => { const t = tabs.get(id); return t ? { ur
 setInterval(() => {
   const now = Date.now();
   for (const t of tabs.values()) if (!t.subs.size && now - t.used > IDLE) {
-    fetch(`${t.ws.url.replace(/^ws(s?):\/\/([^/]+).*$/, "http$1://$2")}/json/close/${t.target}`).catch(() => {});
+    if (!t.desk) fetch(`${t.ws.url.replace(/^ws(s?):\/\/([^/]+).*$/, "http$1://$2")}/json/close/${t.target}`).catch(() => {});
     drop(t);
   }
   if (tabs.size) lastTab = now;

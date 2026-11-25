@@ -13,7 +13,7 @@ import { setPrefs, shownImages, imagesState, imageFile } from "./images";
 import { readTodos, addTodo, editTodo, deleteTodo, parseTask } from "./todos";
 import { pushStore, validSub } from "./push";
 import { readCards, addCard, answerCard, removeCard, RETIRE, type Card } from "./cards";
-import { attach, input, safeUrl } from "./browser";
+import { attach, deskTab, input, safeUrl } from "./browser";
 import { loadAgents, defaultAgent, ready, models, efforts, defaultEffort, runTask, continueTask, retryTask, getTask, stopTask, deleteTask, taskList, routineRunning, openers, openIn, loadSchedule, addScheduled, removeScheduled, startScheduler, listDirs, loadTasks, detectTerminals, detectShells, spawnTerminal, shellPath, dirOr, agentArgv, tuiArgv, tuiOk, tuiResumes, tuiLogs, loggedConversation, openPty, getPty, closePty, listPtys, sessionBusy, sessionStarted, resizePty, replayOf, setWires, ptyPeers, ptyRead, ptySend, ptySpawn, takeSpawns, ptyContext, ptyWrite, ptySketch, ptyDraw, ptyBrowser, ptyDone, ptyClose, setVaultRoot, handoffs, withCanvas, waitsForYou, GHOSTTY_TERM } from "./tasks";
 
 let ROOT = resolve(process.env.VAULT_DIR || `${import.meta.dir}/example-vault`);
@@ -1068,6 +1068,8 @@ async function handle(req: Request, port: number) {
     }
     // Agent hand-off: the canvas sends its wires; a pane (from + its token) lists, reads and messages the panes wired to it.
     // Wires are the permission to talk, so only Overlook's own page may set them (Origin = this host), not a program in a pane.
+    // the desktop app's webview for a browser card (browser.ts deskTab)
+    if (p === "/api/browser/desktop") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : /^[\w-]{1,80}$/.test(String(b.id)) && deskTab(String(b.id), b.port, b.target) ? json({ ok: true }) : new Response("bad card", { status: 400 });
     if (p === "/api/canvas/wires") return !sameOrigin(req) ? new Response("forbidden", { status: 403 }) : setWires(b.client, b.wires, b.names, b.ctx, b.sketch, b.parents) ? json({ ok: true }) : new Response("bad client", { status: 400 });
     if (p === "/api/pty/peers") { const r = ptyPeers(b.from, b.token); return typeof r === "string" ? new Response(r, { status: 403 }) : json({ peers: r }); }
     if (p === "/api/pty/read") { const r = ptyRead(b.from, b.token, b.to, Number(b.lines) || 60); return typeof r === "string" ? new Response(r, { status: 400 }) : json(r); }

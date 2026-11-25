@@ -1,13 +1,18 @@
 // Overlook's desktop app: the same page as the web (served by `bun server.ts`) in a window of its own, where a browser
 // card is a real browser (Electron's <webview>, see mountWebview in app.js): sound, video, popups, downloads, uploads,
 // text selection, a right-click menu. The web page keeps the streamed browser card. Start it with desktop/run.
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, session, shell, webContents } = require("electron");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 
 const BASE = process.env.OVERLOOK_APP_URL || `http://127.0.0.1:${process.env.PORT || 3333}/`;
 const GUEST = path.join(__dirname, "guest.cjs");
 const web = (u) => /^(https?:\/\/|about:blank$)/i.test(u || "");
 let win = null;
+
+// The app's DevTools endpoint, on this machine only (port in userData/DevToolsActivePort): Overlook's server drives a
+// card's webview through it, so agents (overlook browser …) and a phone act on the page you see.
+if (!app.commandLine.hasSwitch("remote-debugging-port")) app.commandLine.appendSwitch("remote-debugging-port", "0");
+app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
 
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
@@ -84,6 +89,18 @@ async function importLogins() {
   } catch (e) { return { error: String(e?.message || e) }; }
   finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+// A card's webview → its DevTools target, for the server to attach to (only Overlook's own window asks, for its own guests).
+ipcMain.handle("wv-target", async (e, id) => {
+  const wc = e.sender === win?.webContents && webContents.fromId(Number(id));
+  if (!wc || wc.hostWebContents !== win.webContents) return null;
+  let port = "";
+  try { port = fs.readFileSync(path.join(app.getPath("userData"), "DevToolsActivePort"), "utf8").split("\n")[0].trim(); } catch {}
+  if (!/^\d+$/.test(port)) return null;
+  try { wc.debugger.attach("1.3"); } catch {}
+  try { return { port, target: (await wc.debugger.sendCommand("Target.getTargetInfo")).targetInfo.targetId }; }
+  catch { return null; }
+  finally { try { wc.debugger.detach(); } catch {} }
+});
 ipcMain.handle("import-logins", (e) => (e.sender === win?.webContents ? importLogins() : { error: "not allowed" }));
 
 app.on("web-contents-created", (_e, wc) => {
