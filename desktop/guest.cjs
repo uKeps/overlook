@@ -22,7 +22,13 @@ addEventListener("keydown", (e) => {
     : c && e.code === "KeyL" ? () => ipcRenderer.sendToHost("url")
     : c && ["Equal", "NumpadAdd"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", 1)
     : c && ["Minus", "NumpadSubtract"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", -1)
-    : c && ["Digit0", "Numpad0"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", 0) : null;
+    : c && ["Digit0", "Numpad0"].includes(e.code) ? () => ipcRenderer.sendToHost("zoom", 0)
+    // tabs, as in Brave: new, close, next/previous, the nth (9: the last)
+    : c && !e.shiftKey && e.code === "KeyT" ? () => ipcRenderer.sendToHost("tab", "new")
+    : c && !e.shiftKey && e.code === "KeyW" ? () => ipcRenderer.sendToHost("tab", "close")
+    : c && ((e.key === "Tab" && !e.shiftKey) || e.key === "PageDown") ? () => ipcRenderer.sendToHost("tab", "next")
+    : c && ((e.key === "Tab" && e.shiftKey) || e.key === "PageUp") ? () => ipcRenderer.sendToHost("tab", "prev")
+    : c && !e.shiftKey && /^Digit[1-9]$/.test(e.code) ? () => ipcRenderer.sendToHost("tab", +e.code.slice(5)) : null;
   if (!act) return;
   e.preventDefault(); e.stopPropagation();
   act();

@@ -2577,10 +2577,44 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 /* held at its size while its card grows or shrinks, until a frame comes at the new size (toggleMax, draw()) */
 .orch-br-view canvas.held { flex: none; width: var(--hw) !important; height: var(--hh) !important; }
 .orch-br-view.phone canvas { flex: none; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
-/* the desktop app's real browser (mountWebview) */
-.orch-br-view.wv webview { display: flex; width: 100%; height: 100%; background: #fff; }
-.orch-br-view.wv .wv-shot { position: absolute; pointer-events: none; } /* stands in for the page while the canvas zooms */
-.orch-br-view.wv.phone webview { flex: none; width: 390px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
+/* the desktop app's real browser (mountWebview), dressed as Brave: the tab strip, the toolbar, the page. One webview
+   per tab, stacked; the ones behind are .off. */
+.orch-br-view.wv webview { position: absolute; inset: 0; display: flex; background: #fff; }
+.orch-br-view.wv webview.off { visibility: hidden; pointer-events: none; }
+.orch-br-view.wv .wv-shot { position: absolute; z-index: 1; pointer-events: none; } /* stands in for the page while the canvas zooms */
+.orch-br-view.wv.phone webview { left: calc(50% - 195px); right: auto; width: 390px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
+.orch-br.bv { display: flex; flex-direction: column; }
+.bv-strip {
+  flex: none; display: flex; align-items: flex-end; gap: 2px; height: 42px; padding: 9px 8px 0; overflow: hidden;
+  background: color-mix(in srgb, var(--win-bg) 62%, #000);
+}
+.bv-tab {
+  position: relative; flex: 0 1 230px; min-width: 52px; height: 33px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 11px;
+  border-radius: 10px 10px 0 0; color: var(--muted); font: 400 12.5px var(--body); cursor: default; user-select: none;
+  transition: background .12s, color .12s;
+}
+.bv-tab:hover:not(.on) { background: rgba(255, 255, 255, .05); color: var(--ink); }
+.bv-tab.on { background: var(--win-bg); color: var(--ink); }
+.bv-tab:not(.on):not(:hover) + .bv-tab:not(.on):not(:hover)::before { content: ""; position: absolute; left: -2px; top: 9px; bottom: 9px; width: 1px; background: rgba(255, 255, 255, .1); }
+.bv-fav { flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--muted); }
+.bv-fav img { width: 16px; height: 16px; border-radius: 3px; object-fit: contain; }
+.bv-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bv-x { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); opacity: 0; }
+.bv-tab:is(:hover, .on) .bv-x { opacity: 1; }
+.bv-x:hover { background: rgba(255, 255, 255, .12); color: var(--ink); }
+.bv-new { flex: none; width: 28px; height: 28px; margin: 0 0 3px 4px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); }
+.bv-new:hover { background: rgba(255, 255, 255, .08); color: var(--ink); }
+/* the toolbar: full-size round buttons, the address on the left with its lock (the full address while you type) */
+.bv .orch-br-bar { height: 46px !important; padding: 0 8px !important; gap: 2px; }
+.bv .orch-br-btn { width: 34px; height: 34px; border-radius: 50%; color: var(--ink); }
+.bv .orch-br-btn svg { width: 18px; height: 18px; }
+.bv .orch-br-addr { height: 34px; margin: 0 6px; background: rgba(255, 255, 255, .07); box-shadow: none; }
+.bv .orch-br-addr:hover { background: rgba(255, 255, 255, .1); }
+.bv .orch-br-url { padding: 0 16px; font-size: 14px; }
+.bv .orch-br-disp { inset: 0 16px 0 14px; justify-content: flex-start; font-size: 14px; color: color-mix(in srgb, var(--ink) 45%, transparent); }
+.bv .orch-br-disp svg { flex: none; margin-right: 10px; color: var(--muted); }
+.bv .orch-br-disp b { font-weight: 400; }
+.bv .orch-br-zoom { height: 24px; font-size: 11.5px; }
 /* starting, blank, disconnected, couldn't start: a quiet note over the page */
 .orch-br-msg {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; text-align: center;

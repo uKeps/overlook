@@ -1325,7 +1325,7 @@ function saveCanvas() {
 // moved card and a closed note undo in the order they happened. A snapshot per change (saveCanvas, the drawing's save);
 // changes 300 ms apart or less are one step. Switching canvases starts a fresh one.
 // ponytail: whole snapshots (the drawing's points included), 100 deep; diffs if a big drawing makes that heavy.
-const HIST_VOL = ["ctx", "doneAt", "keep", "url", "title", "icon", "draft"]; // runtime state, not something you did
+const HIST_VOL = ["ctx", "doneAt", "keep", "url", "title", "icon", "draft", "tabs", "tab"]; // runtime state, not something you did
 let histCur = null, histAt = 0, histPast = [], histNext = [];
 const histNow = () => JSON.stringify({ panes: orchPanes.map((p) => Object.fromEntries(Object.entries(p).filter(([k]) => !HIST_VOL.includes(k)))), links: orchLinks, sketch: sketchEls });
 // reset: this canvas's state is where its history starts
@@ -2340,8 +2340,12 @@ const brBar = () => `<div class="orch-br-bar">
 // ponytail: agents' `overlook browser` still drive the server's tab, not this one; and the page reloads when the canvas is
 // rebuilt (leaving #/agents, switching canvases). Next: the server drives the webview over CDP.
 const DESKTOP = !!window.overlookDesktop, wvCards = new Map(); // a webview's webContents id -> its card
-DESKTOP && window.overlookDesktop.onOpen((from, url) => {
-  const p = wvCards.get(from), q = { kind: "browser", id: `br${++orchSeq}`, url, w: p?.w || 960, h: p?.h || 640 };
+const brTabApi = new Map(); // card id -> { open(url, front) }: its tabs (mountWebview)
+// A link meant for a new tab opens one in the same card, in front unless it asked for the background (middle click)
+DESKTOP && window.overlookDesktop.onOpen((from, url, disp) => {
+  const p = wvCards.get(from);
+  if (p && brTabApi.has(p.id)) return brTabApi.get(p.id).open(url, disp !== "background-tab");
+  const q = { kind: "browser", id: `br${++orchSeq}`, url, w: p?.w || 960, h: p?.h || 640 };
   if (p && typeof p.x === "number") placeBeside(p, q, orchPanes);
   if (addPane(q)) saveCanvas();
 });
@@ -2353,29 +2357,47 @@ async function importLogins() {
   toast(`Imported ${r.count} logins from ${esc(r.browser)}`);
   document.querySelectorAll(".orch-br-view.wv webview").forEach((w) => w.reload());
 }
+// The desktop card is a browser the way Brave is: tabs on top (one <webview> each; the ones behind are .off, hidden and
+// left alone by the zoom's freeze), the toolbar under them (back, forward, reload, the address with its lock, zoom,
+// menu), the page. p.tabs/p.tab keep them; p.url, title and icon are the shown tab's, so agents (who drive the tab you
+// see), the phone and the card's name follow it.
 function mountWebview(feed, p) {
-  const start = p.url && /^(https?:\/\/|about:blank$)/i.test(p.url) ? p.url : "about:blank";
-  feed.innerHTML = `<div class="orch-br">${brBar()}<div class="orch-br-view wv"><webview src="${esc(start)}" partition="persist:browser" allowpopups></webview></div></div>`;
-  const view = feed.querySelector(".orch-br-view"), wv = view.querySelector("webview"), bar = feed.querySelector(".orch-br-bar");
+  const safe = (u) => (u && /^(https?:\/\/|about:blank$)/i.test(u) ? u : "about:blank");
+  if (!Array.isArray(p.tabs) || !p.tabs.length) p.tabs = [{ url: safe(p.url), title: p.title || "", icon: p.icon || "" }];
+  p.tab = Math.min(Math.max(0, p.tab | 0), p.tabs.length - 1);
+  feed.innerHTML = `<div class="orch-br bv"><div class="bv-strip" role="tablist" aria-label="Tabs"></div>${brBar()}<div class="orch-br-view wv"></div></div>`;
+  const strip = feed.querySelector(".bv-strip"), view = feed.querySelector(".orch-br-view"), bar = feed.querySelector(".orch-br-bar");
   const urlIn = feed.querySelector(".orch-br-url"), disp = feed.querySelector(".orch-br-disp");
   const [backB, fwdB] = ["back", "fwd"].map((k) => bar.querySelector(`[data-br="${k}"]`)), zoomB = bar.querySelector('[data-brz="reset"]'), menuB = bar.querySelector('[data-brz="menu"]');
-  let ready = false;
+  const wvs = []; // one per tab, in p.tabs' order: { wv, ready, id }
+  const cur = () => wvs[p.tab];
+  const mirror = () => { const t = p.tabs[p.tab]; p.url = t.url; p.title = t.title; p.icon = t.icon || undefined; };
   const showUrl = () => {
-    const u = p.url === "about:blank" ? "" : p.url || "", m = /^https?:\/\/(?:www\.)?([^/?#]*)(.*)$/i.exec(u);
+    const u = p.url === "about:blank" ? "" : p.url || "", m = /^(https?):\/\/(?:www\.)?([^/?#]*)(.*)$/i.exec(u);
     if (document.activeElement !== urlIn) urlIn.value = u;
-    disp.innerHTML = m ? `<b>${esc(m[1])}</b>${m[2] && m[2] !== "/" ? `<span>${esc(m[2])}</span>` : ""}` : esc(u);
+    disp.innerHTML = m ? `${icon(m[1] === "https" ? "lock" : "globe", 13)}<b>${esc(m[2])}</b>${m[3] && m[3] !== "/" ? `<span>${esc(m[3])}</span>` : ""}` : esc(u);
+  };
+  const tabName = (t) => t.title || (t.url === "about:blank" ? "New tab" : t.url.replace(/^https?:\/\/(www\.)?/, ""));
+  const paintTabs = () => {
+    strip.innerHTML = p.tabs.map((t, i) => `<div class="bv-tab${i === p.tab ? " on" : ""}" role="tab" aria-selected="${i === p.tab}" data-i="${i}" title="${esc(tabName(t))}">
+        <span class="bv-fav">${t.icon ? `<img src="${esc(t.icon)}" alt="" width="16" height="16" referrerpolicy="no-referrer">` : icon("globe", 14)}</span><span class="bv-name">${esc(tabName(t))}</span>
+        <button type="button" class="bv-x" data-x="${i}" title="Close tab (Ctrl+W)" aria-label="Close tab">${icon("x", 11)}</button></div>`).join("")
+      + `<button type="button" class="bv-new" title="New tab (Ctrl+T)" aria-label="New tab">${icon("plus", 15)}</button>`;
   };
   const nav = () => {
-    if (ready) { backB.disabled = !wv.canGoBack(); fwdB.disabled = !wv.canGoForward(); }
+    const c = cur();
+    if (c?.ready) { backB.disabled = !c.wv.canGoBack(); fwdB.disabled = !c.wv.canGoForward(); }
     showUrl(); brHead(p); saveCanvasSoon(); syncWires();
   };
+  // the server drives the shown tab for agents and shows it to a phone (browser.ts deskTab)
+  const register = () => { const c = cur(); if (c?.ready) window.overlookDesktop.wvTarget?.(c.id).then((t) => t && api("/api/browser/desktop", { id: p.id, ...t })).catch(() => {}); };
   const tools = () => {
     const z = p.zoom || 1;
     zoomB.hidden = z === 1; zoomB.textContent = `${Math.round(z * 100)}%`;
-    menuB.innerHTML = icon(p.mobile ? "phone" : "monitor", 14);
+    menuB.innerHTML = icon("menu", 16);
     menuB.classList.toggle("on", !!p.mobile || z !== 1);
     view.classList.toggle("phone", !!p.mobile);
-    if (ready) wv.setZoomFactor(z);
+    for (const r of wvs) if (r.ready) r.wv.setZoomFactor(z);
   };
   const setView = (o) => { Object.assign(p, o); if (p.zoom === 1) delete p.zoom; if (!p.mobile) delete p.mobile; tools(); saveCanvasSoon(); };
   const zoomBy = (d) => { const i = BR_ZOOM.indexOf(p.zoom || 1); setView({ zoom: d ? BR_ZOOM[Math.max(0, Math.min(BR_ZOOM.length - 1, (i < 0 ? 5 : i) + d))] : 1 }); };
@@ -2383,38 +2405,86 @@ function mountWebview(feed, p) {
     if (on) { bar.classList.remove("loading", "loaded"); void bar.offsetWidth; bar.classList.add("loading"); }
     else if (bar.classList.contains("loading")) { bar.classList.remove("loading"); bar.classList.add("loaded"); }
   };
-  wv.addEventListener("dom-ready", () => {
-    if (!ready) {
-      ready = true; wvCards.set(wv.getWebContentsId(), p); tools();
-      // the server drives this page for agents and shows it to a phone (browser.ts deskTab)
-      window.overlookDesktop.wvTarget?.(wv.getWebContentsId()).then((t) => t && api("/api/browser/desktop", { id: p.id, ...t })).catch(() => {});
-    }
-    nav();
+  const changed = (rec) => { paintTabs(); if (cur() === rec) { mirror(); nav(); } else saveCanvasSoon(); };
+  const addWv = (i, url) => {
+    const wv = document.createElement("webview"), rec = { wv, ready: false, id: 0 };
+    wv.setAttribute("partition", "persist:browser"); wv.setAttribute("allowpopups", ""); wv.setAttribute("src", safe(url));
+    const tab = () => p.tabs[wvs.indexOf(rec)] || {};
+    wv.addEventListener("dom-ready", () => {
+      if (!rec.ready) { rec.ready = true; rec.id = wv.getWebContentsId(); wvCards.set(rec.id, p); wv.setZoomFactor(p.zoom || 1); if (cur() === rec) register(); }
+      if (cur() === rec) nav();
+    });
+    wv.addEventListener("did-start-loading", () => cur() === rec && loading(true));
+    wv.addEventListener("did-stop-loading", () => cur() === rec && loading(false));
+    const went = (e) => { if (e.isMainFrame === false) return; tab().url = e.url; changed(rec); };
+    wv.addEventListener("did-navigate", went);
+    wv.addEventListener("did-navigate-in-page", went);
+    wv.addEventListener("page-title-updated", (e) => { tab().title = e.title; changed(rec); });
+    wv.addEventListener("page-favicon-updated", (e) => { const f = e.favicons?.find((u) => /^https?:/.test(u)); if (f && f !== tab().icon) { tab().icon = f; changed(rec); } });
+    wv.addEventListener("ipc-message", (e) => {
+      if (e.channel === "url") urlIn.focus();
+      else if (e.channel === "zoom") zoomBy(e.args[0]);
+      else if (e.channel === "tab") tabKey(e.args[0]);
+      else if (e.channel === "wheel") { // the page's Ctrl + wheel / pinch (guest.cjs): the canvas zooms about that point
+        const m = e.args[0], r = wv.getBoundingClientRect(), k = r.width / (m.w || r.width);
+        $("#orch-canvas")?.dispatchEvent(new WheelEvent("wheel", { deltaX: m.dx, deltaY: m.dy, deltaMode: m.mode, clientX: r.left + m.x * k, clientY: r.top + m.y * k, ctrlKey: true, bubbles: true, cancelable: true }));
+      }
+    });
+    wv.addEventListener("destroyed", () => { if (rec.id) wvCards.delete(rec.id); });
+    wvs.splice(i, 0, rec);
+    view.appendChild(wv);
+    return rec;
+  };
+  const show = (i) => {
+    p.tab = Math.max(0, Math.min(p.tabs.length - 1, i));
+    wvs.forEach((r, j) => r.wv.classList.toggle("off", j !== p.tab));
+    mirror(); paintTabs(); nav(); register(); loading(false);
+    if (p.url === "about:blank") setTimeout(() => urlIn.focus(), 60); else cur().wv.focus();
+  };
+  // at: where it goes (a link's tab right of the one it came from; a new tab last, as in Brave)
+  const open = (url = "about:blank", front = true, at = p.tab + 1) => {
+    p.tabs.splice(at, 0, { url: safe(url), title: "", icon: "" });
+    const rec = addWv(at, url);
+    if (at <= p.tab) p.tab++; // the shown tab moved right
+    if (front) show(at); else { rec.wv.classList.add("off"); paintTabs(); saveCanvasSoon(); }
+  };
+  const close = (i) => {
+    if (p.tabs.length === 1) { p.tabs[0] = { url: "about:blank", title: "", icon: "" }; if (wvs[0].ready) wvs[0].wv.loadURL("about:blank"); return show(0); } // the last one: a blank tab, the card stays
+    const [r] = wvs.splice(i, 1);
+    p.tabs.splice(i, 1);
+    if (r.id) wvCards.delete(r.id);
+    r.wv.remove();
+    show(i < p.tab ? p.tab - 1 : i === p.tab ? Math.min(i, p.tabs.length - 1) : p.tab);
+  };
+  const tabKey = (k) => {
+    const n = p.tabs.length;
+    if (k === "new") open("about:blank", true, n);
+    else if (k === "close") close(p.tab);
+    else if (k === "next") show((p.tab + 1) % n);
+    else if (k === "prev") show((p.tab - 1 + n) % n);
+    else if (typeof k === "number") show(k === 9 ? n - 1 : k - 1);
+  };
+  brTabApi.set(p.id, { open });
+  strip.addEventListener("click", (e) => {
+    const x = e.target.closest(".bv-x");
+    if (x) return close(+x.dataset.x);
+    if (e.target.closest(".bv-new")) return open("about:blank", true, p.tabs.length);
+    const t = e.target.closest(".bv-tab");
+    if (t && +t.dataset.i !== p.tab) show(+t.dataset.i);
   });
-  wv.addEventListener("did-start-loading", () => loading(true));
-  wv.addEventListener("did-stop-loading", () => loading(false));
-  const went = (e) => { if (e.isMainFrame === false) return; p.url = e.url; nav(); };
-  wv.addEventListener("did-navigate", went);
-  wv.addEventListener("did-navigate-in-page", went);
-  wv.addEventListener("page-title-updated", (e) => { p.title = e.title; nav(); });
-  wv.addEventListener("page-favicon-updated", (e) => { const f = e.favicons?.find((u) => /^https?:/.test(u)); if (f && f !== p.icon) { p.icon = f; nav(); } });
-  wv.addEventListener("ipc-message", (e) => {
-    if (e.channel === "url") urlIn.focus();
-    else if (e.channel === "zoom") zoomBy(e.args[0]);
-    else if (e.channel === "wheel") { // the page's Ctrl + wheel / pinch (guest.cjs): the canvas zooms about that point
-      const m = e.args[0], r = wv.getBoundingClientRect(), k = r.width / (m.w || r.width);
-      $("#orch-canvas")?.dispatchEvent(new WheelEvent("wheel", { deltaX: m.dx, deltaY: m.dy, deltaMode: m.mode, clientX: r.left + m.x * k, clientY: r.top + m.y * k, ctrlKey: true, bubbles: true, cancelable: true }));
-    }
-  });
-  wv.addEventListener("destroyed", () => { for (const [k, v] of wvCards) if (v === p) wvCards.delete(k); });
+  strip.addEventListener("auxclick", (e) => { const t = e.button === 1 && e.target.closest(".bv-tab"); if (t) { e.preventDefault(); close(+t.dataset.i); } }); // middle click closes
+  strip.addEventListener("dblclick", (e) => { if (e.target === strip) open("about:blank", true, p.tabs.length); });
   urlIn.addEventListener("keydown", (e) => {
     e.stopPropagation();
-    if (e.key === "Enter") { const u = brUrl(urlIn.value); if (u && ready) { wv.loadURL(u); wv.focus(); } }
-    if (e.key === "Escape") { showUrl(); urlIn.value = p.url === "about:blank" ? "" : p.url || ""; wv.focus(); }
+    if (e.key === "Enter") { const u = brUrl(urlIn.value); if (u && cur()?.ready) { cur().wv.loadURL(u); cur().wv.focus(); } }
+    if (e.key === "Escape") { urlIn.value = p.url === "about:blank" ? "" : p.url || ""; cur()?.wv.focus(); }
   });
   urlIn.addEventListener("focus", () => urlIn.select());
   urlIn.addEventListener("blur", showUrl);
   const menu = () => [
+    { label: "New tab", ic: "plus", kbd: "Ctrl+T", run: () => open("about:blank", true, p.tabs.length) },
+    { label: "Close tab", ic: "x", kbd: "Ctrl+W", run: () => close(p.tab) },
+    "-",
     { label: "Desktop width", ic: "monitor", on: !p.mobile, run: () => setView({ mobile: false }) },
     { label: `Mobile width (${BR_PHONE}px)`, ic: "phone", on: !!p.mobile, run: () => setView({ mobile: true }) },
     "-",
@@ -2426,13 +2496,16 @@ function mountWebview(feed, p) {
   ];
   bar.addEventListener("click", (e) => {
     const b = e.target.closest("[data-br], [data-brz]");
-    if (!b || !ready) return;
+    if (!b) return;
     if (b.dataset.brz === "menu") return ctxAt(b, menu());
-    if (b.dataset.brz === "reset") zoomBy(0);
-    else ({ back: () => wv.goBack(), fwd: () => wv.goForward(), reload: () => wv.reload() })[b.dataset.br]?.();
+    if (b.dataset.brz === "reset") return zoomBy(0);
+    const c = cur();
+    if (c?.ready) ({ back: () => c.wv.goBack(), fwd: () => c.wv.goForward(), reload: () => c.wv.reload() })[b.dataset.br]?.();
   });
-  tools(); showUrl();
-  if (start === "about:blank") setTimeout(() => urlIn.focus(), 120);
+  p.tabs.forEach((t, i) => addWv(i, t.url));
+  wvs.forEach((r, j) => r.wv.classList.toggle("off", j !== p.tab));
+  mirror(); paintTabs(); tools(); showUrl();
+  if (p.url === "about:blank") setTimeout(() => urlIn.focus(), 120);
 }
 function mountBrowser(feed, p) {
   if (DESKTOP) return mountWebview(feed, p);
@@ -2768,7 +2841,7 @@ let wvZoom = 0, wvRest = 0, wvHold = null, wvHeld = false; // wvHeld: this zoom 
 function freezeWebviews() {
   clearTimeout(wvRest);
   wvRest = setTimeout(thawWebviews, 150);
-  const live = [...document.querySelectorAll("#orch-plane webview:not(.frozen)")];
+  const live = [...document.querySelectorAll("#orch-plane webview:not(.frozen, .off)")];
   for (const wv of live) wv.classList.add("frozen"); // every one, photographed or not: an unfrozen one held the zoom forever
   return Promise.race([new Promise((r) => setTimeout(r, 150)), Promise.all(live.map(async (wv) => {
     let id;
@@ -2806,7 +2879,7 @@ function applyCanvasTransform() {
   if (DESKTOP && orchZoom !== wvZoom) {
     if (wvZoom && free) {
       if (wvHold) return; // the pages are being photographed: the view waits for them (freezeWebviews)
-      if (!wvHeld && plane?.querySelector("webview:not(.frozen)")) { wvHeld = true; wvHold = freezeWebviews().finally(() => { wvHold = null; applyCanvasSoon(); }); return; }
+      if (!wvHeld && plane?.querySelector("webview:not(.frozen, .off)")) { wvHeld = true; wvHold = freezeWebviews().finally(() => { wvHold = null; applyCanvasSoon(); }); return; }
       freezeWebviews(); // still zooming: the photos stay up a while longer
     }
     wvZoom = orchZoom;
