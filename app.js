@@ -4386,7 +4386,8 @@ function deckShow(on = !$("#run")?.classList.contains("show")) {
 // { label, ic, sw (a background swatch), kbd, on (checked), off (disabled), danger, run, sub: [items] }, or "-" for a
 // separator; falsy items are skipped, so a menu can list `cond && item`.
 let ctxEl = null, ctxFrom = null;
-function ctxClose() { ctxEl?.remove(); ctxEl = null; ctxFrom = null; }
+// fades out (.ctx-menu.out) and goes; nothing finds it meanwhile (ctxEl is already the next one or null)
+function ctxClose() { const m = ctxEl; if (m) { m.classList.add("out"); setTimeout(() => m.remove(), 120); } ctxEl = null; ctxFrom = null; }
 function ctxBuild(items) {
   const box = document.createElement("div");
   box.className = "ctx-menu"; box.setAttribute("role", "menu");

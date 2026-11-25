@@ -12,11 +12,14 @@
   --glass: color-mix(in srgb, var(--surface) 55%, transparent); --glass-2: color-mix(in srgb, var(--surface-2) 62%, transparent);
   --line: color-mix(in srgb, var(--ink) 9%, transparent);
   --muted: color-mix(in srgb, var(--ink) 64%, transparent); --faint: color-mix(in srgb, var(--ink) 60%, transparent);
-  --r: 18px; --ease: cubic-bezier(.2, .8, .2, 1);
-  /* Floating panels (calendar, dock): a long soft settle on the way in, a quicker exit after a short grace period. */
-  --float-ease: cubic-bezier(.16, 1, .3, 1);
-  --float-in: opacity .32s var(--float-ease), transform .55s var(--float-ease), filter .4s var(--float-ease), visibility 0s;
-  --float-out: opacity .2s ease .16s, transform .3s cubic-bezier(.5, 0, .75, 0) .16s, filter .25s ease .16s, visibility 0s .46s;
+  --r: 18px;
+  /* Motion: one curve for everything that arrives, moves or settles, a quicker one for what leaves, and four durations.
+     Only transform and opacity animate (the GPU composites them); app.js mirrors them (EASE, T3, T4). */
+  --ease: cubic-bezier(.16, 1, .3, 1); --ease-in: cubic-bezier(.4, 0, 1, 1);
+  --t1: .12s; --t2: .18s; --t3: .26s; --t4: .45s; /* hover/tint · menus, pops, exits · cards, panels · travel */
+  /* Floating panels (calendar, dock): a soft settle on the way in, a quicker exit after a short grace period. */
+  --float-in: opacity var(--t3) var(--ease), transform var(--t4) var(--ease), visibility 0s;
+  --float-out: opacity var(--t2) var(--ease-in) .16s, transform var(--t3) var(--ease-in) .16s, visibility 0s .42s;
   --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px); --safe-right: env(safe-area-inset-right, 0px);
   --display: "Instrument Sans", system-ui, sans-serif; --body: "Instrument Sans", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
@@ -119,18 +122,18 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-event
 .cal.float { position: absolute; top: 26px; left: 50%; translate: -50% 0; z-index: 30; width: min(1240px, calc(100vw - 48px)); padding: 0; background: none; border-color: transparent; pointer-events: none; }
 .cal.float .cal-pill { pointer-events: auto; display: flex; align-items: center; gap: 8px; width: max-content; height: 34px; margin: 0 auto; padding: 0 16px; border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, .16); background: color-mix(in srgb, var(--surface-2) 88%, transparent); box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
-  color: var(--ink); font-size: 13px; transition: opacity .3s var(--float-ease), transform .45s var(--float-ease), border-color .3s; }
+  color: var(--ink); font-size: 13px; transition: opacity .3s var(--ease), transform .45s var(--ease), border-color .3s; }
 .cal.float .cal-pill:hover { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .cal.float .cal-pill b { color: var(--ink); font-weight: 600; }
 .cal.float .cal-pill span { color: var(--accent); font-weight: 500; }
 .cal.float .cal-pill svg { color: var(--accent); }
 .cal.float .cal-body { pointer-events: auto; position: absolute; top: 58px; left: 0; right: 0; padding: 8px; border-radius: var(--r); border: 1px solid var(--line); background: var(--surface); box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
-  opacity: 0; visibility: hidden; transform: translateY(-16px) scale(.96); filter: blur(8px); transform-origin: top center; transition: var(--float-out); }
+  opacity: 0; visibility: hidden; transform: translateY(-16px) scale(.96); transform-origin: top center; transition: var(--float-out); }
 .cal.float .cal-body::before { content: ""; position: absolute; left: 0; right: 0; top: -26px; height: 26px; } /* keeps the hover alive between the pill and the panel */
-.cal.float:is(:hover, :focus-within, .open) .cal-body { opacity: 1; visibility: visible; transform: none; filter: none; transition: var(--float-in); }
+.cal.float:is(:hover, :focus-within, .open) .cal-body { opacity: 1; visibility: visible; transform: none; transition: var(--float-in); }
 .cal.float:is(:hover, :focus-within, .open) .cal-pill { transform: scale(.96); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 
-main { max-width: 1240px; margin: 0 auto; padding-top: 28px; animation: page .16s ease-out; }
+main { max-width: 1240px; margin: 0 auto; padding-top: 28px; animation: page var(--t2) var(--ease); }
 body.home { display: flex; flex-direction: column; }
 body.home .top, body.home .cal, body.home main { width: 100%; }
 body.home main { margin-top: auto; margin-bottom: auto; padding-top: 16px; padding-bottom: 16px; }
@@ -414,13 +417,13 @@ a.ag.link:hover { background: var(--glass-2); border-color: color-mix(in srgb, v
 /* Floating dock: a pill at the bottom; hovering or focusing it rises the dock over it. */
 .dockwrap.float .dock-pill { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .16);
   background: color-mix(in srgb, var(--surface-2) 88%, transparent); box-shadow: 0 8px 24px rgba(0, 0, 0, .35); color: var(--ink); font-size: 13px; font-weight: 500;
-  transition: opacity .3s var(--float-ease), transform .45s var(--float-ease), filter .3s var(--float-ease); }
+  transition: opacity var(--t3) var(--ease), transform var(--t4) var(--ease); }
 .dockwrap.float .dock-pill svg { color: var(--accent); }
 .dockwrap.float .dock-pill .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--accent); color: var(--accent-ink); font: 700 10px/18px var(--body); text-align: center; }
 .dockwrap.float .dock { position: absolute; bottom: 0; left: 50%; translate: -50% 0; box-shadow: 0 30px 80px rgba(0, 0, 0, .6); background: var(--surface);
-  opacity: 0; visibility: hidden; transform: translateY(16px) scale(.94); filter: blur(8px); transform-origin: bottom center; transition: var(--float-out); }
-.dockwrap.float:is(:hover, :focus-within, .open) .dock { opacity: 1; visibility: visible; transform: none; filter: none; transition: var(--float-in); }
-.dockwrap.float:is(:hover, :focus-within, .open) .dock-pill { opacity: 0; transform: scale(.9); filter: blur(4px); }
+  opacity: 0; visibility: hidden; transform: translateY(16px) scale(.94); transform-origin: bottom center; transition: var(--float-out); }
+.dockwrap.float:is(:hover, :focus-within, .open) .dock { opacity: 1; visibility: visible; transform: none; transition: var(--float-in); }
+.dockwrap.float:is(:hover, :focus-within, .open) .dock-pill { opacity: 0; transform: scale(.9); }
 .dock a, .dock button { position: relative; width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; color: var(--muted); transition: background .2s, color .2s, transform .16s var(--ease); transform-origin: center bottom; }
 .dock a:hover, .dock button:hover { background: var(--glass-2); color: var(--ink); transform: translateY(-3px); }
 .dock a.on { background: rgba(255, 255, 255, .1); color: var(--ink); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
@@ -619,8 +622,8 @@ body.svc-full .top:hover,
 body.svc-full .top:focus-within {
   opacity: 1;
 }
-.toast { position: fixed; bottom: 100px; left: 50%; translate: -50% 20px; padding: 10px 16px; border-radius: 12px; opacity: 0; transition: all .35s var(--ease); pointer-events: none; z-index: 20; background: color-mix(in srgb, var(--surface) 85%, transparent); }
-.toast.on { opacity: 1; translate: -50% 0; pointer-events: auto; }
+.toast { position: fixed; bottom: 100px; left: 50%; translate: -50% 20px; padding: 10px 16px; border-radius: 12px; opacity: 0; transition: opacity var(--t2) var(--ease-in), translate var(--t2) var(--ease-in); pointer-events: none; z-index: 20; background: color-mix(in srgb, var(--surface) 85%, transparent); }
+.toast.on { opacity: 1; translate: -50% 0; pointer-events: auto; transition: opacity var(--t3) var(--ease), translate var(--t4) var(--ease); }
 .toast a { color: var(--accent); text-decoration: underline; font-weight: 500; }
 
 @media (max-width: 1120px) {
@@ -656,7 +659,7 @@ body.svc-full .top:focus-within {
   .svcbar .pill { display: none; }
   .frame { height: calc(100dvh - 190px); }
 }
-@media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 input:focus, textarea:focus, select:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 1px var(--accent); }
 
@@ -942,7 +945,7 @@ body.dock-float .orch-shell { height: calc(100dvh - 144px); }
   width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 80px);
   border-radius: 14px; padding: 6px; display: flex; flex-direction: column;
   background: color-mix(in srgb, var(--surface) 96%, #000); border: 1px solid rgba(255, 255, 255, .1);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: cv-pop .12s var(--float-ease);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: cv-pop var(--t2) var(--ease);
 }
 .cwd-q {
   height: 40px; padding: 0 10px; border: 0; background: none; outline: none; font: 14px var(--body); color: var(--ink);
@@ -1265,9 +1268,9 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
   right: 0; bottom: calc(100% + 8px); width: 300px; max-width: calc(100vw - 24px); padding: 6px;
   border-radius: 12px; font: 500 13px var(--body); color: var(--ink);
   opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(6px) scale(.98); transform-origin: right bottom;
-  transition: opacity .18s var(--ease), transform .18s var(--ease), visibility 0s .18s;
+  transition: opacity var(--t2) var(--ease-in), transform var(--t2) var(--ease-in), visibility 0s var(--t2);
 }
-.cv-usage-panel.open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; transition-delay: 0s; }
+.cv-usage-panel.open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; transition: opacity var(--t2) var(--ease), transform var(--t3) var(--ease), visibility 0s; }
 .u-head { padding: 6px 8px 4px; font: 600 11px var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .u-agent { padding: 8px; border-radius: 9px; }
 .u-agent + .u-agent { border-top: 1px solid var(--line); border-radius: 0 0 9px 9px; }
@@ -1721,7 +1724,7 @@ html[data-ui="minimal"] .orch-canvas.free[data-bg="ambient"] {
 /* Command bar: one field for every note, page and action (after Apple Spotlight and the Combobox on 21st.dev). */
 #cmdk { padding: 0; margin: 12vh auto auto; width: min(640px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 16px;
   background: var(--surface); color: var(--ink); box-shadow: 0 30px 90px rgba(0, 0, 0, .55); overflow: hidden; }
-#cmdk[open] { animation: ck-in .14s var(--ease); }
+#cmdk[open] { animation: ck-in var(--t2) var(--ease); }
 #cmdk::backdrop { background: rgba(0, 0, 0, .5); }
 @keyframes ck-in { from { opacity: 0; transform: translateY(-4px) scale(.985); } }
 .ck-field { display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid var(--line); color: var(--faint); }
@@ -1984,29 +1987,29 @@ body.canvas-page .orch-deck {
   position: absolute; z-index: 40; top: 60px; left: 50%; translate: -50% 0; width: min(760px, calc(100% - 24px));
   display: none; border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
 }
-body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--float-ease); }
+body.canvas-page .orch-deck.show { display: block; animation: cv-pop var(--t2) var(--ease); }
 @keyframes cv-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
-.orch-pane.pane-in { animation: pane-in .24s var(--float-ease); }
+.orch-pane.pane-in { animation: pane-in var(--t3) var(--ease); }
 @keyframes pane-in { from { opacity: 0; transform: scale(.96); } }
 /* a terminal an agent spawned grows out from under that agent's card to its place in the tree (treeLayout) */
-.orch-pane.pane-sprout { transform-origin: top center; animation: pane-sprout .5s var(--float-ease); }
+.orch-pane.pane-sprout { transform-origin: top center; animation: pane-sprout var(--t4) var(--ease); }
 @keyframes pane-sprout { from { opacity: 0; transform: translate(var(--sx), var(--sy)) scale(.15); } }
 /* a closed card: a quick fade where it was (orchPaint removes it after) */
-.orch-pane.pane-out { pointer-events: none; animation: pane-out .18s cubic-bezier(.4, 0, 1, 1) forwards; }
+.orch-pane.pane-out { pointer-events: none; animation: pane-out var(--t2) var(--ease-in) forwards; }
 @keyframes pane-out { to { opacity: 0; transform: scale(.96); } }
 /* switching canvases: the cards you leave go the way you went, the next canvas's come in from the other side, so you
    feel which way you moved (Ctrl+Alt+↓ is down, like scrolling; switchCanvas sets data-slide for a moment) */
-.orch-plane[data-slide="down"] .orch-pane.pane-in { animation: pane-from-below .36s var(--float-ease); }
-.orch-plane[data-slide="up"] .orch-pane.pane-in { animation: pane-from-above .36s var(--float-ease); }
-.orch-plane[data-slide="down"] .orch-pane.pane-out { animation: pane-to-above .22s cubic-bezier(.4, 0, 1, 1) forwards; }
-.orch-plane[data-slide="up"] .orch-pane.pane-out { animation: pane-to-below .22s cubic-bezier(.4, 0, 1, 1) forwards; }
+.orch-plane[data-slide="down"] .orch-pane.pane-in { animation: pane-from-below var(--t4) var(--ease); }
+.orch-plane[data-slide="up"] .orch-pane.pane-in { animation: pane-from-above var(--t4) var(--ease); }
+.orch-plane[data-slide="down"] .orch-pane.pane-out { animation: pane-to-above var(--t2) var(--ease-in) forwards; }
+.orch-plane[data-slide="up"] .orch-pane.pane-out { animation: pane-to-below var(--t2) var(--ease-in) forwards; }
 @keyframes pane-from-below { from { opacity: 0; transform: translateY(56px); } }
 @keyframes pane-from-above { from { opacity: 0; transform: translateY(-56px); } }
 @keyframes pane-to-above { to { opacity: 0; transform: translateY(-56px); } }
 @keyframes pane-to-below { to { opacity: 0; transform: translateY(56px); } }
 /* Arrange windows: the cards slide to their places (slideCard in app.js: a transform and a clip, no layout per frame);
    the wires, which only know where the cards end up, wait for them */
-.orch-links { transition: opacity .2s var(--ease); }
+.orch-links { transition: opacity var(--t2) var(--ease); }
 .orch-plane.free[data-arranging] .orch-links { opacity: 0; transition: none; }
 /* ---------- Drawing a new card (drawCard), and the "New terminal" sheet ---------- */
 .draw-layer { position: absolute; inset: 0; z-index: 14; cursor: crosshair; touch-action: none; } /* under the HUD (15) */
@@ -2014,8 +2017,8 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 .ns-sheet {
   position: fixed; z-index: 990; width: min(340px, calc(100vw - 16px)); padding: 12px; display: flex; flex-direction: column; gap: 10px;
   background: color-mix(in srgb, var(--surface) 96%, #000); border: 1px solid rgba(255, 255, 255, .1); border-radius: 14px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: ns-in .15s var(--float-ease);
-  transition: opacity .15s, transform .15s var(--ease);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: ns-in var(--t2) var(--ease);
+  transition: opacity var(--t2) var(--ease-in), transform var(--t2) var(--ease-in);
 }
 .ns-sheet.out { opacity: 0; transform: scale(.97); pointer-events: none; }
 @keyframes ns-in { from { opacity: 0; transform: scale(.97); } }
@@ -2049,11 +2052,12 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 .ctx-menu {
   position: fixed; z-index: 1000; min-width: 220px; max-width: 320px; padding: 5px; display: flex; flex-direction: column;
   background: color-mix(in srgb, var(--surface) 96%, #000); border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: ctx-in .12s ease-out;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55); font: 500 13px var(--body); animation: ctx-in var(--t2) var(--ease);
   max-height: calc(100vh - 16px); overflow-y: auto; scrollbar-width: thin; /* a long menu on a short window scrolls */
 }
 /* opacity only: a transform would make the menu the containing block of its fixed submenus */
 @keyframes ctx-in { from { opacity: 0; } }
+.ctx-menu.out { pointer-events: none; opacity: 0; transition: opacity var(--t1) var(--ease-in); } /* ctxClose fades it */
 .ctx-item {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 32px; padding: 0 10px; border-radius: 7px;
   color: var(--ink); text-align: left; white-space: nowrap;
@@ -2071,7 +2075,7 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 .ctx-sep { flex: none; height: 1px; margin: 5px 8px; background: rgba(255, 255, 255, .08); }
 .ctx-row { position: relative; }
 /* placed by ctxBuild (fixed, beside its row, inside the window), overlapping the parent by 2px: no gap closes it */
-.ctx-menu.ctx-sub { position: fixed; display: none; max-height: min(420px, 70vh); animation: none; }
+.ctx-menu.ctx-sub { position: fixed; display: none; max-height: min(420px, 70vh); animation-duration: var(--t1); }
 .ctx-row.open > .ctx-sub { display: flex; }
 @media (pointer: coarse) { .ctx-item { min-height: 42px; } }
 
@@ -2091,7 +2095,7 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
   background-color: color-mix(in srgb, var(--surface) 90%, transparent);
   background-image: radial-gradient(color-mix(in srgb, var(--ink) 9%, transparent) 1px, transparent 1px); background-size: 12px 12px;
   backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  animation: cv-pop .18s var(--float-ease);
+  animation: cv-pop var(--t2) var(--ease);
 }
 .cv-map svg { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
 .cv-map .mb { fill: color-mix(in srgb, var(--ink) 55%, transparent); cursor: pointer; transition: filter .15s; }
@@ -2641,11 +2645,10 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .orch-pane[data-kind="browser"] .orch-br { flex: 1; min-width: 0; }
 
 /* An agent that said it's done (overlook done): folded, dimmed, a check before its name; full again on hover. */
-.orch-pane.done { opacity: .62; transition: opacity .18s cubic-bezier(.2, .8, .2, 1); }
+.orch-pane.done { opacity: .62; transition: opacity var(--t3) var(--ease); }
 .orch-pane.done:hover, .orch-pane.done.active { opacity: 1; }
 .orch-pane.done .win-title b::before { content: "✓ "; color: var(--accent); }
 .orch-pane.done .orch-head { cursor: pointer; }
-@media (prefers-reduced-motion: reduce) { .orch-pane.done { transition: none; } }
 
 /* The phone's Agents page (phoneAgents in app.js): the PC's live terminals as a list, one at a time full screen. */
 .phone { padding: 0 2px calc(110px + var(--safe-bottom, 0px)); }
