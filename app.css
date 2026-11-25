@@ -2004,10 +2004,8 @@ body.canvas-page .orch-deck.show { display: block; animation: cv-pop .16s var(--
 @keyframes pane-from-above { from { opacity: 0; transform: translateY(-56px); } }
 @keyframes pane-to-above { to { opacity: 0; transform: translateY(-56px); } }
 @keyframes pane-to-below { to { opacity: 0; transform: translateY(56px); } }
-/* Arrange windows: the cards slide to their places; the wires, which only know where the cards end up, wait for them */
-.orch-plane.free[data-arranging] .orch-pane {
-  transition: left .45s var(--float-ease), top .45s var(--float-ease), width .45s var(--float-ease), height .45s var(--float-ease);
-}
+/* Arrange windows: the cards slide to their places (slideCard in app.js: a transform and a clip, no layout per frame);
+   the wires, which only know where the cards end up, wait for them */
 .orch-links { transition: opacity .2s var(--ease); }
 .orch-plane.free[data-arranging] .orch-links { opacity: 0; transition: none; }
 /* ---------- Drawing a new card (drawCard), and the "New terminal" sheet ---------- */
