@@ -3378,7 +3378,10 @@ function agents() {
   document.querySelectorAll("#cwd-pop").forEach((n) => n.remove());
   const ready = (S.runners || []).filter((r) => r.ready);
   const roleRow = ORCH_ROLES.find(([k]) => k === orchRole) || ORCH_ROLES[0];
-  main.innerHTML = `<div class="orch-shell">
+  // In the desktop app the canvas is built once and stays in the page (#canvas-host), only hidden on other pages: a
+  // browser card's webview taken out of the page reloads (its scroll, a video, a half-filled form were lost).
+  const host = DESKTOP ? $("#canvas-host") : main;
+  if (!DESKTOP || !host.querySelector(".orch-shell")) host.innerHTML = `<div class="orch-shell">
     <form class="task glass orch-deck ${orchDeckOpen ? "open" : ""}" id="run">
       <div class="orch-bar">
         <div class="orch-cluster-prompt">
@@ -5546,6 +5549,9 @@ function render() {
   document.body.classList.toggle("app", pg === "s"); // an embedded app takes over the week strip's height
   document.body.classList.toggle("agents", pg === "agents" || pg === "a" || pg === "t");
   document.body.classList.toggle("canvas-page", pg === "agents"); // the canvas takes the whole screen: no header; the dock stays
+  // the desktop's kept canvas (agents()): off it, nothing in it keeps the keyboard
+  if (DESKTOP && pg !== "agents" && $("#canvas-host").contains(document.activeElement)) document.activeElement.blur();
+  document.body.classList.toggle("desk-canvas", DESKTOP && !phoneMq.matches);
   if (pg !== "s") $("#svcbar").innerHTML = "";
   main.style.animation = "none"; main.offsetHeight; main.style.animation = "";
   topBar();
