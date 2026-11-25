@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("overlookDesktop", {
   onOpen: (fn) => ipcRenderer.on("br-open", (_e, from, url, disp) => fn(from, url, disp)),
   importLogins: (from) => ipcRenderer.invoke("import-logins", from),
+  privateClear: () => ipcRenderer.invoke("private-clear"),
   wvTarget: (id) => ipcRenderer.invoke("wv-target", id),
   capture: (id, rect) => ipcRenderer.invoke("br-capture", id, rect),
   shields: (on) => ipcRenderer.invoke("shields", on),

@@ -18,6 +18,7 @@ let D = null; // vault
 let S = { agents: [], services: [], runners: [], tasks: [] }; // system
 
 const I = {
+  mask: '<path d="M2 11h20"/><path d="M5 11l2.5-6h9l2.5 6"/><circle cx="7" cy="16" r="3"/><circle cx="17" cy="16" r="3"/><path d="M10 16c1.3-1 2.7-1 4 0"/>',
   shield: '<path d="M12 3 5 6v5c0 4.6 3 8.3 7 10 4-1.7 7-5.4 7-10V6z"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
@@ -1312,13 +1313,21 @@ function leftBehind(all, links) {
   const inUse = (p) => p.kind === "sticky" && links.some((l) => (l.a === paneKey(p) && terms.has(l.b)) || (l.b === paneKey(p) && terms.has(l.a)));
   return (p) => (p.kind === "browser" || p.kind === "sticky") && !!p.openedBy && !terms.has(`terminal:${p.openedBy}`) && !inUse(p);
 }
+// A card's private tabs are never written down (or restored): the saved card has its other tabs, showing one of those.
+function savedPane({ ctx, ...p }) {
+  if (!p.tabs?.some((t) => t.private)) return p;
+  const tabs = p.tabs.filter((t) => !t.private), shown = p.tabs[p.tab]?.private ? 0 : tabs.indexOf(p.tabs[p.tab]);
+  if (!tabs.length) return { ...p, tabs: [{ url: "about:blank", title: "", icon: "" }], tab: 0, url: "about:blank", title: "", icon: undefined };
+  const t = tabs[Math.max(0, shown)];
+  return { ...p, tabs, tab: Math.max(0, shown), url: t.url, title: t.title, icon: t.icon || undefined };
+}
 function saveCanvas() {
   dropCards(leftBehind(allPanes(), allLinks()));
-  syncWires(); sweepBrowsers();
+  syncWires(); sweepBrowsers(); privateGone();
   try {
     localStorage.setItem(CANVAS_BG_KEY, orchBg);
-    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(({ ctx, ...p }) => p), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio,
-      canvas: canvasId, canvases: canvases.map((c) => (c.panes ? { ...c, panes: c.panes.map(({ ctx, ...p }) => p) } : c)) }));
+    localStorage.setItem(CANVAS_KEY, JSON.stringify({ panes: orchPanes.map(savedPane), links: orchLinks, mode: orchMode, layout: 2, panX: orchPanX, panY: orchPanY, zoom: orchZoom, seq: orchSeq, bg: orchBg, map: orchMapOpen, active: orchActive, max: orchMax, dir: orchDir, ratio: orchRatio,
+      canvas: canvasId, canvases: canvases.map((c) => (c.panes ? { ...c, panes: c.panes.map(savedPane) } : c)) }));
   } catch {}
   histNote();
 }
@@ -2342,10 +2351,17 @@ const brBar = () => `<div class="orch-br-bar">
 // rebuilt (leaving #/agents, switching canvases). Next: the server drives the webview over CDP.
 const DESKTOP = !!window.overlookDesktop, wvCards = new Map(); // a webview's webContents id -> its card
 const brTabApi = new Map(); // card id -> { open(url, front) }: its tabs (mountWebview)
+// The last private tab gone (its tab or its card closed): the private session is wiped, as a private window's is. Checked
+// on a tab's close and on every canvas save; a webview fires no "destroyed" when it leaves the page.
+let hadPrivate = false;
+function privateGone() {
+  if (!hadPrivate) return;
+  setTimeout(() => { if (hadPrivate && !document.querySelector('webview[partition="incognito"]')) { hadPrivate = false; window.overlookDesktop.privateClear?.(); } }, 0);
+}
 // A link meant for a new tab opens one in the same card, in front unless it asked for the background (middle click)
 DESKTOP && window.overlookDesktop.onOpen((from, url, disp) => {
   const p = wvCards.get(from);
-  if (p && brTabApi.has(p.id)) return brTabApi.get(p.id).open(url, disp !== "background-tab");
+  if (p && brTabApi.has(p.id)) return brTabApi.get(p.id).open(url, disp !== "background-tab", undefined, disp === "private");
   const q = { kind: "browser", id: `br${++orchSeq}`, url, w: p?.w || 960, h: p?.h || 640 };
   if (p && typeof p.x === "number") placeBeside(p, q, orchPanes);
   if (addPane(q)) saveCanvas();
@@ -2388,10 +2404,11 @@ function mountWebview(feed, p) {
     if (document.activeElement !== urlIn) urlIn.value = u;
     disp.innerHTML = m ? `${icon(m[1] === "https" ? "lock" : "globe", 13)}<b>${esc(m[2])}</b>${m[3] && m[3] !== "/" ? `<span>${esc(m[3])}</span>` : ""}` : esc(u);
   };
-  const tabName = (t) => t.title || (t.url === "about:blank" ? "New tab" : t.url.replace(/^https?:\/\/(www\.)?/, ""));
+  const tabName = (t) => t.title || (t.url === "about:blank" ? (t.private ? "Private tab" : "New tab") : t.url.replace(/^https?:\/\/(www\.)?/, ""));
   const paintTabs = () => {
-    strip.innerHTML = p.tabs.map((t, i) => `<div class="bv-tab${i === p.tab ? " on" : ""}" role="tab" aria-selected="${i === p.tab}" data-i="${i}" title="${esc(tabName(t))}">
-        <span class="bv-fav">${t.icon ? `<img src="${esc(t.icon)}" alt="" width="16" height="16" referrerpolicy="no-referrer">` : icon("globe", 14)}</span><span class="bv-name">${esc(tabName(t))}</span>
+    feed.querySelector(".bv").classList.toggle("private", !!p.tabs[p.tab]?.private); // Brave's purple for a private tab
+    strip.innerHTML = p.tabs.map((t, i) => `<div class="bv-tab${i === p.tab ? " on" : ""}${t.private ? " private" : ""}" role="tab" aria-selected="${i === p.tab}" data-i="${i}" title="${esc(tabName(t))}${t.private ? " (private)" : ""}">
+        <span class="bv-fav">${t.private && !t.icon ? icon("mask", 15) : t.icon ? `<img src="${esc(t.icon)}" alt="" width="16" height="16" referrerpolicy="no-referrer">` : icon("globe", 14)}</span><span class="bv-name">${esc(tabName(t))}</span>
         <button type="button" class="bv-x" data-x="${i}" title="Close tab (Ctrl+W)" aria-label="Close tab">${icon("x", 11)}</button></div>`).join("")
       + `<button type="button" class="bv-new" title="New tab (Ctrl+T)" aria-label="New tab">${icon("plus", 15)}</button>`;
   };
@@ -2417,9 +2434,11 @@ function mountWebview(feed, p) {
     else if (bar.classList.contains("loading")) { bar.classList.remove("loading"); bar.classList.add("loaded"); }
   };
   const changed = (rec) => { paintTabs(); if (cur() === rec) { mirror(); nav(); } else saveCanvasSoon(); };
-  const addWv = (i, url) => {
+  const addWv = (i, url, priv) => {
     const wv = document.createElement("webview"), rec = { wv, ready: false, id: 0 };
-    wv.setAttribute("partition", "persist:browser"); wv.setAttribute("allowpopups", ""); wv.setAttribute("src", safe(url));
+    // a private tab: an in-memory session shared by the private tabs, wiped when the last of them goes (main.cjs)
+    wv.setAttribute("partition", priv ? "incognito" : "persist:browser"); wv.setAttribute("allowpopups", ""); wv.setAttribute("src", safe(url));
+    if (priv) hadPrivate = true;
     const tab = () => p.tabs[wvs.indexOf(rec)] || {};
     wv.addEventListener("dom-ready", () => {
       if (!rec.ready) { rec.ready = true; rec.id = wv.getWebContentsId(); wvCards.set(rec.id, p); wv.setZoomFactor(p.zoom || 1); if (cur() === rec) register(); }
@@ -2453,9 +2472,9 @@ function mountWebview(feed, p) {
     if (p.url === "about:blank") setTimeout(() => urlIn.focus(), 60); else cur().wv.focus();
   };
   // at: where it goes (a link's tab right of the one it came from; a new tab last, as in Brave)
-  const open = (url = "about:blank", front = true, at = p.tab + 1) => {
-    p.tabs.splice(at, 0, { url: safe(url), title: "", icon: "" });
-    const rec = addWv(at, url);
+  const open = (url = "about:blank", front = true, at = p.tab + 1, priv = false) => {
+    p.tabs.splice(at, 0, { url: safe(url), title: "", icon: "", ...(priv && { private: true }) });
+    const rec = addWv(at, url, priv);
     if (at <= p.tab) p.tab++; // the shown tab moved right
     if (front) show(at); else { rec.wv.classList.add("off"); paintTabs(); saveCanvasSoon(); }
   };
@@ -2465,11 +2484,13 @@ function mountWebview(feed, p) {
     p.tabs.splice(i, 1);
     if (r.id) wvCards.delete(r.id);
     r.wv.remove();
+    privateGone();
     show(i < p.tab ? p.tab - 1 : i === p.tab ? Math.min(i, p.tabs.length - 1) : p.tab);
   };
   const tabKey = (k) => {
     const n = p.tabs.length;
     if (k === "new") open("about:blank", true, n);
+    else if (k === "private") open("about:blank", true, n, true);
     else if (k === "close") close(p.tab);
     else if (k === "next") show((p.tab + 1) % n);
     else if (k === "prev") show((p.tab - 1 + n) % n);
@@ -2483,6 +2504,13 @@ function mountWebview(feed, p) {
     const t = e.target.closest(".bv-tab");
     if (t && +t.dataset.i !== p.tab) show(+t.dataset.i);
   });
+  // a favicon that doesn't load (a 404 favicon.ico): the tab's own icon instead, and it isn't asked for again
+  strip.addEventListener("error", (e) => {
+    const tabEl = e.target.tagName === "IMG" && e.target.closest(".bv-tab"), t = tabEl && p.tabs[+tabEl.dataset.i];
+    if (!t) return;
+    t.icon = "";
+    e.target.outerHTML = icon(t.private ? "mask" : "globe", t.private ? 15 : 14);
+  }, true);
   strip.addEventListener("auxclick", (e) => { const t = e.button === 1 && e.target.closest(".bv-tab"); if (t) { e.preventDefault(); close(+t.dataset.i); } }); // middle click closes
   strip.addEventListener("dblclick", (e) => { if (e.target === strip) open("about:blank", true, p.tabs.length); });
   urlIn.addEventListener("keydown", (e) => {
@@ -2494,6 +2522,7 @@ function mountWebview(feed, p) {
   urlIn.addEventListener("blur", showUrl);
   const menu = () => [
     { label: "New tab", ic: "plus", kbd: "Ctrl+T", run: () => open("about:blank", true, p.tabs.length) },
+    { label: "New private tab", ic: "mask", kbd: "Ctrl+Shift+N", run: () => open("about:blank", true, p.tabs.length, true) },
     { label: "Close tab", ic: "x", kbd: "Ctrl+W", run: () => close(p.tab) },
     "-",
     { label: "Desktop width", ic: "monitor", on: !p.mobile, run: () => setView({ mobile: false }) },
@@ -2515,7 +2544,7 @@ function mountWebview(feed, p) {
     const c = cur();
     if (c?.ready) ({ back: () => c.wv.goBack(), fwd: () => c.wv.goForward(), reload: () => c.wv.reload() })[b.dataset.br]?.();
   });
-  p.tabs.forEach((t, i) => addWv(i, t.url));
+  p.tabs.forEach((t, i) => addWv(i, t.url, t.private));
   wvs.forEach((r, j) => r.wv.classList.toggle("off", j !== p.tab));
   mirror(); paintTabs(); tools(); showUrl();
   if (p.url === "about:blank") setTimeout(() => urlIn.focus(), 120);
