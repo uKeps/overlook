@@ -18,6 +18,7 @@ let D = null; // vault
 let S = { agents: [], services: [], runners: [], tasks: [] }; // system
 
 const I = {
+  shield: '<path d="M12 3 5 6v5c0 4.6 3 8.3 7 10 4-1.7 7-5.4 7-10V6z"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   notes: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
@@ -2350,6 +2351,16 @@ DESKTOP && window.overlookDesktop.onOpen((from, url, disp) => {
   if (addPane(q)) saveCanvas();
 });
 // Your Zen (or Firefox) cookies into the card browser: its sites open signed in. The cards reload to use them.
+// Ads and trackers blocked in the cards (desktop/main.cjs shields): on unless turned off in a card's menu.
+let brShields = true;
+DESKTOP && window.overlookDesktop.shields?.().then((v) => { if (typeof v === "boolean") brShields = v; }, () => {});
+async function setShields(on, reload) {
+  const v = await window.overlookDesktop.shields?.(on).catch(() => null);
+  if (typeof v !== "boolean") return toast("Couldn't change ad blocking");
+  brShields = v;
+  toast(v ? "Ads and trackers blocked" : "Ad blocking off");
+  reload();
+}
 async function importLogins() {
   toast("Importing your logins…");
   const r = await window.overlookDesktop.importLogins().catch((e) => ({ error: e.message }));
@@ -2492,6 +2503,7 @@ function mountWebview(feed, p) {
     { label: "Zoom out", ic: "minus", kbd: "Ctrl+-", off: (p.zoom || 1) <= BR_ZOOM[0], run: () => zoomBy(-1) },
     { label: `Actual size (${Math.round((p.zoom || 1) * 100)}%)`, ic: "search", kbd: "Ctrl+0", off: !p.zoom, run: () => zoomBy(0) },
     "-",
+    { label: "Block ads and trackers", ic: "shield", on: brShields, run: () => setShields(!brShields, () => cur()?.ready && cur().wv.reload()) },
     { label: "Import logins from Zen", ic: "lock", run: importLogins },
   ];
   bar.addEventListener("click", (e) => {
