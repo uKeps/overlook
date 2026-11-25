@@ -2467,12 +2467,14 @@ function mountWebview(feed, p) {
     disp.innerHTML = m ? `${icon(m[1] === "https" ? "lock" : "globe", 13)}<b>${esc(m[2])}</b>${m[3] && m[3] !== "/" ? `<span>${esc(m[3])}</span>` : ""}` : esc(u);
   };
   const tabName = (t) => t.title || (t.url === "about:blank" ? (t.private ? "Private tab" : "New tab") : t.url.replace(/^https?:\/\/(www\.)?/, ""));
+  let born = -1; // a tab just opened: it grows in once (paintTabs redraws the strip often)
   const paintTabs = () => {
     feed.querySelector(".bv").classList.toggle("private", !!p.tabs[p.tab]?.private); // Brave's purple for a private tab
-    strip.innerHTML = p.tabs.map((t, i) => `<div class="bv-tab${i === p.tab ? " on" : ""}${t.private ? " private" : ""}" role="tab" aria-selected="${i === p.tab}" data-i="${i}" title="${esc(tabName(t))}${t.private ? " (private)" : ""}">
+    strip.innerHTML = p.tabs.map((t, i) => `<div class="bv-tab${i === p.tab ? " on" : ""}${t.private ? " private" : ""}${i === born ? " born" : ""}" role="tab" aria-selected="${i === p.tab}" data-i="${i}" title="${esc(tabName(t))}${t.private ? " (private)" : ""}">
         <span class="bv-fav">${t.private && !t.icon ? icon("mask", 15) : t.icon ? `<img src="${esc(t.icon)}" alt="" width="16" height="16" referrerpolicy="no-referrer">` : icon("globe", 14)}</span><span class="bv-name">${esc(tabName(t))}</span>
         <button type="button" class="bv-x" data-x="${i}" title="Close tab (Ctrl+W)" aria-label="Close tab">${icon("x", 11)}</button></div>`).join("")
       + `<button type="button" class="bv-new" title="New tab (Ctrl+T)" aria-label="New tab">${icon("plus", 15)}</button>`;
+    born = -1;
   };
   const nav = () => {
     const c = cur();
@@ -2537,6 +2539,7 @@ function mountWebview(feed, p) {
   const open = (url = "about:blank", front = true, at = p.tab + 1, priv = false) => {
     p.tabs.splice(at, 0, { url: safe(url), title: "", icon: "", ...(priv && { private: true }) });
     const rec = addWv(at, url, priv);
+    born = at;
     if (at <= p.tab) p.tab++; // the shown tab moved right
     if (front) show(at); else { rec.wv.classList.add("off"); paintTabs(); saveCanvasSoon(); }
   };
