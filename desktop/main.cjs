@@ -26,7 +26,7 @@ function contextMenu(wc, p, page) {
     { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
     { label: "Reload", click: () => wc.reload() }, { type: "separator" });
   if (p.linkURL) items.push(
-    ...(page && web(p.linkURL) ? [{ label: "Open link in a new card", click: () => openCard(wc, p.linkURL) }] : []),
+    ...(page && web(p.linkURL) ? [{ label: "Open link in new tab", click: () => openCard(wc, p.linkURL, "background-tab") }] : []),
     { label: "Copy link address", click: () => clipboard.writeText(p.linkURL) }, { type: "separator" });
   if (p.mediaType === "image" && p.srcURL) items.push({ label: "Copy image", click: () => wc.copyImageAt(p.x, p.y) }, { label: "Copy image address", click: () => clipboard.writeText(p.srcURL) }, { type: "separator" });
   if (p.isEditable) items.push({ role: "undo", enabled: p.editFlags.canUndo }, { role: "redo", enabled: p.editFlags.canRedo }, { type: "separator" }, { role: "cut", enabled: p.editFlags.canCut });
@@ -37,7 +37,7 @@ function contextMenu(wc, p, page) {
   if (menu.length) Menu.buildFromTemplate(menu).popup();
 }
 // A link meant for a new tab (target=_blank, middle click, the menu): a card beside the one it came from.
-const openCard = (guest, url) => guest.hostWebContents?.send("br-open", guest.id, url);
+const openCard = (guest, url, disp = "foreground-tab") => guest.hostWebContents?.send("br-open", guest.id, url, disp);
 
 // What a page may use. Overlook itself gets what it asks for; a site asks you, like a browser does.
 // What a page may use: what a browser asks you about (camera, microphone, location, notifications, reading the
@@ -139,7 +139,7 @@ app.on("web-contents-created", (_e, wc) => {
     wc.setWindowOpenHandler(({ url, disposition }) => {
       // a popup (a sign-in window: it talks back to the page that opened it) opens as a window, as in a browser
       if (disposition === "new-window") return { action: "allow", overrideBrowserWindowOptions: { autoHideMenuBar: true, width: 520, height: 720 } };
-      if (web(url)) openCard(wc, url);
+      if (web(url)) openCard(wc, url, disposition);
       return { action: "deny" };
     });
     wc.on("context-menu", (_e, p) => contextMenu(wc, p, true));
@@ -149,6 +149,9 @@ app.on("web-contents-created", (_e, wc) => {
 });
 
 app.whenReady().then(() => {
+  // No application menu: Electron's default one bound Ctrl+W to closing Overlook and Ctrl+R to reloading it, keys a
+  // browser card's page (its tabs, its reload) needs. Copy, paste and the rest still work without it.
+  Menu.setApplicationMenu(null);
   const ses = session.fromPartition("persist:browser");
   ses.setPermissionRequestHandler(askPermission);
   // a plain Chrome user agent: with "Electron/…" in it Google refuses to sign in ("this browser may not be secure")
