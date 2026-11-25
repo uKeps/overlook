@@ -2611,6 +2611,8 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 .bv-x:hover { background: rgba(255, 255, 255, .12); color: var(--ink); }
 .bv-new { flex: none; width: 28px; height: 28px; margin: 0 0 3px 4px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); }
 .bv-new:hover { background: rgba(255, 255, 255, .08); color: var(--ink); }
+.bv-tab.born { animation: bv-tab-in var(--t2) var(--ease) both; } /* a new tab grows in from the + */
+@keyframes bv-tab-in { from { opacity: 0; transform: translateY(5px) scale(.94); } }
 /* a private tab: Brave's purple, on the tab and on the toolbar while it's the one shown */
 .bv-tab.private { --priv: #8b5cf6; }
 .bv-tab.private .bv-fav { color: color-mix(in srgb, var(--priv) 80%, #fff); }
