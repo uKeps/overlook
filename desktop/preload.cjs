@@ -6,6 +6,6 @@ contextBridge.exposeInMainWorld("overlookDesktop", {
   importLogins: (from) => ipcRenderer.invoke("import-logins", from),
   privateClear: () => ipcRenderer.invoke("private-clear"),
   wvTarget: (id) => ipcRenderer.invoke("wv-target", id),
-  capture: (id, rect) => ipcRenderer.invoke("br-capture", id, rect),
+  capture: (id) => ipcRenderer.invoke("br-capture", id),
   shields: (on) => ipcRenderer.invoke("shields", on),
 });
