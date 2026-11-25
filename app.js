@@ -2761,7 +2761,7 @@ function glideView(x, y, z = orchZoom, ms = 420) {
 // In the desktop app a browser card's page (a <webview>: a process of its own) re-rasters on every zoom step: two cards
 // kept the GPU ~75% busy through a pinch and frames dropped. While the zoom changes, a snapshot of each page stands in
 // for it and the page is hidden (nothing to raster); 150 ms after the zoom rests the live page is back, at the new scale.
-let wvZoom = 0, wvRest = 0, wvHold = null;
+let wvZoom = 0, wvRest = 0, wvHold = null, wvHeld = false; // wvHeld: this zoom already waited for its photos
 // The first zoom step waits for these photos (applyCanvasTransform holds the view a few frames): taken once the scale had
 // changed, the page was mid-redraw and the photo came out black, so the card showed a black page all through the zoom.
 // Resolves once every page is photographed (or after 150 ms).
@@ -2769,13 +2769,13 @@ function freezeWebviews() {
   clearTimeout(wvRest);
   wvRest = setTimeout(thawWebviews, 150);
   const live = [...document.querySelectorAll("#orch-plane webview:not(.frozen)")];
+  for (const wv of live) wv.classList.add("frozen"); // every one, photographed or not: an unfrozen one held the zoom forever
   return Promise.race([new Promise((r) => setTimeout(r, 150)), Promise.all(live.map(async (wv) => {
     let id;
     try { id = wv.getWebContentsId(); } catch { return; } // its page isn't up yet
     // the part of the page inside the window, photographed from the window and laid over that part
     const r = wv.getBoundingClientRect(), x0 = Math.max(0, r.left), y0 = Math.max(0, r.top), x1 = Math.min(innerWidth, r.right), y1 = Math.min(innerHeight, r.bottom);
     if (x1 - x0 < 1 || y1 - y0 < 1) return; // off screen: nothing to stand in for
-    wv.classList.add("frozen");
     const jpg = await window.overlookDesktop.capture(id, { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }).catch(() => null);
     if (!jpg || !wv.classList.contains("frozen")) return;
     const img = new Image();
@@ -2791,6 +2791,7 @@ function freezeWebviews() {
   }))]);
 }
 function thawWebviews() {
+  wvHeld = false;
   for (const wv of document.querySelectorAll("webview.frozen")) { wv.classList.remove("frozen"); wv.style.visibility = ""; }
   const shots = document.querySelectorAll(".wv-shot"); // kept a moment over the page, until it has drawn at the new scale
   setTimeout(() => shots.forEach((s) => { URL.revokeObjectURL(s.src); s.remove(); }), 120);
@@ -2805,7 +2806,7 @@ function applyCanvasTransform() {
   if (DESKTOP && orchZoom !== wvZoom) {
     if (wvZoom && free) {
       if (wvHold) return; // the pages are being photographed: the view waits for them (freezeWebviews)
-      if (plane?.querySelector("webview:not(.frozen)")) { wvHold = freezeWebviews().finally(() => { wvHold = null; applyCanvasTransform(); }); return; }
+      if (!wvHeld && plane?.querySelector("webview:not(.frozen)")) { wvHeld = true; wvHold = freezeWebviews().finally(() => { wvHold = null; applyCanvasSoon(); }); return; }
       freezeWebviews(); // still zooming: the photos stay up a while longer
     }
     wvZoom = orchZoom;
