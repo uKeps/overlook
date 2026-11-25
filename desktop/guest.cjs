@@ -7,6 +7,13 @@ addEventListener("mouseup", (e) => {
   else return;
   e.preventDefault();
 }, true);
+// Ctrl + wheel (and a touchpad pinch, which comes as one) zooms the canvas, not this page: over a card the canvas zoom
+// used to stop (Electron doesn't zoom a page on it either), so a quick pinch stalled when a browser card slid under it.
+addEventListener("wheel", (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  ipcRenderer.sendToHost("wheel", { dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode, x: e.clientX, y: e.clientY, w: innerWidth });
+}, { capture: true, passive: false });
 addEventListener("keydown", (e) => {
   const c = (e.ctrlKey || e.metaKey) && !e.altKey, alt = e.altKey && !e.ctrlKey && !e.metaKey;
   const act = alt && e.key === "ArrowLeft" ? () => history.back()
