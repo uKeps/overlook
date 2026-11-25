@@ -1368,6 +1368,7 @@ async function histStep(back) {
     try { localStorage.setItem(SKETCH_KEY, JSON.stringify(sketchEls)); } catch {}
     if (sketchApi) sketchApi.updateScene({ elements: sketchEls, appState: { selectedElementIds: {} }, captureUpdate: "NEVER" });
     else if (sketchEls.length) mountSketch();
+    paintSketchSvg();
   }
   histCur = histNow();
   saveCanvas(); orchSigs.clear(); agentsBody(); orchPaint(true); drawMap();
@@ -2030,32 +2031,45 @@ let sketchApi = null, sketchOn = false, sketchColor = SKETCH_COLORS[0][0], sketc
 const sketchBox = (e) => { const xs = e.points ? e.points.map((p) => e.x + p[0]) : [e.x, e.x + e.width], ys = e.points ? e.points.map((p) => e.y + p[1]) : [e.y, e.y + e.height]; return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }; };
 const sketchView = () => ({ scrollX: orchPanX / orchZoom, scrollY: orchPanY / orchZoom, zoom: { value: orchZoom } });
 const sameView = (a, b) => Math.abs(a.scrollX - b.scrollX) < 0.05 && Math.abs(a.scrollY - b.scrollY) < 0.05 && Math.abs(a.zoom.value - b.zoom.value) < 1e-4;
-// While the view moves (a pinch, a glide, a drag), the drawing follows as a CSS transform of what Excalidraw last drew, and
-// Excalidraw is told the new view once the view rests: re-rendering every shape each frame (~35 ms) made the zoom lag and
-// the drawing trail the cards. `now`: tell it at once (drawing is about to start).
+// What you see of the drawing is an SVG of it (#orch-sketch-svg), moved by the same transform as the cards: it pans and
+// zooms with them in the same frame, all of it. Excalidraw shows only while you draw and the view rests: it draws just
+// what's on screen, so moving its canvas by a transform (it can't redraw every frame: ~35 ms) left the strokes that came
+// into view blank until the view rested, the drawing's flicker. Re-rendered once the view rests (`now`: at once).
 let sketchRest = 0;
 function syncSketchView(now) {
   const el = $("#orch-sketch");
-  if (!sketchApi || !el) return;
-  const st = sketchApi.getAppState(), v = sketchView();
+  if (!sketchApi || !el || (!sketchOn && !now && !el.classList.contains("live"))) return; // not drawing: Excalidraw is hidden and keeps still
   clearTimeout(sketchRest);
-  if (sameView(st, v)) { el.style.transform = ""; return; }
-  const settle = () => {
-    sketchApi?.updateScene({ appState: sketchView() });
-    // the transform goes once Excalidraw has drawn the new view (it paints on the next frame)
-    requestAnimationFrame(() => requestAnimationFrame(() => { if (sketchApi && sameView(sketchApi.getAppState(), sketchView())) el.style.transform = ""; }));
-  };
+  // Excalidraw back once it has drawn the view (it paints on the next frame)
+  const reveal = () => requestAnimationFrame(() => requestAnimationFrame(() => { if (sketchApi && sameView(sketchApi.getAppState(), sketchView())) el.classList.remove("moving"); }));
+  if (sameView(sketchApi.getAppState(), sketchView())) return now && reveal();
+  if (!el.classList.contains("moving")) { el.classList.add("moving"); paintSketchSvg(sketchApi.getSceneElements()); } // the SVG stands in
+  const settle = () => { sketchApi?.updateScene({ appState: sketchView() }); reveal(); };
   if (now) return settle();
-  const z0 = st.zoom.value, k = orchZoom / z0;
-  el.style.transform = `translate(${orchPanX - st.scrollX * z0 * k}px, ${orchPanY - st.scrollY * z0 * k}px) scale(${k})`;
   sketchRest = setTimeout(settle, 140);
+}
+// The SVG is redrawn when the scene changes; `sketchSvgSig` keeps a late export from replacing a newer one.
+let sketchSvgSig = "";
+async function paintSketchSvg(els = sketchEls) {
+  const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
+  if (sig === sketchSvgSig) return;
+  sketchSvgSig = sig;
+  const lib = live.length ? await loadExcalidraw().catch(() => null) : null;
+  // a server started before this change serves a bundle without exportToSvg: Excalidraw stays up (until it restarts)
+  if (lib && !lib.exportToSvg) return $("#orch-sketch")?.classList.add("live");
+  const svg = lib && await lib.exportToSvg({ elements: live, appState: { exportBackground: false, exportWithDarkMode: true }, files: null, exportPadding: 0, skipInliningFonts: true }).catch(() => null);
+  const box = $("#orch-sketch-svg");
+  if (!box || sig !== sketchSvgSig) return;
+  if (svg) { const [x, y] = lib.getCommonBounds(live); svg.style.left = `${x}px`; svg.style.top = `${y}px`; }
+  box.replaceChildren(...(svg ? [svg] : []));
 }
 // The canvas DOM is rebuilt on every visit: a fresh layer each time, Excalidraw only once there's something to show.
 function addSketchLayer(canvas) {
-  sketchApi = null;
-  canvas.querySelector("#orch-plane").insertAdjacentHTML("afterend", `<div class="orch-sketch ${sketchOn ? "on" : ""}" id="orch-sketch"></div><div class="cv-island orch-sketchbar" id="orch-sketchbar" role="toolbar" aria-label="Drawing tools" ${sketchOn ? "" : "hidden"}></div>`);
+  sketchApi = null; sketchSvgSig = "";
+  canvas.querySelector("#orch-plane").insertAdjacentHTML("afterend", `<div class="orch-sketch ${sketchOn ? "on" : ""}" id="orch-sketch"></div><div class="orch-sketch-svg" id="orch-sketch-svg" aria-hidden="true"></div><div class="cv-island orch-sketchbar" id="orch-sketchbar" role="toolbar" aria-label="Drawing tools" ${sketchOn ? "" : "hidden"}></div>`);
   if (sketchOn) paintSketchBar();
   if (sketchOn || sketchEls.length) mountSketch();
+  paintSketchSvg();
   if (histCur === null) histNote(true);
 }
 async function mountSketch() {
@@ -2074,11 +2088,13 @@ async function mountSketch() {
     onChange: (els, st) => {
       const selId = Object.keys(st.selectedElementIds || {})[0], selColor = selId && els.find((x) => x.id === selId)?.strokeColor;
       if (sketchOn && (st.activeTool?.type !== sketchToolNow || (selColor && selColor !== sketchColor))) { if (selColor) sketchColor = selColor; paintSketchBar(st.activeTool?.type); }
+      if (!sketchOn && cid === canvasId) paintSketchSvg(els); // a stroke added from outside (quick ink, an agent, undo)
       clearTimeout(t);
       t = setTimeout(() => {
         const live = els.filter((x) => !x.isDeleted), sig = live.map((x) => `${x.id}:${x.version}`).join();
         if (sig === last || cid !== canvasId) return;
         last = sig; sketchEls = live;
+        paintSketchSvg(live);
         try { localStorage.setItem(SKETCH_KEY, JSON.stringify(live)); } catch {}
         syncWires(); drawMap(); histNote();
       }, 400);
@@ -2095,11 +2111,17 @@ async function mountSketch() {
 async function setSketch(on, tool = "freedraw") {
   if (orchMode !== "free" || orchMax) { if (on) toast("Drawing works on the free canvas"); return; }
   sketchOn = on;
-  $("#orch-sketch")?.classList.toggle("on", on);
+  const el = $("#orch-sketch");
+  if (on) el?.classList.add("on", "moving"); // the SVG shows until Excalidraw has drawn the view (syncSketchView)
   const bar = $("#orch-sketchbar");
   if (bar) bar.hidden = !on;
   paintHud($("#orch-hud"), true);
-  if (!on) { sketchApi?.updateScene({ appState: { selectedElementIds: {}, editingTextElement: null } }); sketchApi?.setActiveTool({ type: "selection" }); return; }
+  if (!on) {
+    sketchApi?.updateScene({ appState: { selectedElementIds: {}, editingTextElement: null } }); sketchApi?.setActiveTool({ type: "selection" });
+    if (sketchApi) await paintSketchSvg(sketchApi.getSceneElements()); // what was just drawn, before Excalidraw hides
+    if (!sketchOn) el?.classList.remove("on");
+    return;
+  }
   paintSketchBar();
   await mountSketch();
   for (let n = 0; n < 50 && !sketchApi; n++) await new Promise((r) => setTimeout(r, 100));
@@ -2289,6 +2311,7 @@ function quickInk(e, canvas) {
         const [el] = lib.restoreElements([{ type: "freedraw", id: `ink${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, x, y, points: rel, pressures: [], simulatePressure: true,
           width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), strokeColor: sketchColor, strokeWidth: 2 }], null);
         sketchApi.updateScene({ elements: [...sketchApi.getSceneElements(), el], captureUpdate: "IMMEDIATELY" });
+        await paintSketchSvg(sketchApi.getSceneElements()); // the live line goes once the stroke shows
       }
     }
     $("#orch-ink")?.remove();
@@ -2971,8 +2994,9 @@ function applyCanvasTransform() {
   const zq = String(Math.round(orchZoom * 20) / 20);
   clearTimeout(zRest);
   if (plane && plane.style.getPropertyValue("--z") !== zq) zRest = setTimeout(() => plane.style.setProperty("--z", zq), plane.style.getPropertyValue("--z") ? 150 : 0);
-  const sk = $("#orch-sketch");
+  const sk = $("#orch-sketch"), sv = $("#orch-sketch-svg");
   if (sk) { sk.hidden = !free; syncSketchView(); }
+  if (sv) { sv.hidden = !free; sv.style.transform = `translate(${px0}px, ${py0}px) scale(${orchZoom})`; } // as the plane's
   // Patterned backgrounds move and scale with the plane; octave step-doubling (LOD) and alpha attenuation keep
   // low zoom levels (>16px on-screen period) free of moiré shimmer or dot crowding.
   if (canvas) {
