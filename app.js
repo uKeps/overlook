@@ -2925,9 +2925,13 @@ function stopGlide() { cancelAnimationFrame(glideRaf); glideRaf = 0; glideGoal =
 function glideView(x, y, z = orchZoom, ms = 420) {
   stopGlide();
   x = Math.round(x); y = Math.round(y);
-  const x0 = orchPanX, y0 = orchPanY, z0 = orchZoom, t0 = performance.now();
+  const x0 = orchPanX, y0 = orchPanY, z0 = orchZoom;
+  let t0 = performance.now(), last = t0;
   const step = (now) => {
-    const t = calm.matches ? 1 : Math.min(1, (now - t0) / ms), e = t === 1 ? 1 : 1 - 2 ** (-10 * t);
+    if (wvHold) t0 += Math.max(0, now - last); // the view waits for the pages' photos (freezeWebviews): so does the glide, or it jumped ahead
+    last = Math.max(last, now);
+    // a frame's time can be a little before t0 (taken in the wheel event): from there the ease ran backwards, a jolt back
+    const t = calm.matches ? 1 : Math.min(1, Math.max(0, now - t0) / ms), e = t === 1 ? 1 : 1 - 2 ** (-10 * t);
     if (z === z0) { orchPanX = x0 + (x - x0) * e; orchPanY = y0 + (y - y0) * e; }
     else { orchZoom = z0 * (z / z0) ** e; const k = (orchZoom - z0) / (z - z0); orchPanX = x0 + (x - x0) * k; orchPanY = y0 + (y - y0) * k; }
     if (t === 1) { orchPanX = x; orchPanY = y; orchZoom = z; glideGoal = null; glideRaf = 0; saveCanvasSoon(); }
@@ -2953,18 +2957,18 @@ function freezeWebviews() {
   return Promise.race([new Promise((r) => setTimeout(r, 150)), Promise.all(live.map(async (wv) => {
     let id;
     try { id = wv.getWebContentsId(); } catch { return; } // its page isn't up yet
-    // the part of the page inside the window, photographed from the window and laid over that part
-    const r = wv.getBoundingClientRect(), x0 = Math.max(0, r.left), y0 = Math.max(0, r.top), x1 = Math.min(innerWidth, r.right), y1 = Math.min(innerHeight, r.bottom);
-    if (x1 - x0 < 1 || y1 - y0 < 1) return; // off screen: nothing to stand in for
-    const jpg = await window.overlookDesktop.capture(id, { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }).catch(() => null);
-    if (!jpg || !wv.classList.contains("frozen")) return;
+    // Only a page wholly in view: the photo has only what's on screen, and the rest of the card was black as you zoomed
+    // out. One partly or not on screen stays live.
+    const r = wv.getBoundingClientRect(), c = $("#orch-canvas").getBoundingClientRect();
+    if (r.left < c.left || r.top < c.top || r.right > c.right || r.bottom > c.bottom) return;
+    const shot = await window.overlookDesktop.capture(id).catch(() => null); // a JPEG, or a PNG for a see-through page
+    if (!shot || !wv.classList.contains("frozen")) return;
     const img = new Image();
     img.className = "wv-shot";
-    img.src = URL.createObjectURL(new Blob([jpg], { type: "image/jpeg" }));
+    img.src = URL.createObjectURL(new Blob([shot]));
     try { await img.decode(); } catch { return URL.revokeObjectURL(img.src); }
     if (!wv.classList.contains("frozen")) return URL.revokeObjectURL(img.src);
-    const k = wv.offsetWidth / r.width; // screen px -> the card's own px (the canvas zoom at the photo)
-    Object.assign(img.style, { left: `${wv.offsetLeft + (x0 - r.left) * k}px`, top: `${wv.offsetTop + (y0 - r.top) * k}px`, width: `${(x1 - x0) * k}px`, height: `${(y1 - y0) * k}px` });
+    Object.assign(img.style, { left: `${wv.offsetLeft}px`, top: `${wv.offsetTop}px`, width: `${wv.offsetWidth}px`, height: `${wv.offsetHeight}px` });
     wv.after(img);
     // hidden once the snapshot is on screen: swapping both in one frame cost a ~28 ms frame
     requestAnimationFrame(() => requestAnimationFrame(() => { if (wv.classList.contains("frozen")) wv.style.visibility = "hidden"; }));
@@ -2977,7 +2981,7 @@ function thawWebviews() {
   setTimeout(() => shots.forEach((s) => { URL.revokeObjectURL(s.src); s.remove(); }), 120);
 }
 const applyCanvasSoon = () => { viewRaf ||= requestAnimationFrame(() => { viewRaf = 0; applyCanvasTransform(); }); };
-let zRest = 0;
+let zRest = 0, wcZoom = 0, wcRest = 0;
 function applyCanvasTransform() {
   const plane = $("#orch-plane"), zLbl = $("#orch-zoom-lbl"), canvas = $("#orch-canvas");
   const free = orchMode === "free" && !orchMax;
@@ -2997,6 +3001,13 @@ function applyCanvasTransform() {
   const zq = String(Math.round(orchZoom * 20) / 20);
   clearTimeout(zRest);
   if (plane && plane.style.getPropertyValue("--z") !== zq) zRest = setTimeout(() => plane.style.setProperty("--z", zq), plane.style.getPropertyValue("--z") ? 150 : 0);
+  // While the zoom changes, the plane is one layer the compositor scales: otherwise the text of every terminal and note
+  // was rastered again at each new scale, and the terminals' blurred backdrop with it (a missed frame every ~30 ms at 144
+  // Hz). It goes 150 ms after the zoom stops, and the text is drawn sharp at the new scale.
+  if (plane && free && orchZoom !== wcZoom) {
+    wcZoom = orchZoom; plane.style.willChange = "transform";
+    clearTimeout(wcRest); wcRest = setTimeout(() => { plane.style.willChange = ""; }, 150);
+  }
   const sk = $("#orch-sketch"), sv = $("#orch-sketch-svg");
   if (sk) { sk.hidden = !free; syncSketchView(); }
   if (sv) { sv.hidden = !free; sv.style.transform = `translate(${px0}px, ${py0}px) scale(${orchZoom})`; } // as the plane's
@@ -3215,6 +3226,7 @@ function mapEase() {
   paintMap();
   if (!mapNear(mapXf, mapGoal)) mapRaf = requestAnimationFrame(mapEase);
 }
+let mapBody = "";
 function paintMap() {
   const svg = $("#orch-map svg");
   if (!svg || !mapXf) return;
@@ -3232,9 +3244,17 @@ function paintMap() {
     const [x, y, w, h] = box(e.x, e.y, e.width, e.height);
     return `<${e.type === "ellipse" ? `ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}"` : `rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1"`} class="map-ink"/>`;
   }).join("");
-  const [fx, fy, fw, fh] = box(v.x, v.y, v.w, v.h);
-  svg.innerHTML = `${ink}${blocks}<path class="map-dim" fill-rule="evenodd" d="M-2 -2H${W + 2}V${H + 2}H-2Z M${fx} ${fy}h${fw}v${fh}h${-fw}Z"/>`
-    + `<rect class="map-frame" x="${fx}" y="${fy}" width="${fw}" height="${fh}" rx="4"/>`;
+  const [fx, fy, fw, fh] = box(v.x, v.y, v.w, v.h), dim = `M-2 -2H${W + 2}V${H + 2}H-2Z M${fx} ${fy}h${fw}v${fh}h${-fw}Z`;
+  // a pan or zoom moves only the view's frame: the rest is rebuilt when it changes (every frame, that was ~50 elements
+  // parsed and restyled)
+  const frame = svg.querySelector(".map-frame");
+  if (frame && mapBody === ink + blocks) {
+    svg.querySelector(".map-dim").setAttribute("d", dim);
+    for (const [a, n] of [["x", fx], ["y", fy], ["width", fw], ["height", fh]]) frame.setAttribute(a, n);
+    return;
+  }
+  mapBody = ink + blocks;
+  svg.innerHTML = `${ink}${blocks}<path class="map-dim" fill-rule="evenodd" d="${dim}"/><rect class="map-frame" x="${fx}" y="${fy}" width="${fw}" height="${fh}" rx="4"/>`;
 }
 function bindMap(box) {
   const svg = box?.querySelector("svg");

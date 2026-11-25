@@ -194,16 +194,16 @@ ipcMain.handle("shields", async (e, on) => {
   return shieldsOn();
 });
 ipcMain.handle("import-logins", (e, from) => (e.sender !== win?.webContents ? { error: "not allowed" } : from === "brave" ? importBrave() : importLogins()));
-// A card's page as a JPEG, for the canvas to show in its place while it zooms (freezeWebviews in app.js). Encoded here: the
-// page's own toDataURL is a PNG made on the canvas's thread (~45 ms a card).
-// A photo of a browser card's page as it shows in the window (the canvas zoom stands it in for the page). Taken from the
-// window, not the page: a webview's own capturePage comes out black but for its scrollbar.
-ipcMain.handle("br-capture", async (e, id, rect) => {
+// A photo of a browser card's page, for the canvas to show in its place while it zooms (freezeWebviews in app.js), taken
+// from the page itself (the window's photo had whatever lay over the card in it, the dock or the map, and it zoomed with
+// the card). Encoded here: the page's own toDataURL is a PNG made on the canvas's thread (~25 ms a card). A page with no
+// background of its own is transparent, and as a JPEG that came out black (why #139 took the window's): it goes as a PNG.
+ipcMain.handle("br-capture", async (e, id) => {
   const wc = e.sender === win?.webContents && webContents.fromId(Number(id));
-  if (!wc || wc.hostWebContents !== win.webContents || !rect) return null;
-  const r = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
-  if (r.width < 1 || r.height < 1) return null;
-  return (await win.webContents.capturePage(r)).toJPEG(85);
+  if (!wc || wc.hostWebContents !== win.webContents) return null;
+  const img = await wc.capturePage(), px = img.toBitmap();
+  for (let i = 3; i < px.length; i += 4 * 997) if (px[i] < 255) return img.toPNG();
+  return img.toJPEG(85);
 });
 
 app.on("web-contents-created", (_e, wc) => {
