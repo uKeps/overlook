@@ -236,6 +236,12 @@ app.whenReady().then(() => {
     ses.setPermissionRequestHandler(askPermission);
     // a plain Chrome user agent: with "Electron/…" in it Google refuses to sign in ("this browser may not be secure")
     ses.setUserAgent(ses.getUserAgent().replace(/\s(Electron|overlook)\/\S+/gi, ""));
+    // Google still spots an embedded Chromium (the user agent alone is not enough) and refuses to sign in: its sign-in
+    // pages get a Firefox user agent and no Chromium client hints, which it accepts (Min browser does the same).
+    ses.webRequest.onBeforeSendHeaders({ urls: ["https://accounts.google.com/*"] }, ({ requestHeaders: h }, done) => {
+      for (const k of Object.keys(h)) if (/^sec-ch-ua/i.test(k)) delete h[k];
+      done({ requestHeaders: { ...h, "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0" } });
+    });
   }
   if (shieldsOn()) shields(true).catch((e) => console.error("ad blocking:", e.message));
   win = new BrowserWindow({
