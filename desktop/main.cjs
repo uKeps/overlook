@@ -13,6 +13,8 @@ let win = null;
 // card's webview through it, so agents (overlook browser …) and a phone act on the page you see.
 if (!app.commandLine.hasSwitch("remote-debugging-port")) app.commandLine.appendSwitch("remote-debugging-port", "0");
 app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
+// ...which also flags every page as automated (navigator.webdriver): Google then refuses to sign in. Not here.
+app.commandLine.appendSwitch("disable-blink-features", "AutomationControlled");
 
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
