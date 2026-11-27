@@ -14,6 +14,10 @@ addEventListener("wheel", (e) => {
   e.preventDefault();
   ipcRenderer.sendToHost("wheel", { dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode, x: e.clientX, y: e.clientY, w: innerWidth });
 }, { capture: true, passive: false });
+// Alt held here: the card lets the mouse through to itself, so Alt+drag moves it (altHeld in app.js)
+addEventListener("keydown", (e) => { if (e.key === "Alt" && !e.repeat) ipcRenderer.sendToHost("alt", true); }, true);
+addEventListener("keyup", (e) => { if (e.key === "Alt") ipcRenderer.sendToHost("alt", false); }, true);
+addEventListener("blur", () => ipcRenderer.sendToHost("alt", false));
 addEventListener("keydown", (e) => {
   const c = (e.ctrlKey || e.metaKey) && !e.altKey, alt = e.altKey && !e.ctrlKey && !e.metaKey;
   const act = alt && e.key === "ArrowLeft" ? () => history.back()

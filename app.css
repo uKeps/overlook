@@ -2587,6 +2587,7 @@ html[data-ui="minimal"] .cal .cal-side { margin-left: auto; }
 /* the desktop app's real browser (mountWebview), dressed as Brave: the tab strip, the toolbar, the page. One webview
    per tab, stacked; the ones behind are .off. */
 .orch-br-view.wv webview { position: absolute; inset: 0; display: flex; background: #fff; }
+body.alt-held .orch-br-view.wv webview { pointer-events: none; } /* Alt+drag moves the card (altHeld) */
 .orch-br-view.wv webview.off { visibility: hidden; pointer-events: none; }
 .orch-br-view.wv .wv-shot { position: absolute; z-index: 1; pointer-events: none; } /* stands in for the page while the canvas zooms */
 .orch-br-view.wv.phone webview { left: calc(50% - 195px); right: auto; width: 390px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 12px 40px rgba(0, 0, 0, .45); }
