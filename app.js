@@ -2518,6 +2518,7 @@ function mountWebview(feed, p) {
     wv.addEventListener("ipc-message", (e) => {
       if (e.channel === "url") urlIn.focus();
       else if (e.channel === "zoom") zoomBy(e.args[0]);
+      else if (e.channel === "alt") altHeld(e.args[0]);
       else if (e.channel === "tab") tabKey(e.args[0]);
       else if (e.channel === "wheel") { // the page's Ctrl + wheel / pinch (guest.cjs): the canvas zooms about that point
         const m = e.args[0], r = wv.getBoundingClientRect(), k = r.width / (m.w || r.width);
@@ -2981,7 +2982,7 @@ function thawWebviews() {
   setTimeout(() => shots.forEach((s) => { URL.revokeObjectURL(s.src); s.remove(); }), 120);
 }
 const applyCanvasSoon = () => { viewRaf ||= requestAnimationFrame(() => { viewRaf = 0; applyCanvasTransform(); }); };
-let zRest = 0, wcZoom = 0, wcRest = 0;
+let zRest = 0;
 function applyCanvasTransform() {
   const plane = $("#orch-plane"), zLbl = $("#orch-zoom-lbl"), canvas = $("#orch-canvas");
   const free = orchMode === "free" && !orchMax;
@@ -3001,13 +3002,6 @@ function applyCanvasTransform() {
   const zq = String(Math.round(orchZoom * 20) / 20);
   clearTimeout(zRest);
   if (plane && plane.style.getPropertyValue("--z") !== zq) zRest = setTimeout(() => plane.style.setProperty("--z", zq), plane.style.getPropertyValue("--z") ? 150 : 0);
-  // While the zoom changes, the plane is one layer the compositor scales: otherwise the text of every terminal and note
-  // was rastered again at each new scale, and the terminals' blurred backdrop with it (a missed frame every ~30 ms at 144
-  // Hz). It goes 150 ms after the zoom stops, and the text is drawn sharp at the new scale.
-  if (plane && free && orchZoom !== wcZoom) {
-    wcZoom = orchZoom; plane.style.willChange = "transform";
-    clearTimeout(wcRest); wcRest = setTimeout(() => { plane.style.willChange = ""; }, 150);
-  }
   const sk = $("#orch-sketch"), sv = $("#orch-sketch-svg");
   if (sk) { sk.hidden = !free; syncSketchView(); }
   if (sv) { sv.hidden = !free; sv.style.transform = `translate(${px0}px, ${py0}px) scale(${orchZoom})`; } // as the plane's
@@ -4658,6 +4652,12 @@ function endDraw() {
   }
   paintHud($("#orch-hud"), orchMode === "free" && !orchMax);
 }
+// Alt held: a browser card's page (another process) stops taking the mouse, so Alt+drag moves the card from anywhere on
+// it, as it does a terminal. The page reports Alt itself when it has the keys (guest.cjs).
+const altHeld = (on) => document.body.classList.toggle("alt-held", !!on);
+addEventListener("keydown", (e) => { if (e.key === "Alt") altHeld(true); }, true);
+addEventListener("keyup", (e) => { if (e.key === "Alt") altHeld(false); }, true);
+addEventListener("blur", () => altHeld(false));
 addEventListener("keydown", (e) => { if (drawing && e.key === "Escape" && !cwdOpen) { e.preventDefault(); e.stopPropagation(); endDraw(); } }, true);
 addEventListener("hashchange", () => endDraw());
 // Copy card / Duplicate: what it takes to make the card again. A terminal starts fresh in the same folder, an agent
